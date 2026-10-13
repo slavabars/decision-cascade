@@ -27,3 +27,18 @@ def test_create_service_defaults_to_hash():
     main.os.environ.pop("DECISION_MODEL_ID", None)
     svc = main.create_service()
     assert isinstance(svc.encoder, HashStateEncoder)
+
+
+def test_parse_max_length_defaults_and_edges():
+    import pytest
+
+    from api.server.main import parse_max_length
+
+    assert parse_max_length("256") == 256
+    assert parse_max_length(" 128 ") == 128
+    assert parse_max_length("none") is None
+    assert parse_max_length("") is None
+    assert parse_max_length("0") is None
+    assert parse_max_length("-5") is None
+    with pytest.raises(RuntimeError):
+        parse_max_length("abc")
