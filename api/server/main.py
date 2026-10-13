@@ -1,4 +1,4 @@
-"""System One Decision API.
+"""decision-cascade API.
 
 Принимает state + вопросы, возвращает типизированные решения
 с калиброванными вероятностями и schema_version.
@@ -167,7 +167,7 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     return CascadeBackend(primary, fallback, threshold=threshold)
 
 
-app = FastAPI(title="System One Decision API", version=__version__)
+app = FastAPI(title="decision-cascade API", version=__version__)
 
 # Единый исполнитель решений для всех эндпоинтов: локальные головы, внешний
 # SystemOne-сервис или каскад (по DECISION_BACKEND). Локальный сервис создаётся

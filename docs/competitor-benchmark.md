@@ -1,6 +1,6 @@
 # Бенчмарк против конкурентов
 
-Воспроизводимый протокол сравнения System One Decision с внешними
+Воспроизводимый протокол сравнения decision-cascade с внешними
 SystemOne-совместимыми сервисами (Cloudflare Clef / Clef-Flash, Laya,
 Perplexity Decider и любые vLLM/SGLang-эндпоинты на `POST /v1/systemone`).
 

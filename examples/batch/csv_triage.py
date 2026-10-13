@@ -42,7 +42,7 @@ def load_input(args: argparse.Namespace) -> list[dict[str, str]]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="CSV triage with Decision API")
+    parser = argparse.ArgumentParser(description="CSV triage with decision-cascade API")
     parser.add_argument("--input", default=None, help="входной CSV (иначе — демо)")
     parser.add_argument("--output", default="data/examples/triage.csv")
     parser.add_argument("--text-column", default="text")

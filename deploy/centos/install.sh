@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-## Установка System One Decision Model на CentOS/RHEL-семейство (dnf).
+## Установка decision-cascade на CentOS/RHEL-семейство (dnf).
 ## Запуск: sudo bash deploy/centos/install.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

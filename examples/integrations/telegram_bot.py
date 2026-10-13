@@ -69,7 +69,7 @@ class TelegramBot:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Telegram bot on Decision API")
+    parser = argparse.ArgumentParser(description="Telegram bot on decision-cascade API")
     parser.add_argument("--token", default=os.environ.get("TELEGRAM_BOT_TOKEN"))
     parser.add_argument("--max-updates", type=int, default=0, help="0 = бесконечно")
     args = parser.parse_args()

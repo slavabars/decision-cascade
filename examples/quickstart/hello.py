@@ -25,7 +25,7 @@ STATE = (
 
 
 def main() -> None:
-    print("=== System One Decision Model: hello ===\n")
+    print("=== decision-cascade: hello ===\n")
     print(f"Состояние:\n    {STATE}\n")
 
     service = build_service(seed=0)

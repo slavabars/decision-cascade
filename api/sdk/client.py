@@ -1,4 +1,4 @@
-"""Python SDK для System One Decision API: типизированный клиент с валидацией."""
+"""Python SDK для decision-cascade API: типизированный клиент с валидацией."""
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Self

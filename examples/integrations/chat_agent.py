@@ -1,4 +1,4 @@
-"""Пример интеграции Decision API в чат-агента (SDK + каскад).
+"""Пример интеграции decision-cascade API в чат-агента (SDK + каскад).
 
 Показывает, как по типизированным решениям маршрутизировать обращение: выбрать
 команду, приоритет, эскалацию и тон ответа. Если включён каскад на стороне
@@ -31,7 +31,7 @@ STATE = (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Routing a ticket with Decision API")
+    parser = argparse.ArgumentParser(description="Routing a ticket with decision-cascade API")
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument(
         "--fallback",

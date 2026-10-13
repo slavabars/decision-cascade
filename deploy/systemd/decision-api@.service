@@ -1,5 +1,5 @@
 [Unit]
-Description=System One Decision Model API (instance %i)
+Description=decision-cascade API (instance %i)
 After=network.target
 
 [Service]

@@ -1,7 +1,7 @@
 """Пример на русском: анализ обращения в техподдержку.
 
 Показывает типизированные решения по шести вопросам разного типа
-(noul / choice / score), получаемые одним запросом к Decision API.
+(noul / choice / score), получаемые одним запросом к decision-cascade API.
 """
 import sys
 from pathlib import Path
@@ -71,7 +71,7 @@ def print_decision(name: str, decision: dict) -> None:
 
 
 def main() -> None:
-    print("=== Анализ обращения в техподдержку (System One Decision Model) ===\n")
+    print("=== Анализ обращения в техподдержку (decision-cascade) ===\n")
     print(f"Исходное обращение:\n    {STATE}\n")
     print(f"Запрос по {len(QUESTIONS)} вопросам к API …\n")
 

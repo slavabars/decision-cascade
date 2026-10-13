@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-## Установка System One Decision Model на Ubuntu (apt).
+## Установка decision-cascade на Ubuntu (apt).
 ## Запуск: sudo bash deploy/ubuntu/install.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

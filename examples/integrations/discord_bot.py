@@ -51,7 +51,7 @@ class DiscordNotifier:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Discord notifier on Decision API")
+    parser = argparse.ArgumentParser(description="Discord notifier on decision-cascade API")
     parser.add_argument("--token", default=os.environ.get("DISCORD_BOT_TOKEN"))
     parser.add_argument("--channel", default=os.environ.get("DISCORD_CHANNEL_ID"))
     parser.add_argument("--send", action="store_true", help="реально отправить")
