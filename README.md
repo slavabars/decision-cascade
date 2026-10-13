@@ -65,14 +65,17 @@ state (строка-описание) ──► StateEncoder ──► features 
 | Vendor lock-in | Есть | Нет: деплой через простые shell/systemd |
 | Калибровка | Чёрный ящик | Встроенные метрики ECE/Brier + CLI |
 | Обучение под домен | Нет | SFT + RLCD прямо в репозитории |
-| Задержка | Сетевая (RTT + инференс вендора) | Локальная, < 500 мс (реальная p50 ≈ 130 мс на gpt2/CPU) |
+| Задержка | Сетевая (RTT + инференс вендора) | Локальная, настраиваемая (обрезка входа `DECISION_MAX_LENGTH`); см. «Оценка» |
 | Внедрение | Только через их API | HTTP + Python SDK в вашем стеке |
 
 **Про цифру 524 мс.** В публичном бенчмарке Cloudflare хостед Jev (TypeSafe AI)
 показал порядка **~524 мс** на запрос. Это замер *вендора*, а не этого проекта.
-Наш локальный путь измеряется прямо в репозитории (`eval/latency`) и на
-gpt2/CPU даёт p50 ≈ 130 мс. Числа получены на разном железе с разными моделями
-и **несопоставимы напрямую** — приводим их как ориентир, а не как заявление о
+Наш путь измеряется прямо в репозитории (`eval/latency`); числа сильно зависят
+от модели, железа и длины входа. На CPU с gpt2 первый прогон по длинному
+состоянию занимает секунды, а повторные запросы с тем же состоянием попадают в
+кэш признаков (миллисекунды). Ограничивайте длину входа (`DECISION_MAX_LENGTH`,
+по умолчанию 256) и закладывайте время на первый инференс. Числа получены на
+разном железе и **несопоставимы напрямую** — это ориентир, а не заявление о
 превосходстве.
 
 Честное ограничение: это **проект-прототип для контроля и прозрачности**,
@@ -158,6 +161,7 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 |------------|------------|--------------|
 | `DECISION_MODEL_ID` | имя модели на HF Hub | `google/gemma-4-12B` |
 | `DECISION_FEATURE_DIM` | размерность признаков | `768` |
+| `DECISION_MAX_LENGTH` | обрезка входа энкодера, токенов (`none` — без обрезки) | `256` |
 | `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
 | `DECISION_BACKEND` | исполнитель решений: `local` или `http` | `local` |
 | `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
@@ -416,8 +420,12 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
         callable=lambda: c.post("/decisions", json=PAYLOAD)).run(warmup=2, n=5))
 ```
 
-Измерено на CPU с gpt2: **p50 ≈ 130 мс**, p95 ≈ 158 мс, p99 ≈ 164 мс —
-комфортно ниже бюджета, т.к. нет токен-генерации.
+Замеры зависят от модели, железа и длины входа. Пример (8 vCPU, без GPU, gpt2,
+вход обрезан до 256 токенов): первый запрос по новому состоянию ≈ 9 с;
+повторные запросы с тем же состоянием — единицы-десятки миллисекунд за счёт
+кэша признаков. На GPU и на коротких состояниях значения в разы ниже. Именно
+отсутствие токен-генерации делает путь детерминированным и позволяет уложить
+тёплый инференс в бюджет < 500 мс.
 
 Готовый CLI с разбивкой по фазам (`encode` / `heads` / `decide`):
 
@@ -433,6 +441,29 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 `decide` — полным путём сервиса. На повторяющемся `state` `decide` попадает в
 кэш и потому быстрее `encode`; это наглядно показывает вклад кэша.
 
+### Датасеты и офлайн-бенчмарк голов
+
+Для воспроизводимой проверки качества есть генератор синтетических данных и
+офлайн-бенчмарк — без сервера и внешних моделей.
+
+```bash
+# текст (тиккеты с метками) + изображения (фигуры) в ./data
+.venv/bin/python -m eval.datasets.run --text-n 1000 --image-n 500 --out-dir data
+
+# бенчмарк: обучение голов на датасете и метрики accuracy / Brier / ECE
+.venv/bin/python -m eval.benchmark.run \
+  --dataset data/support_tickets.jsonl --encoder hash --train-steps 200 \
+  --out data/report.json
+```
+
+Генератор строит состояние из латентного сценария и вплетает в текст ключевые
+слова, коррелирующие с меткой, — так головы действительно могут выучить
+соответствие, а бенчмарк измерить его. Каждый вопрос кодируется своим промптом
+(как в рантайме), поэтому головы не смешивают цели. Пример прогона на 1000
+тиккетов (hash-энкодер): `overall_accuracy` ≈ 0.276 без обучения (уровень
+случайного угадывания) и 1.000 после 200 шагов SFT. Для `noul` дополнительно
+считаются Brier и ECE. Датасеты и отчёты складываются в `data/` (в `.gitignore`).
+
 ## Обучение голов
 
 ### SFT — учим на размеченных данных
@@ -442,8 +473,15 @@ from src.decision_head.heads import DecisionHeads
 from training.sft.train import SFTTrainer
 
 heads = DecisionHeads(dim=768, questions={…})
-# target: "choice"/"score" — классы-индексы, "noul" — float-цели в [0,1]
-SFTTrainer(heads, lr=0.1).fit(features, targets, steps=80, batch_size=32)
+# признаки подаются по-вопросно (как в рантайме): своя матрица на каждый вопрос,
+# тогда каждая голова учится только на своих промптах и цели не смешиваются.
+SFTTrainer(heads, lr=0.1).fit(
+    features={"срочность": feats_noul, "команда": feats_choice, …},
+    targets={"срочность": y_noul, "команда": y_choice, …},
+    steps=80, batch_size=32,
+)
+# target: "choice"/"score" — классы-индексы, "noul" — float-цели в [0,1].
+# Для одного вопроса допустим единый тензор features.
 ```
 
 ### Чекпоинты голов и переиспользование
@@ -477,7 +515,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 136 passed
+.venv/bin/python -m pytest                          # 162 passed
 .venv/bin/python -m ruff check src api eval training tests examples
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
@@ -505,10 +543,12 @@ systemctl status decision-api@api.service
 src/            — модель: encoder, decision heads, sampler, бэкенды (backends/), схемы (schemas.py)
 api/            — FastAPI-сервер (server/) и Python SDK (sdk/client.py)
 training/       — SFT (sft/) и RLCD (rlcd/)
-eval/           — калибровка (calibration/) и latency (latency/)
+eval/           — калибровка (calibration/), latency (latency/),
+                  генераторы датасетов (datasets/) и офлайн-бенчмарк (benchmark/)
 deploy/         — Ubuntu/CentOS + systemd
 examples/       — примеры (русский разбор обращения)
-tests/          — pytest-набор (136 тестов)
+tests/          — pytest-набор (162 теста)
+data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — скрипты окружения (bootstrap.sh — скелет, не для повторного запуска)
 README.md       — этот файл
 requirements.txt
