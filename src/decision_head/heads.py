@@ -1,10 +1,19 @@
 """Головы решений: отображение признаков в типизированные вероятности."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 from torch import Tensor, nn
 
-from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
+from src.sampler.questions import (
+    ChoiceSpec,
+    NoulSpec,
+    QuestionSpec,
+    ScoreSpec,
+    spec_from_dict,
+    spec_to_dict,
+)
 from src.schemas import (
     ChoiceResult,
     DecisionResult,
@@ -78,6 +87,7 @@ class DecisionHeads(nn.Module):
         self, dim: int, questions: dict[str, QuestionSpec], seed: int | None = None
     ):
         super().__init__()
+        self.dim = dim
         self.questions = dict(questions)
         self.heads: dict[str, nn.Module] = {}
         if seed is not None:
@@ -107,3 +117,30 @@ class DecisionHeads(nn.Module):
         for i, (name, head) in enumerate(self.heads.items()):
             results[name] = head(features[i].unsqueeze(0))
         return results
+
+    def save_checkpoint(self, path: str | Path) -> Path:
+        """Сохраняет веса голов вместе со спецификациями вопросов для восстановления."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "dim": self.dim,
+                "questions": {
+                    name: spec_to_dict(spec) for name, spec in self.questions.items()
+                },
+                "state_dict": self.state_dict(),
+            },
+            path,
+        )
+        return path
+
+    @classmethod
+    def load_checkpoint(cls, path: str | Path, seed: int | None = None) -> DecisionHeads:
+        """Восстанавливает головы (структуру и веса) из чекпоинта."""
+        payload = torch.load(Path(path), map_location="cpu")
+        questions = {
+            name: spec_from_dict(data) for name, data in payload["questions"].items()
+        }
+        heads = cls(payload["dim"], questions, seed=seed)
+        heads.load_state_dict(payload["state_dict"])
+        return heads

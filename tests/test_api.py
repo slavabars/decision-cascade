@@ -87,3 +87,43 @@ def test_single_option_choice_rejected(client):
 def test_empty_questions_rejected(client):
     resp = client.post("/decisions", json={"state": "s", "questions": {}})
     assert resp.status_code == 422
+
+
+def test_choice_criteria_accepted(client):
+    payload = {
+        "state": "s",
+        "questions": {
+            "dept": {
+                "type": "choice",
+                "instructions": "who?",
+                "options": ["billing", "sales"],
+                "criteria": {"billing": "money", "sales": "deals"},
+            }
+        },
+    }
+    resp = client.post("/decisions", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["decisions"]["dept"]["type"] == "choice"
+
+
+def test_to_specs_carries_criteria():
+    from api.server.main import ChoiceQuestion, ScoreQuestion, _to_specs
+
+    specs = _to_specs(
+        {
+            "dept": ChoiceQuestion(
+                type="choice",
+                instructions="who?",
+                options=["a", "b"],
+                criteria={"a": "Alpha", "b": "Beta"},
+            ),
+            "pain": ScoreQuestion(
+                type="score",
+                instructions="how bad?",
+                levels=["low", "high"],
+                criteria=["calm", "critical"],
+            ),
+        }
+    )
+    assert specs["dept"].criteria == {"a": "Alpha", "b": "Beta"}
+    assert specs["pain"].criteria == ("calm", "critical")

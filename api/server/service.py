@@ -1,8 +1,15 @@
-"""Сервис принятия решений: state + вопросы -> типизированные ответы."""
+"""Сервис принятия решений: state + вопросы -> типизированные ответы.
+
+Головы кэшируются по подписи набора вопросов и переиспользуются между
+запросами; веса могут подгружаться из чекпоинтов. Кэш признаков избавляет
+от повторного прогона энкодера по неизменному состоянию.
+"""
 from __future__ import annotations
 
 import hashlib
 import logging
+from collections import OrderedDict
+from pathlib import Path
 
 import torch
 from torch import Tensor
@@ -10,12 +17,13 @@ from torch import Tensor
 from src.decision_head.heads import DecisionHeads
 from src.encoder.base import StateEncoder
 from src.sampler.parallel import sample_decisions
-from src.sampler.questions import QuestionSpec
+from src.sampler.questions import QuestionSpec, build_prompt, questions_signature
 from src.schemas import DecisionResult
 
 logger = logging.getLogger("decision.service")
 
 FEATURE_DIM = 64
+DEFAULT_CHECKPOINT_DIR = "checkpoints"
 
 
 class HashStateEncoder:
@@ -42,18 +50,100 @@ class DecisionService:
         encoder: StateEncoder | None = None,
         dim: int = FEATURE_DIM,
         seed: int = 0,
+        checkpoint_dir: str | Path | None = None,
+        cache_size: int = 256,
     ):
         self.encoder = encoder or HashStateEncoder(dim)
         self.dim = dim
         self.seed = seed
+        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
+        self.cache_size = max(0, cache_size)
+        self._heads_cache: dict[str, DecisionHeads] = {}
+        self._feature_cache: OrderedDict[str, Tensor] = OrderedDict()
+
+    def get_heads(self, dim: int, questions: dict[str, QuestionSpec]) -> DecisionHeads:
+        """Возвращает головы для набора вопросов, переиспользуя их между запросами."""
+        signature = questions_signature(questions)
+        key = f"{dim}:{signature}"
+        heads = self._heads_cache.get(key)
+        if heads is None:
+            heads = DecisionHeads(dim, questions, seed=self.seed)
+            self._load_checkpoint_into(heads, dim)
+            self._heads_cache[key] = heads
+        return heads
+
+    def save_heads(
+        self,
+        dim: int,
+        questions: dict[str, QuestionSpec],
+        directory: str | Path | None = None,
+    ) -> Path:
+        """Сохраняет текущие (в т.ч. обученные) головы в чекпоинт."""
+        base = (
+            Path(directory)
+            if directory is not None
+            else (self.checkpoint_dir or Path(DEFAULT_CHECKPOINT_DIR))
+        )
+        path = base / f"{questions_signature(questions)}.pt"
+        return self.get_heads(dim, questions).save_checkpoint(path)
+
+    def _checkpoint_path(self, questions: dict[str, QuestionSpec]) -> Path | None:
+        if self.checkpoint_dir is None:
+            return None
+        return self.checkpoint_dir / f"{questions_signature(questions)}.pt"
+
+    def _load_checkpoint_into(self, heads: DecisionHeads, dim: int) -> None:
+        path = self._checkpoint_path(heads.questions)
+        if path is None or not path.exists():
+            return
+        payload = torch.load(path, map_location="cpu")
+        if int(payload.get("dim", -1)) != dim:
+            logger.warning(
+                "checkpoint dim=%s does not match features dim=%s; ignoring %s",
+                payload.get("dim"),
+                dim,
+                path,
+            )
+            return
+        heads.load_state_dict(payload["state_dict"])
+
+    def _encode_prompts(self, prompts: list[str]) -> Tensor:
+        rows: list[Tensor | None] = [None] * len(prompts)
+        missing: list[str] = []
+        missing_idx: list[int] = []
+        for i, prompt in enumerate(prompts):
+            cached = self._feature_cache.get(prompt)
+            if cached is not None:
+                self._feature_cache.move_to_end(prompt)
+                rows[i] = cached
+            else:
+                missing.append(prompt)
+                missing_idx.append(i)
+        if missing:
+            features = self.encoder.encode(missing)
+            if features.shape[0] != len(missing):
+                raise ValueError(
+                    "encoder returned "
+                    f"{features.shape[0]} rows for {len(missing)} prompts"
+                )
+            for j, i in enumerate(missing_idx):
+                vector = features[j]
+                rows[i] = vector
+                if self.cache_size:
+                    self._feature_cache[prompts[i]] = vector
+                    self._feature_cache.move_to_end(prompts[i])
+                    while len(self._feature_cache) > self.cache_size:
+                        self._feature_cache.popitem(last=False)
+        return torch.stack([row for row in rows if row is not None])
 
     def decide(
         self, state: str, questions: dict[str, QuestionSpec]
     ) -> dict[str, DecisionResult]:
-        features = self.encoder.encode([state])
-        if features.shape[0] != len(questions):
-            features = features.repeat(len(questions), 1)
-        heads = DecisionHeads(features.shape[-1], questions, seed=self.seed)
+        if not questions:
+            return {}
+        prompts = [build_prompt(state, spec) for spec in questions.values()]
+        features = self._encode_prompts(prompts)
+        heads = self.get_heads(features.shape[-1], questions)
         results = sample_decisions(heads, features)
         for name, result in results.items():
             dist = getattr(result, "probabilities", None) or {"p": result.noul}

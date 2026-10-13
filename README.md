@@ -123,6 +123,7 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 |------------|------------|--------------|
 | `DECISION_MODEL_ID` | имя модели на HF Hub | `google/gemma-4-12B` |
 | `DECISION_FEATURE_DIM` | размерность признаков | `768` |
+| `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
 
 Указывать размерность необязательно: головы строятся по фактической размерности
 выхода энкодера (`features.shape[-1]`), а если она отличается от 768 — вход
@@ -174,9 +175,13 @@ ss -ltn | grep ':8000 ' || echo "порт 8000 свободен"
 
 | Тип | Использование | Запрос |
 |-----|---------------|--------|
-| `noul` | Бинарный вопрос «да/нет» (вероятность) | `{"type": "noul", "instructions": "…"}` |
-| `choice` | Выбор одной из опций | `{"type": "choice", "instructions": "…", "options": ["…", "…"]}` |
-| `score` | Оценка по шкале уровней | `{"type": "score", "instructions": "…", "levels": ["…", "…"]}` |
+| `noul` | Бинарный вопрос «да/нет» (вероятность) | `{"type": "noul", "instructions": "…", "criteria": ["что значит «да»", "что значит «нет»"]}` |
+| `choice` | Выбор одной из опций | `{"type": "choice", "instructions": "…", "options": ["…", "…"], "criteria": {"…": "описание опции"}}` |
+| `score` | Оценка по шкале уровней | `{"type": "score", "instructions": "…", "levels": ["…", "…"], "criteria": ["описание уровня 0", "описание уровня 1"]}` |
+
+`instructions` и `criteria` входят в промпт энкодера вместе с `state` — то есть
+модель отвечает именно на заданный вопрос, а не просто классифицирует состояние.
+`criteria` необязательны и нужны для более точного разграничения опций.
 
 ### Формат ответа
 
@@ -284,6 +289,21 @@ heads = DecisionHeads(dim=768, questions={…})
 SFTTrainer(heads, lr=0.1).fit(features, targets, steps=80, batch_size=32)
 ```
 
+### Чекпоинты голов и переиспользование
+
+Головы решений создаются один раз на набор вопросов и переиспользуются между
+запросами (кэш по подписи схемы). Обученные веса сохраняются и подгружаются:
+
+```python
+svc.save_heads(dim=768, questions=QUESTIONS)      # -> checkpoints/<schema>.pt
+```
+
+При старте сервер читает каталог из `DECISION_CHECKPOINT_DIR` (по умолчанию
+`checkpoints/`) и, если для схемы есть чекпоинт с подходящей размерностью,
+загружает веса. Это делает качество воспроизводимым между перезапусками, а
+латентность — без повторного прогона энкодера по неизменному состоянию (кэш
+признаков по промпту).
+
 ### RLCD — учим калибровке
 
 RLCD (reinforcement learning for calibrated decisions): reward `−|p − outcome|`,
@@ -300,7 +320,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 77 passed
+.venv/bin/python -m pytest                          # 95 passed
 .venv/bin/python -m ruff check src api eval training tests examples
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
@@ -331,7 +351,7 @@ training/       — SFT (sft/) и RLCD (rlcd/)
 eval/           — калибровка (calibration/) и latency (latency/)
 deploy/         — Ubuntu/CentOS + systemd
 examples/       — примеры (русский разбор обращения)
-tests/          — pytest-набор (77 тестов)
+tests/          — pytest-набор (95 тестов)
 scripts/        — скрипты окружения (bootstrap.sh — скелет, не для повторного запуска)
 README.md       — этот файл
 requirements.txt
@@ -343,7 +363,9 @@ pytest.ini
 ## Ограничения и планы
 
 - **Качество по умолчанию**: головы по умолчанию случайные; осмысленные решения
-  требуют SFT+RLCD на вашей разметке. Это особенность платформы, а не готовая модель.
+  требуют SFT+RLCD на вашей разметке. Обученные веса сохраняются в чекпоинты и
+  подгружаются при старте, но готовой обученной модели «из коробки» нет — это
+  особенность платформы, а не готовая модель.
 - **GPU-модели** (gemma-4-12B) требуют CUDA-машины; на CPU используйте gpt2.
 - **Roadmap**: реальная калибровка на gemma-выходе, батч-опросы многих состояний,
   вариант энкодера-трансформера с attention-mask состояний, интеграция в чат-агентов.

@@ -12,16 +12,17 @@ import torch
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from api.server.service import DecisionService
+from api.server.service import DEFAULT_CHECKPOINT_DIR, DecisionService
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
 from src.schemas import SCHEMA_VERSION, DecisionResult
 
 
 def create_service() -> DecisionService:
     """Сервис по окружению: DECISION_MODEL_ID включает реальный state-энкодер."""
+    checkpoint_dir = os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
     model_id = os.environ.get("DECISION_MODEL_ID")
     if not model_id:
-        return DecisionService()
+        return DecisionService(checkpoint_dir=checkpoint_dir)
     from src.encoder.gemma import GemmaStateEncoder
 
     feature_dim = int(os.environ.get("DECISION_FEATURE_DIM", "768"))
@@ -32,7 +33,11 @@ def create_service() -> DecisionService:
         device="cpu",
     )
     encoder.load()
-    return DecisionService(encoder=encoder, dim=feature_dim)
+    return DecisionService(
+        encoder=encoder,
+        dim=feature_dim,
+        checkpoint_dir=checkpoint_dir,
+    )
 
 
 app = FastAPI(title="System One Decision API", version=SCHEMA_VERSION)
@@ -43,18 +48,21 @@ service = create_service()
 class NoulQuestion(BaseModel):
     type: Literal["noul"]
     instructions: str
+    criteria: list[str] | None = Field(None, min_length=2, max_length=2)
 
 
 class ChoiceQuestion(BaseModel):
     type: Literal["choice"]
     instructions: str
     options: list[str] = Field(..., min_length=2, max_length=255)
+    criteria: dict[str, str] | None = None
 
 
 class ScoreQuestion(BaseModel):
     type: Literal["score"]
     instructions: str
     levels: list[str] = Field(..., min_length=2)
+    criteria: list[str] | None = None
 
 
 Question = NoulQuestion | ChoiceQuestion | ScoreQuestion
@@ -74,11 +82,18 @@ def _to_specs(questions: dict[str, Question]) -> dict[str, QuestionSpec]:
     specs = {}
     for name, q in questions.items():
         if q.type == "noul":
-            specs[name] = NoulSpec(instructions=q.instructions)
+            criteria = tuple(q.criteria) if q.criteria else None
+            specs[name] = NoulSpec(instructions=q.instructions, criteria=criteria)
         elif q.type == "choice":
-            specs[name] = ChoiceSpec(instructions=q.instructions, options=tuple(q.options))
+            criteria = dict(q.criteria) if q.criteria else None
+            specs[name] = ChoiceSpec(
+                instructions=q.instructions, options=tuple(q.options), criteria=criteria
+            )
         elif q.type == "score":
-            specs[name] = ScoreSpec(instructions=q.instructions, levels=tuple(q.levels))
+            criteria = tuple(q.criteria) if q.criteria else None
+            specs[name] = ScoreSpec(
+                instructions=q.instructions, levels=tuple(q.levels), criteria=criteria
+            )
     return specs
 
 
