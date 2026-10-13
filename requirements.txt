@@ -13,6 +13,7 @@ scipy>=1.12
 trl>=0.9
 accelerate>=0.30
 datasets>=2.18
+pandas>=2.0
 peft>=0.10
 
 # Calibration
