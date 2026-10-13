@@ -57,6 +57,22 @@ class GemmaStateEncoder(StateEncoder):
         ]
         return torch.cat(chunks, dim=0)
 
+    @staticmethod
+    def _mean_pool(hidden: Tensor, attention_mask: Tensor | None) -> Tensor:
+        """Mean-pooling по токенам состояния с учётом ``attention_mask``.
+
+        Padding-позиции (добавляются при ``padding=True`` до самого длинного
+        элемента батча) исключаются из среднего. Иначе один и тот же state в
+        разных батчах давал бы разные признаки, что ломает детерминизм и кэш
+        признаков. Если маски нет (нестандартный токенизатор) — обычное среднее.
+        """
+        if attention_mask is None:
+            return hidden.mean(dim=1)
+        mask = attention_mask.unsqueeze(-1).to(hidden.dtype)
+        pooled = (hidden * mask).sum(dim=1)
+        counts = mask.sum(dim=1).clamp(min=1.0)
+        return pooled / counts
+
     def _encode_chunk(self, states: list[str]) -> Tensor:
         inputs = self._tokenizer(
             states,
@@ -68,10 +84,13 @@ class GemmaStateEncoder(StateEncoder):
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():
             hidden = self._model(**inputs, output_hidden_states=True).hidden_states[-1]
-        pooled = hidden.mean(dim=1)
+        pooled = self._mean_pool(hidden, inputs.get("attention_mask"))
         if pooled.shape[-1] != self.feature_dim:
-            projected = torch.nn.functional.linear(
-                pooled, torch.eye(self.feature_dim, pooled.shape[-1], device=self.device)
+            # Фиксированная (не обучаемая) проекция: обрезка или дополнение нулями.
+            # Матрицу берём на устройстве и в типе самих признаков, а не self.device,
+            # иначе на CUDA-машине с CPU-моделью получаем рассинхрон устройств.
+            projection = torch.eye(
+                self.feature_dim, pooled.shape[-1], device=pooled.device, dtype=pooled.dtype
             )
-            pooled = projected
+            pooled = torch.nn.functional.linear(pooled, projection)
         return pooled.detach().float().cpu()
