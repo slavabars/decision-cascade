@@ -104,6 +104,10 @@ def systemone_to_specs(
                 raise ValueError(
                     f"choice question {name!r} needs at least 2 options or criteria"
                 )
+            if len(set(options)) != len(options):
+                raise ValueError(
+                    f"choice question {name!r} options must be unique"
+                )
             criteria = dict(question.criteria) if question.criteria else None
             specs[name] = ChoiceSpec(
                 instructions=instructions, options=options, criteria=criteria
@@ -118,7 +122,19 @@ def systemone_to_specs(
                 raise ValueError(
                     f"score question {name!r} needs at least 2 levels or criteria"
                 )
+            if len(set(levels)) != len(levels):
+                raise ValueError(
+                    f"score question {name!r} levels must be unique"
+                )
             criteria = tuple(question.criteria) if question.criteria else None
+            if (
+                question.levels
+                and criteria is not None
+                and len(criteria) != len(question.levels)
+            ):
+                raise ValueError(
+                    f"score question {name!r} criteria length must match levels"
+                )
             specs[name] = ScoreSpec(
                 instructions=instructions, levels=levels, criteria=criteria
             )

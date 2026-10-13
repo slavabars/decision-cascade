@@ -18,11 +18,13 @@ class GemmaStateEncoder(StateEncoder):
         feature_dim: int = 768,
         dtype: torch.dtype = torch.float32,
         device: str | None = None,
+        max_length: int | None = 256,
     ):
         self.model_id = model_id
         self.feature_dim = feature_dim
         self.dtype = dtype
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.max_length = max_length
         self._model = None
         self._tokenizer = None
 
@@ -42,7 +44,13 @@ class GemmaStateEncoder(StateEncoder):
     def encode(self, states: list[str]) -> Tensor:
         if self._model is None:
             raise RuntimeError("GemmaStateEncoder.load() must be called before encode()")
-        inputs = self._tokenizer(states, return_tensors="pt", padding=True, truncation=True)
+        inputs = self._tokenizer(
+            states,
+            return_tensors="pt",
+            padding=True,
+            truncation=self.max_length is not None,
+            max_length=self.max_length,
+        )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():
             hidden = self._model(**inputs, output_hidden_states=True).hidden_states[-1]

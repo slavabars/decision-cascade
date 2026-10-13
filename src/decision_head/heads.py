@@ -25,6 +25,14 @@ from src.schemas import (
 )
 
 
+def _require_unique(name: str, field: str, values: tuple[str, ...]) -> None:
+    """Опечатки в опциях/уровнях ломают распределение — ловим на входе."""
+    if len(set(values)) != len(values):
+        raise ValueError(
+            f"question {name!r} {field} must be unique; got {list(values)}"
+        )
+
+
 class NoulHead(nn.Module):
     def __init__(self, dim: int):
         super().__init__()
@@ -96,8 +104,10 @@ class DecisionHeads(nn.Module):
             if isinstance(spec, NoulSpec):
                 self.heads[name] = NoulHead(dim)
             elif isinstance(spec, ChoiceSpec):
+                _require_unique(name, "options", spec.options)
                 self.heads[name] = ChoiceHead(dim, spec.options)
             elif isinstance(spec, ScoreSpec):
+                _require_unique(name, "levels", spec.levels)
                 self.heads[name] = ScoreHead(dim, spec.levels)
             else:
                 raise TypeError(f"unsupported question spec: {type(spec).__name__}")
@@ -137,7 +147,7 @@ class DecisionHeads(nn.Module):
     @classmethod
     def load_checkpoint(cls, path: str | Path, seed: int | None = None) -> DecisionHeads:
         """Восстанавливает головы (структуру и веса) из чекпоинта."""
-        payload = torch.load(Path(path), map_location="cpu")
+        payload = torch.load(Path(path), map_location="cpu", weights_only=True)
         questions = {
             name: spec_from_dict(data) for name, data in payload["questions"].items()
         }

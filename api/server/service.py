@@ -117,7 +117,7 @@ class DecisionService:
         path = self._checkpoint_path(heads.questions)
         if path is None or not path.exists():
             return
-        payload = torch.load(path, map_location="cpu")
+        payload = torch.load(path, map_location="cpu", weights_only=True)
         if int(payload.get("dim", -1)) != dim:
             logger.warning(
                 "checkpoint dim=%s does not match features dim=%s; ignoring %s",

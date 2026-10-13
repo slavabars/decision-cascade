@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 import torch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.server.service import DEFAULT_CHECKPOINT_DIR, DecisionService
 from api.server.systemone import (
@@ -44,6 +44,20 @@ def create_vision_encoder() -> VisionEncoder | None:
     return encoder
 
 
+def parse_max_length(raw: str) -> int | None:
+    """Разбирает DECISION_MAX_LENGTH: положительный int или None (без обрезки)."""
+    value = raw.strip().lower()
+    if value in {"", "none", "0"}:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"DECISION_MAX_LENGTH must be a positive int or 'none', got {raw!r}"
+        ) from exc
+    return parsed if parsed >= 1 else None
+
+
 def create_service() -> DecisionService:
     """Сервис по окружению: DECISION_MODEL_ID включает реальный state-энкодер."""
     checkpoint_dir = os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
@@ -56,11 +70,13 @@ def create_service() -> DecisionService:
     from src.encoder.gemma import GemmaStateEncoder
 
     feature_dim = int(os.environ.get("DECISION_FEATURE_DIM", "768"))
+    max_length = parse_max_length(os.environ.get("DECISION_MAX_LENGTH", "256"))
     encoder = GemmaStateEncoder(
         model_id=model_id,
         feature_dim=feature_dim,
         dtype=torch.float32,
         device="cpu",
+        max_length=max_length,
     )
     encoder.load()
     return DecisionService(
@@ -102,14 +118,34 @@ class ChoiceQuestion(BaseModel):
     type: Literal["choice"]
     instructions: str
     options: list[str] = Field(..., min_length=2, max_length=255)
-    criteria: dict[str, str] | None = None
+    criteria: dict[str, str] | None = Field(None, max_length=255)
+
+    @field_validator("options")
+    @classmethod
+    def _unique_options(cls, options: list[str]) -> list[str]:
+        if len(set(options)) != len(options):
+            raise ValueError("options must be unique")
+        return options
 
 
 class ScoreQuestion(BaseModel):
     type: Literal["score"]
     instructions: str
-    levels: list[str] = Field(..., min_length=2)
-    criteria: list[str] | None = None
+    levels: list[str] = Field(..., min_length=2, max_length=255)
+    criteria: list[str] | None = Field(None, max_length=255)
+
+    @field_validator("levels")
+    @classmethod
+    def _unique_levels(cls, levels: list[str]) -> list[str]:
+        if len(set(levels)) != len(levels):
+            raise ValueError("levels must be unique")
+        return levels
+
+    @model_validator(mode="after")
+    def _criteria_match_levels(self) -> ScoreQuestion:
+        if self.criteria is not None and len(self.criteria) != len(self.levels):
+            raise ValueError("criteria length must match levels length")
+        return self
 
 
 Question = NoulQuestion | ChoiceQuestion | ScoreQuestion

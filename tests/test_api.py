@@ -106,6 +106,74 @@ def test_choice_criteria_accepted(client):
     assert resp.json()["decisions"]["dept"]["type"] == "choice"
 
 
+def test_duplicate_choice_options_rejected(client):
+    payload = {
+        "state": "s",
+        "questions": {
+            "q": {"type": "choice", "instructions": "?", "options": ["a", "a"]}
+        },
+    }
+    resp = client.post("/decisions", json=payload)
+    assert resp.status_code == 422
+
+
+def test_duplicate_score_levels_rejected(client):
+    payload = {
+        "state": "s",
+        "questions": {
+            "q": {"type": "score", "instructions": "?", "levels": ["a", "a", "b"]}
+        },
+    }
+    resp = client.post("/decisions", json=payload)
+    assert resp.status_code == 422
+
+
+def test_too_many_score_levels_rejected(client):
+    payload = {
+        "state": "s",
+        "questions": {
+            "q": {
+                "type": "score",
+                "instructions": "?",
+                "levels": [f"l{i}" for i in range(300)],
+            }
+        },
+    }
+    resp = client.post("/decisions", json=payload)
+    assert resp.status_code == 422
+
+
+def test_too_many_choice_options_rejected(client):
+    payload = {
+        "state": "s",
+        "questions": {
+            "q": {
+                "type": "choice",
+                "instructions": "?",
+                "options": [f"o{i}" for i in range(300)],
+            }
+        },
+    }
+    resp = client.post("/decisions", json=payload)
+    assert resp.status_code == 422
+
+
+def test_score_criteria_length_mismatch_rejected(client):
+    payload = {
+        "state": "s",
+        "questions": {
+            "q": {
+                "type": "score",
+                "instructions": "?",
+                "levels": ["a", "b", "c"],
+                "criteria": ["x", "y"],
+            }
+        },
+    }
+    resp = client.post("/decisions", json=payload)
+    assert resp.status_code == 422
+
+
 def test_to_specs_carries_criteria():
     from api.server.main import ChoiceQuestion, ScoreQuestion, _to_specs
 

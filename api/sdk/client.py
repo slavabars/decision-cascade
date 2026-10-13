@@ -64,7 +64,7 @@ class DecisionClient:
     def __init__(
         self,
         base_url: str = "http://localhost:8000",
-        timeout: float = 10.0,
+        timeout: float = 60.0,
         transport: httpx.BaseTransport | None = None,
     ):
         self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport)

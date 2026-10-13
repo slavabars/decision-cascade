@@ -94,6 +94,38 @@ def test_systemone_rejects_unsupported_image(client):
     assert "image" not in error["supported"]
 
 
+def test_systemone_rejects_duplicate_choice_options(client):
+    payload = {
+        "state": "s",
+        "questions": {"q": {"type": "choice", "options": ["a", "a"]}},
+    }
+    resp = client.post("/v1/systemone", json=payload)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "INVALID_QUESTION"
+
+
+def test_systemone_rejects_duplicate_score_levels(client):
+    payload = {
+        "state": "s",
+        "questions": {"q": {"type": "score", "criteria": ["a", "a"]}},
+    }
+    resp = client.post("/v1/systemone", json=payload)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "INVALID_QUESTION"
+
+
+def test_systemone_rejects_score_criteria_length_mismatch(client):
+    payload = {
+        "state": "s",
+        "questions": {
+            "q": {"type": "score", "levels": ["a", "b", "c"], "criteria": ["x", "y"]}
+        },
+    }
+    resp = client.post("/v1/systemone", json=payload)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "INVALID_QUESTION"
+
+
 def test_systemone_accepts_images_with_vision_backend(monkeypatch):
     from api.server import main
     from api.server.service import DecisionService

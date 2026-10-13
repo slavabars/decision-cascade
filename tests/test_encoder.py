@@ -58,6 +58,43 @@ class _FakeTokenizer:
         }
 
 
+class _RecordingTokenizer:
+    def __init__(self):
+        self.kwargs: dict = {}
+
+    def __call__(self, states, **kwargs):
+        self.kwargs = kwargs
+        n = len(states)
+        return {
+            "input_ids": torch.zeros(n, 4, dtype=torch.long),
+            "attention_mask": torch.ones(n, 4),
+        }
+
+
+def test_gemma_encode_truncates_to_max_length():
+    from src.encoder.gemma import GemmaStateEncoder
+
+    enc = GemmaStateEncoder(feature_dim=4, max_length=128)
+    tok = _RecordingTokenizer()
+    enc._model = _FakeModel(hidden_last=torch.randn(1, 4, 4))
+    enc._tokenizer = tok
+    enc.encode(["a long state"])
+    assert tok.kwargs["truncation"] is True
+    assert tok.kwargs["max_length"] == 128
+
+
+def test_gemma_encode_can_disable_truncation():
+    from src.encoder.gemma import GemmaStateEncoder
+
+    enc = GemmaStateEncoder(feature_dim=4, max_length=None)
+    tok = _RecordingTokenizer()
+    enc._model = _FakeModel(hidden_last=torch.randn(1, 4, 4))
+    enc._tokenizer = tok
+    enc.encode(["a state"])
+    assert tok.kwargs["truncation"] is False
+    assert tok.kwargs.get("max_length") is None
+
+
 def test_gemma_encode_pools_hidden_states():
     from src.encoder.gemma import GemmaStateEncoder
 

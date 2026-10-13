@@ -91,6 +91,16 @@ def test_decision_heads_picks_right_head_per_question():
     assert isinstance(dm.heads["s"], ScoreHead)
 
 
+def test_decision_heads_rejects_duplicate_options():
+    with pytest.raises(ValueError, match="unique"):
+        DecisionHeads(dim=1, questions={"c": ChoiceSpec("?", ("a", "a"))})
+
+
+def test_decision_heads_rejects_duplicate_levels():
+    with pytest.raises(ValueError, match="unique"):
+        DecisionHeads(dim=1, questions={"s": ScoreSpec("?", ("a", "a", "b"))})
+
+
 def test_decision_heads_batch_single_pass():
     dm = DecisionHeads(
         dim=2,
