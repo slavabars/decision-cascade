@@ -460,6 +460,22 @@ with DecisionClient(base_url="http://localhost:8000") as client:
 Разбор обращения в техподдержку: шесть вопросов всех трёх типов одним запросом
 с человекочитаемым выводом вероятностей и уверенности по каждому.
 
+### Интеграция в чат-агента (SDK + каскад)
+
+`api/sdk/agent.py` превращает типизированные решения в действие агента
+(команда, приоритет, эскалация, тон ответа) чистой функцией `route_ticket` —
+без сети, поэтому легко тестируется. Готовый пример:
+
+```bash
+# сервер должен быть поднят; при --fallback низкоуверенное обращение
+# переспрашивает внешний SystemOne-сервис (клиентский каскад)
+.venv/bin/python examples/chat_agent.py --fallback http://remote:8080
+```
+
+На стороне сервера каскад (`DECISION_BACKEND=cascade`) эскалирует низкоуверенные
+решения сам — см. раздел «Каскад» выше; `route_ticket` может использоваться и
+поверх него.
+
 ## Оценка качества
 
 ### Калибровка (ECE / Brier)
@@ -751,7 +767,7 @@ systemctl status decision-api@api.service
 ```
 src/            — модель: encoder (+device.py), decision heads, sampler, бэкенды
                   (backends/), схемы (schemas.py)
-api/            — FastAPI-сервер (server/) и Python SDK (sdk/client.py)
+api/            — FastAPI-сервер (server/) и Python SDK (sdk/: client.py, agent.py)
 training/       — SFT (sft/), RLCD (rlcd/) и рецепт обучения голов (recipe/)
 eval/           — калибровка (calibration/), latency (latency/), датасеты
                   (datasets/, вкл. публичный AG News), офлайн-бенчмарк (benchmark/),
@@ -759,7 +775,7 @@ eval/           — калибровка (calibration/), latency (latency/), д�
                   (competitors/)
 deploy/         — Ubuntu/CentOS + systemd
 docs/           — методика бенчмарка против конкурентов (competitor-benchmark.md)
-examples/       — примеры (русский разбор обращения)
+examples/       — примеры (русский разбор обращения, чат-агент с каскадом)
 tests/          — pytest-набор (254 теста + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — окружение: bootstrap-user.sh (uv/pyenv/venv/gh), bootstrap.sh (скелет)

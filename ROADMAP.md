@@ -151,7 +151,10 @@ calibration (ECE): topic 0.725→0.151, business 0.122→0.063, tech_level 0.795
   `train_benchmark(rlcd_gate_examples=...)` прокидывается из рецепта, скрипт
   `training/recipe/calibrate_rlcd.py` калибрует существующий пак и печатает
   Brier/ECE до/после. Тесты: гейт на held-out, проброс gate, smoke-скрипт.
-- [ ] F3. Пример интеграции в чат-агента (клиент SDK + каскад).
+- [x] F3. Пример интеграции в чат-агента (SDK + каскад): `api/sdk/agent.py`
+  (`route_ticket` → команда/приоритет/эскалация/тон), пример
+  `examples/chat_agent.py` с клиентским фолбэком на внешний SystemOne-сервис,
+  тесты `tests/test_agent.py`.
 - [ ] F4. Политика версионирования схемы (`SCHEMA_VERSION`) и миграций.
 
 ---
