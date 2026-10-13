@@ -105,7 +105,7 @@ state (строка-описание) ──► StateEncoder ──► features 
 ## Установка окружения
 
 ```bash
-bash scripts/bootstrap-user.sh        # uv, pyenv, venv, зависимости, pre-commit, gh
+bash scripts/bootstrap-user.sh        # uv, pyenv, venv, зависимости, gh
 
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
@@ -115,8 +115,6 @@ uv pip install --python .venv/bin/python -r requirements.txt
 
 `bootstrap-user.sh` работает без `sudo`: ставит `uv`/`pyenv` в `~/.local` и
 `~/.pyenv`, создаёт `.venv`, ставит зависимости и кладёт `gh` в `~/.local/bin`.
-
-> `scripts/bootstrap.sh` — генератор скелета проекта; повторно запускать не нужно.
 
 ## Запуск сервера
 
@@ -788,11 +786,10 @@ docs/           — методика бенчмарка против конку�
 examples/       — примеры (русский разбор обращения, чат-агент с каскадом)
 tests/          — pytest-набор (306 тестов + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
-scripts/        — окружение: bootstrap-user.sh (uv/pyenv/venv/gh), bootstrap.sh (скелет)
+scripts/        — bootstrap окружения (bootstrap-user.sh: uv/pyenv/venv/gh)
 README.md       — этот файл
 requirements.txt
 pytest.ini
-.pre-commit-config.yaml
 ```
 
 ## Ограничения и планы
@@ -809,6 +806,5 @@ pytest.ini
 - **Честная оценка**: синтетические сплиты тривиально разделимы (`1.000` — это про
   конвейер, а не про домен). Публичные числа — на AG News (accuracy 0.425 → 0.88)
   и в бенчмарке против конкурентов; для своего домена нужна своя разметка.
-- **Roadmap**: фазы A–F закрыты; публикация весов — релизом через
-  `training/recipe/publish_release.sh` (один пак) или
-  `training/recipe/publish_weight_packs.sh` (матрица).
+- **Публикация весов**: релизом через `training/recipe/publish_release.sh` (один
+  пак) или `training/recipe/publish_weight_packs.sh` (матрица).
