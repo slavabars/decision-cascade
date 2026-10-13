@@ -353,6 +353,20 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 Измерено на CPU с gpt2: **p50 ≈ 130 мс**, p95 ≈ 158 мс, p99 ≈ 164 мс —
 комфортно ниже бюджета, т.к. нет токен-генерации.
 
+Готовый CLI с разбивкой по фазам (`encode` / `heads` / `decide`):
+
+```bash
+# in-process, без HTTP и без внешней модели (hash-энкодер по умолчанию)
+.venv/bin/python -m eval.latency.run --n 30 --warmup 3
+
+# через запущенный сервер (свой /decisions или внешний SystemOne)
+.venv/bin/python -m eval.latency.run --http http://127.0.0.1:8000/decisions --n 30
+```
+
+Фаза `encode` замеряется прямым прогоном энкодера (в обход кэша признаков), а
+`decide` — полным путём сервиса. На повторяющемся `state` `decide` попадает в
+кэш и потому быстрее `encode`; это наглядно показывает вклад кэша.
+
 ## Обучение голов
 
 ### SFT — учим на размеченных данных
@@ -397,7 +411,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 114 passed
+.venv/bin/python -m pytest                          # 118 passed
 .venv/bin/python -m ruff check src api eval training tests examples
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
@@ -428,7 +442,7 @@ training/       — SFT (sft/) и RLCD (rlcd/)
 eval/           — калибровка (calibration/) и latency (latency/)
 deploy/         — Ubuntu/CentOS + systemd
 examples/       — примеры (русский разбор обращения)
-tests/          — pytest-набор (114 тестов)
+tests/          — pytest-набор (118 тестов)
 scripts/        — скрипты окружения (bootstrap.sh — скелет, не для повторного запуска)
 README.md       — этот файл
 requirements.txt
