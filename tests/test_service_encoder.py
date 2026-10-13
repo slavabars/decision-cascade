@@ -52,6 +52,32 @@ def test_create_service_wires_device_and_dtype(monkeypatch):
     assert captured["dtype"] == torch.bfloat16
 
 
+def test_create_service_builds_encoder_kind(monkeypatch):
+    from api.server import main
+    from src.encoder import transformer as transformer_mod
+
+    captured: dict = {}
+
+    def fake_init(self, *args, **kwargs):
+        captured.update(kwargs)
+        self.model_id = kwargs.get("model_id", "bert-base-uncased")
+
+    monkeypatch.setattr(
+        transformer_mod.TransformerStateEncoder, "__init__", fake_init
+    )
+    monkeypatch.setattr(
+        transformer_mod.TransformerStateEncoder, "load", lambda self: self
+    )
+    monkeypatch.setenv("DECISION_MODEL_ID", "bert-base-uncased")
+    monkeypatch.setenv("DECISION_ENCODER_KIND", "encoder")
+    monkeypatch.setenv("DECISION_DEVICE", "cpu")
+
+    svc = main.create_service()
+
+    assert isinstance(svc.encoder, transformer_mod.TransformerStateEncoder)
+    assert captured["model_id"] == "bert-base-uncased"
+
+
 def test_create_service_rejects_fp16_on_cpu(monkeypatch):
     import pytest
 

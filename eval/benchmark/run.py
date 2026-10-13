@@ -35,11 +35,11 @@ def _encode_batch() -> int:
 def _make_encoder(name: str, dim: int):
     if name == "hash":
         return HashStateEncoder(dim)
-    from src.encoder.gemma import GemmaStateEncoder
+    from src.encoder.factory import create_state_encoder
 
-    return GemmaStateEncoder(
-        model_id=name,
-        feature_dim=dim,
+    return create_state_encoder(
+        name,
+        dim,
         max_length=_max_length(),
         batch_size=_encode_batch(),
     ).load()

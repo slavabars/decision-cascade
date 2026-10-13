@@ -43,14 +43,14 @@ def _make_encoder(name: str, dim: int):
     if name == "hash":
         return HashStateEncoder(dim)
     from src.device import check_dtype_device, resolve_device, resolve_dtype
-    from src.encoder.gemma import GemmaStateEncoder
+    from src.encoder.factory import create_state_encoder
 
     device = resolve_device(os.environ.get("DECISION_DEVICE"))
     dtype = resolve_dtype(os.environ.get("DECISION_DTYPE"))
     check_dtype_device(dtype, device)
-    return GemmaStateEncoder(
-        model_id=name,
-        feature_dim=dim,
+    return create_state_encoder(
+        name,
+        dim,
         dtype=dtype,
         device=device,
         max_length=_max_length(),

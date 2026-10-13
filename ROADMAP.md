@@ -143,7 +143,9 @@ calibration (ECE): topic 0.725→0.151, business 0.122→0.063, tech_level 0.795
 
 ### Фаза F — Развитие (P2)
 
-- [ ] F1. Трансформерный энкодер с attention-mask (после A1 — обязательное условие).
+- [x] F1. Трансформерный энкодер с attention-mask: `TransformerStateEncoder` (encoder-only,
+  `AutoModel`) + общий `masked_mean_pool`; вид выбирается `DECISION_ENCODER_KIND`
+  (`causal`/`encoder`) через `src/encoder/factory.py`. Тесты: unit + opt-in BERT (`-m model`).
 - [ ] F2. Реальная калибровка на выходе gemma (RLCD в масштабе).
 - [ ] F3. Пример интеграции в чат-агента (клиент SDK + каскад).
 - [ ] F4. Политика версионирования схемы (`SCHEMA_VERSION`) и миграций.

@@ -160,6 +160,7 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_FEATURE_DIM` | размерность признаков | `768` |
 | `DECISION_MAX_LENGTH` | обрезка входа энкодера, токенов (`none` — без обрезки) | `256` |
 | `DECISION_ENCODE_BATCH` | размер батча кодирования состояний (1–4096) | `16` |
+| `DECISION_ENCODER_KIND` | вид текстового энкодера: `causal` (LM) или `encoder` (BERT-like) | `causal` |
 | `DECISION_DEVICE` | устройство энкодера: `auto`, `cpu`, `cuda`, `cuda:N`, `mps` | `auto` |
 | `DECISION_DTYPE` | тип весов энкодера: `float32`, `float16`, `bfloat16` | `float32` |
 | `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
@@ -187,6 +188,17 @@ DECISION_DEVICE=cuda DECISION_DTYPE=bfloat16 \
 ошибка (без тихого отката), а `float16` на CPU запрещён. Наружу энкодер всегда
 отдаёт CPU-тензоры, поэтому головы и кэш признаков работают одинаково на любом
 устройстве.
+
+По умолчанию текстовый энкодер — causal LM (`GemmaStateEncoder`,
+`AutoModelForCausalLM`). Для двунаправленных encoder-only моделей (BERT-like)
+задайте `DECISION_ENCODER_KIND=encoder` — тогда используется
+`TransformerStateEncoder` (`AutoModel`) с тем же masked mean-pooling:
+
+```bash
+DECISION_MODEL_ID=bert-base-uncased DECISION_ENCODER_KIND=encoder \
+DECISION_DEVICE=cuda \
+  .venv/bin/python -m uvicorn api.server.main:app --port 8000
+```
 
 ### Локальная мультимодальность
 

@@ -36,16 +36,16 @@ def _encoder(name: str, dim: int, device: str | None, dtype: str | None):
     if name == "hash":
         return HashStateEncoder(dim)
     from src.device import check_dtype_device, resolve_device, resolve_dtype
-    from src.encoder.gemma import GemmaStateEncoder
+    from src.encoder.factory import create_state_encoder
 
     resolved_device = resolve_device(device)
     resolved_dtype = resolve_dtype(dtype)
     check_dtype_device(resolved_dtype, resolved_device)
     raw_max = os.environ.get("DECISION_MAX_LENGTH", "256").strip().lower()
     max_length = None if raw_max in ("", "none", "0") else int(raw_max)
-    return GemmaStateEncoder(
-        model_id=name,
-        feature_dim=dim,
+    return create_state_encoder(
+        name,
+        dim,
         dtype=resolved_dtype,
         device=resolved_device,
         max_length=max_length,

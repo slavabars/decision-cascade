@@ -9,6 +9,7 @@ import torch
 from torch import Tensor
 
 from src.encoder.base import StateEncoder
+from src.encoder.pooling import masked_mean_pool, project_features
 
 
 class GemmaStateEncoder(StateEncoder):
@@ -61,17 +62,10 @@ class GemmaStateEncoder(StateEncoder):
     def _mean_pool(hidden: Tensor, attention_mask: Tensor | None) -> Tensor:
         """Mean-pooling по токенам состояния с учётом ``attention_mask``.
 
-        Padding-позиции (добавляются при ``padding=True`` до самого длинного
-        элемента батча) исключаются из среднего. Иначе один и тот же state в
-        разных батчах давал бы разные признаки, что ломает детерминизм и кэш
-        признаков. Если маски нет (нестандартный токенизатор) — обычное среднее.
+        Тонкая обёртка над общим ``masked_mean_pool`` (общая логика вынесена в
+        ``src.encoder.pooling``, чтобы её переиспользовал encoder-only энкодер).
         """
-        if attention_mask is None:
-            return hidden.mean(dim=1)
-        mask = attention_mask.unsqueeze(-1).to(hidden.dtype)
-        pooled = (hidden * mask).sum(dim=1)
-        counts = mask.sum(dim=1).clamp(min=1.0)
-        return pooled / counts
+        return masked_mean_pool(hidden, attention_mask)
 
     def _encode_chunk(self, states: list[str]) -> Tensor:
         inputs = self._tokenizer(
@@ -85,12 +79,4 @@ class GemmaStateEncoder(StateEncoder):
         with torch.no_grad():
             hidden = self._model(**inputs, output_hidden_states=True).hidden_states[-1]
         pooled = self._mean_pool(hidden, inputs.get("attention_mask"))
-        if pooled.shape[-1] != self.feature_dim:
-            # Фиксированная (не обучаемая) проекция: обрезка или дополнение нулями.
-            # Матрицу берём на устройстве и в типе самих признаков, а не self.device,
-            # иначе на CUDA-машине с CPU-моделью получаем рассинхрон устройств.
-            projection = torch.eye(
-                self.feature_dim, pooled.shape[-1], device=pooled.device, dtype=pooled.dtype
-            )
-            pooled = torch.nn.functional.linear(pooled, projection)
-        return pooled.detach().float().cpu()
+        return project_features(pooled, self.feature_dim).detach().float().cpu()

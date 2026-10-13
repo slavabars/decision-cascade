@@ -93,7 +93,7 @@ def create_service() -> DecisionService:
         return DecisionService(
             checkpoint_dir=checkpoint_dir, vision_encoder=vision_encoder
         )
-    from src.encoder.gemma import GemmaStateEncoder
+    from src.encoder.factory import create_state_encoder
 
     feature_dim = parse_dim(
         "DECISION_FEATURE_DIM",
@@ -113,9 +113,9 @@ def create_service() -> DecisionService:
     device = resolve_device(os.environ.get("DECISION_DEVICE"))
     dtype = resolve_dtype(os.environ.get("DECISION_DTYPE"))
     check_dtype_device(dtype, device)
-    encoder = GemmaStateEncoder(
-        model_id=model_id,
-        feature_dim=feature_dim,
+    encoder = create_state_encoder(
+        model_id,
+        feature_dim,
         dtype=dtype,
         device=device,
         max_length=max_length,

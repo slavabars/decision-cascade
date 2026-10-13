@@ -58,11 +58,11 @@ def _run_local(
     resolved_dtype = resolve_dtype(dtype)
     check_dtype_device(resolved_dtype, resolved_device)
     if encoder_id:
-        from src.encoder.gemma import GemmaStateEncoder
+        from src.encoder.factory import create_state_encoder
 
-        encoder = GemmaStateEncoder(
-            model_id=encoder_id,
-            feature_dim=dim,
+        encoder = create_state_encoder(
+            encoder_id,
+            dim,
             dtype=resolved_dtype,
             device=resolved_device,
             max_length=max_length,
