@@ -298,7 +298,8 @@ ss -ltn | grep ':8000 ' || echo "порт 8000 свободен"
 - `POST /decisions` — собственный типизированный API (обёртка со
   `schema_version`), удобен для SDK и русскоязычных примеров;
 - `POST /decisions/batch` — тот же контракт для списка состояний (`states`):
-  все промпты кодируются одним прогоном энкодера, ответ — список `results`;
+  все промпты кодируются одним вызовом (внутри — батчами по
+  `DECISION_ENCODE_BATCH`), ответ — список `results`;
 - `POST /v1/systemone` — стандартный протокол Jev/SystemOne, совместимый с
   Clef/Clef-Flash/Perplexity Decider (поле `model`, ответы в `answers`,
   `usage`, необязательные `images`/`videos`).

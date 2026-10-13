@@ -200,7 +200,7 @@ class DecisionService:
         states: list[str],
         questions: dict[str, QuestionSpec],
     ) -> list[dict[str, DecisionResult]]:
-        """Решает набор состояний одним прогоном энкодера (все промпты за раз)."""
+        """Решает набор состояний за один вызов энкодера (промпты — батчами)."""
         if not states or not questions:
             return [{} for _ in states]
         names = list(questions)

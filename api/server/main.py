@@ -267,7 +267,7 @@ async def create_decisions(req: DecisionRequest) -> DecisionResponse:
 
 @app.post("/decisions/batch", response_model=BatchDecisionResponse)
 async def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse:
-    """Батч: все состояния и вопросы одним прогоном энкодера."""
+    """Батч: все состояния и вопросы за один вызов энкодера (внутри — батчами)."""
     results = service.decide_many(req.states, _to_specs(req.questions))
     return BatchDecisionResponse(schema_version=SCHEMA_VERSION, results=results)
 
