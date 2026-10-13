@@ -650,15 +650,22 @@ p50/p95/p99 и долю эскалаций.
 .venv/bin/python -m eval.competitors.run --specs public --limit 200 \
   --remote clef-flash=http://127.0.0.1:8000 --out data/competitors.json
 
+# self-hosted «живой» конкурент: локальная causal-LM под /v1/systemone
+.venv/bin/python -m eval.competitors.serve \
+  --model HuggingFaceTB/SmolLM2-135M-Instruct --port 8090 --device cuda
+.venv/bin/python -m eval.competitors.run --specs public --limit 800 \
+  --remote live=http://127.0.0.1:8090 --out data/competitors_live.json
+
 # публичный decision-датасет RouterBench + кривая «качество/цена» (--sweep)
 .venv/bin/python -m eval.competitors.run --specs routerbench --limit 500 \
   --mock --mock-latency-ms 2 --sweep --out data/competitors_routerbench.json
 ```
 
-Методика и зафиксированные числа — в `docs/competitor-benchmark.md` (RouterBench
-и `--sweep` — там же). Ключевой вывод: каскад «local-first» сохраняет качество
-локальной модели, обращаясь к внешнему сервису лишь за единицы процентов решений
-(0.911 против 0.908 у local при 1.94% эскалаций).
+Методика и зафиксированные числа — в `docs/competitor-benchmark.md` (RouterBench,
+`--sweep` и замеры self-hosted живого конкурента — там же). Ключевой вывод:
+каскад «local-first» сохраняет качество локальной модели, обращаясь к внешнему
+сервису лишь за единицы процентов решений (0.913 против 0.915 у local при 1.25%
+эскалаций).
 
 ## Обучение голов
 

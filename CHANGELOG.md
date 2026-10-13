@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Self-hosted «живой» конкурент `eval/competitors/serve.py`: локальная causal-LM
+  под протоколом SystemOne, отвечает по правдоподобию вариантов
+  (sequence log-likelihood), а не генерацией. Реальные числа зафиксированы в
+  `docs/competitor-benchmark.md`.
+- CI-регрессия конвейера бенчмарка (`tests/test_competitors_regression.py`) и
+  офлайн-тесты сервиса на крошечной локальной модели
+  (`tests/test_competitors_live.py`).
+
 ### Changed
 
 - Бренд унифицирован на **decision-cascade**: README, NOTICE, метаданные пакета,
