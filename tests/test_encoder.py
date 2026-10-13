@@ -114,3 +114,44 @@ def test_gemma_encode_projects_dim_mismatch():
     enc._model, enc._tokenizer = fake_model, _FakeTokenizer()
     out = enc.encode(["only one state", "and another"])
     assert tuple(out.shape) == (2, 2)
+
+
+class _BatchRecordingModel:
+    def __init__(self, dim=4):
+        self.dim = dim
+        self.sizes: list[int] = []
+
+    def __call__(self, **kwargs):
+        n = kwargs["input_ids"].shape[0]
+        self.sizes.append(n)
+        return _FakeOutput(torch.zeros(n, 1, self.dim))
+
+    def eval(self):
+        pass
+
+
+def test_gemma_encode_chunks_by_batch_size():
+    from src.encoder.gemma import GemmaStateEncoder
+
+    enc = GemmaStateEncoder(feature_dim=4, batch_size=2)
+    model = _BatchRecordingModel(4)
+    enc._model, enc._tokenizer = model, _FakeTokenizer()
+    out = enc.encode(["a", "b", "c", "d", "e"])
+    assert model.sizes == [2, 2, 1]
+    assert tuple(out.shape) == (5, 4)
+
+
+def test_gemma_encode_empty_returns_zero_rows():
+    from src.encoder.gemma import GemmaStateEncoder
+
+    enc = GemmaStateEncoder(feature_dim=4)
+    enc._model, enc._tokenizer = _FakeModel(torch.randn(0, 1, 4)), _FakeTokenizer()
+    out = enc.encode([])
+    assert tuple(out.shape) == (0, 4)
+
+
+def test_gemma_encoder_rejects_bad_batch_size():
+    from src.encoder.gemma import GemmaStateEncoder
+
+    with pytest.raises(ValueError):
+        GemmaStateEncoder(batch_size=0)

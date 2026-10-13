@@ -103,12 +103,20 @@ def create_service() -> DecisionService:
         hi=8192,
     )
     max_length = parse_max_length(os.environ.get("DECISION_MAX_LENGTH", "256"))
+    batch_size = parse_dim(
+        "DECISION_ENCODE_BATCH",
+        os.environ.get("DECISION_ENCODE_BATCH"),
+        default=16,
+        lo=1,
+        hi=4096,
+    )
     encoder = GemmaStateEncoder(
         model_id=model_id,
         feature_dim=feature_dim,
         dtype=torch.float32,
         device="cpu",
         max_length=max_length,
+        batch_size=batch_size,
     )
     encoder.load()
     return DecisionService(

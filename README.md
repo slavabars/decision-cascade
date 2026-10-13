@@ -156,6 +156,7 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_MODEL_ID` | имя модели на HF Hub | `google/gemma-4-12B` |
 | `DECISION_FEATURE_DIM` | размерность признаков | `768` |
 | `DECISION_MAX_LENGTH` | обрезка входа энкодера, токенов (`none` — без обрезки) | `256` |
+| `DECISION_ENCODE_BATCH` | размер батча кодирования состояний (1–4096) | `16` |
 | `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
 | `DECISION_BACKEND` | исполнитель решений: `local`, `http` или `cascade` | `local` |
 | `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
@@ -273,6 +274,9 @@ encoder = GemmaStateEncoder(
 svc = DecisionService(encoder=encoder, dim=encoder.feature_dim)
 results = svc.decide("текст состояния", QUESTIONS)
 ```
+
+Состояния кодируются батчами по `DECISION_ENCODE_BATCH` (по умолчанию 16), а не
+всем набором сразу — на CPU это важно для памяти при обучении на больших наборах.
 
 ## Остановка сервера
 
@@ -503,9 +507,12 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 `overall_accuracy = 1.000` не только на train, но и на отложенных val/test
 (по 200 примеров каждый). Это метрика **на синтетике**, и она доказывает
 работоспособность конвейера, а не качество на реальных данных: без обучения та
-же схема даёт ≈ 0.276 (уровень случайного угадывания). Для `noul`
-дополнительно считаются Brier и ECE. Датасеты и отчёты складываются в `data/`
-(в `.gitignore`).
+же схема даёт ≈ 0.276 (уровень случайного угадывания). На реальном энкодере
+та же задача решается уже неидеально: рецепт на gpt2 (малый прогон,
+`--generate 60 --train-steps 60`) даёт train ≈ 0.69, val ≈ 0.47, test ≈ 0.51 —
+то есть цифра `1.000` про hash-энкодер отражает лёгкость синтетики, а не
+универсальное качество. Для `noul` дополнительно считаются Brier и ECE.
+Датасеты и отчёты складываются в `data/` (в `.gitignore`).
 
 ## Обучение голов
 
@@ -581,7 +588,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 190 passed
+.venv/bin/python -m pytest                          # 193 passed
 .venv/bin/python -m ruff check src api eval training tests examples
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
@@ -613,7 +620,7 @@ eval/           — калибровка (calibration/), latency (latency/),
                   генераторы датасетов (datasets/) и офлайн-бенчмарк (benchmark/)
 deploy/         — Ubuntu/CentOS + systemd
 examples/       — примеры (русский разбор обращения)
-tests/          — pytest-набор (190 тестов)
+tests/          — pytest-набор (193 теста)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — скрипты окружения (bootstrap.sh — скелет, не для повторного запуска)
 README.md       — этот файл

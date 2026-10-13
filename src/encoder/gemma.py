@@ -19,12 +19,16 @@ class GemmaStateEncoder(StateEncoder):
         dtype: torch.dtype = torch.float32,
         device: str | None = None,
         max_length: int | None = 256,
+        batch_size: int = 16,
     ):
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
         self.model_id = model_id
         self.feature_dim = feature_dim
         self.dtype = dtype
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.max_length = max_length
+        self.batch_size = batch_size
         self._model = None
         self._tokenizer = None
 
@@ -42,8 +46,18 @@ class GemmaStateEncoder(StateEncoder):
         return self
 
     def encode(self, states: list[str]) -> Tensor:
+        """Кодирует состояния батчами, чтобы не держать в память весь набор."""
         if self._model is None:
             raise RuntimeError("GemmaStateEncoder.load() must be called before encode()")
+        if not states:
+            return torch.zeros(0, self.feature_dim)
+        chunks = [
+            self._encode_chunk(states[start : start + self.batch_size])
+            for start in range(0, len(states), self.batch_size)
+        ]
+        return torch.cat(chunks, dim=0)
+
+    def _encode_chunk(self, states: list[str]) -> Tensor:
         inputs = self._tokenizer(
             states,
             return_tensors="pt",

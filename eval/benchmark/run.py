@@ -28,13 +28,20 @@ def _max_length() -> int | None:
     return int(raw)
 
 
+def _encode_batch() -> int:
+    return int(os.environ.get("DECISION_ENCODE_BATCH", "16"))
+
+
 def _make_encoder(name: str, dim: int):
     if name == "hash":
         return HashStateEncoder(dim)
     from src.encoder.gemma import GemmaStateEncoder
 
     return GemmaStateEncoder(
-        model_id=name, feature_dim=dim, max_length=_max_length()
+        model_id=name,
+        feature_dim=dim,
+        max_length=_max_length(),
+        batch_size=_encode_batch(),
     ).load()
 
 
