@@ -462,11 +462,15 @@ with DecisionClient(base_url="http://localhost:8000") as client:
 ### Готовый русский пример
 
 ```bash
-.venv/bin/python examples/client.py
+.venv/bin/python examples/quickstart/http_client.py
 ```
 
 Разбор обращения в техподдержку: шесть вопросов всех трёх типов одним запросом
 с человекочитаемым выводом вероятностей и уверенности по каждому.
+
+Полный каталог готовых скриптов (батчи, протокол SystemOne, каскады, vision,
+боты и вебхуки, эксплуатация и паки весов) — в `examples/README.md`; большинство
+запускается без сервера и без скачивания моделей.
 
 ### Интеграция в чат-агента (SDK + каскад)
 
@@ -477,7 +481,7 @@ with DecisionClient(base_url="http://localhost:8000") as client:
 ```bash
 # сервер должен быть поднят; при --fallback низкоуверенное обращение
 # переспрашивает внешний SystemOne-сервис (клиентский каскад)
-.venv/bin/python examples/chat_agent.py --fallback http://remote:8080
+.venv/bin/python examples/integrations/chat_agent.py --fallback http://remote:8080
 ```
 
 На стороне сервера каскад (`DECISION_BACKEND=cascade`) эскалирует низкоуверенные
@@ -666,8 +670,8 @@ bash training/recipe/train_weight_packs.sh
 git) — либо один пак, либо вся матрица одним архивом + манифестом:
 
 ```bash
-training/recipe/publish_release.sh v0.1.0 checkpoints/support       # один пак
-training/recipe/publish_weight_packs.sh v0.1.0 checkpoints/packs    # матрица + manifest.json
+training/recipe/publish_release.sh v0.2.0 checkpoints/support       # один пак
+training/recipe/publish_weight_packs.sh v0.2.0 checkpoints/packs    # матрица + manifest.json
 ```
 
 RLCD-калибровка `noul`-голов на реальных признаках энкодера принимает изменение
@@ -681,8 +685,8 @@ RLCD-калибровка `noul`-голов на реальных признак
 
 ### Готовые паки весов (release)
 
-Релиз [`v0.1.0`](https://github.com/slavabars/decision-cascade/releases/tag/v0.1.0)
-содержит архив `v0.1.0-weights.tar.gz` (и `v0.1.0-manifest.json`) с шестью
+Релиз [`v0.2.0`](https://github.com/slavabars/decision-cascade/releases/tag/v0.2.0)
+содержит архив `v0.2.0-weights.tar.gz` (и `v0.2.0-manifest.json`) с шестью
 обученными паками: `{support, public} × {gpt2, distilgpt2, gpt2-medium}`. Все числа
 — на честном train/val/test (для `public` — настоящий test-сплит AG News):
 
@@ -696,8 +700,8 @@ RLCD-калибровка `noul`-голов на реальных признак
 | `public-gpt2-medium` | gpt2-medium | 1024 | AG News, n=4000 | 0.873 |
 
 ```bash
-tar -xzf v0.1.0-weights.tar.gz               # -> v0.1.0-weights/<pack>/
-DECISION_CHECKPOINT_DIR=v0.1.0-weights/support-gpt2 \
+tar -xzf v0.2.0-weights.tar.gz               # -> v0.2.0-weights/<pack>/
+DECISION_CHECKPOINT_DIR=v0.2.0-weights/support-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   .venv/bin/python -m uvicorn api.server.main:app --port 8000
 ```
@@ -736,12 +740,13 @@ trainer.train(features, outcomes, steps=300)
 
 В рецепте калибровка идёт через `calibrate_noul_heads`: веса применяются, только
 если RLCD *улучшает* среднюю абсолютную ошибку (гейт «не навреди»), иначе голова
-откатывается к состоянию после SFT. Ограничение: гейт оценивается на train-сплите.
+откатывается к состоянию после SFT. Гейт считается на отложенном val-сплите
+(`gate_features`/`gate_targets`); без него — на train.
 
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 306 passed, 10 skipped
+.venv/bin/python -m pytest                          # 331 passed, 10 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
@@ -783,8 +788,9 @@ eval/           — калибровка (calibration/), latency (latency/), д�
                   (competitors/)
 deploy/         — Ubuntu/CentOS + systemd
 docs/           — методика бенчмарка против конкурентов (competitor-benchmark.md)
-examples/       — примеры (русский разбор обращения, чат-агент с каскадом)
-tests/          — pytest-набор (306 тестов + opt-in GPU/модель)
+examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
+                  SystemOne, каскады, vision, интеграции, эксплуатация)
+tests/          — pytest-набор (331 тест + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh: uv/pyenv/venv/gh)
 README.md       — этот файл
@@ -796,7 +802,7 @@ pytest.ini
 
 - **Качество по умолчанию**: головы по умолчанию случайные; осмысленные решения
   требуют SFT+RLCD на вашей разметке. Есть рецепты и обученные паки весов
-  (`v0.1.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family);
+  (`v0.2.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family);
   в git веса не кладутся, поэтому после чистого клона «из коробки» — случайные
   головы, пока не скачаете пак или не обучите свои.
 - **Устройство**: `DECISION_DEVICE`/`DECISION_DTYPE` выбирают CPU/GPU и тип;
