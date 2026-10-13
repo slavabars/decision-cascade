@@ -16,6 +16,9 @@ dist/
 htmlcov/
 coverage.xml
 
+# Сгенерированные датасеты и отчёты бенчмарков
+data/
+
 # Модели и веса
 models/
 weights/
