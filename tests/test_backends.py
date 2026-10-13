@@ -34,6 +34,39 @@ def test_local_backend_returns_backend_result():
     assert result.usage["questions"] == 1
 
 
+def test_local_backend_capabilities_reflect_vision():
+    from api.server.service import DecisionService
+    from src.encoder.vision import HashVisionEncoder
+
+    service = DecisionService(seed=0, vision_encoder=HashVisionEncoder(dim=64))
+    backend = LocalHeadsBackend(service)
+    assert backend.capabilities.modalities == frozenset(
+        {"text", "image", "video"}
+    )
+
+
+def test_local_backend_forwards_media_to_engine():
+    class SpyEngine:
+        def __init__(self):
+            self.seen: tuple | None = None
+
+        @property
+        def modalities(self):
+            return frozenset({"text", "image"})
+
+        def decide(
+            self, state, questions, *, images=None, videos=None, media_kwargs=None
+        ):
+            self.seen = (images, videos, media_kwargs)
+            return {}
+
+    engine = SpyEngine()
+    backend = LocalHeadsBackend(engine)
+    assert backend.capabilities.modalities == frozenset({"text", "image"})
+    backend.decide("s", {}, images=["i"], media_kwargs={"a": 1})
+    assert engine.seen == (["i"], None, {"a": 1})
+
+
 def test_local_backend_handles_all_types():
     backend = _local_backend()
     questions = {

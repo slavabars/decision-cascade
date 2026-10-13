@@ -16,6 +16,7 @@ from torch import Tensor
 
 from src.decision_head.heads import DecisionHeads
 from src.encoder.base import StateEncoder
+from src.encoder.vision import VisionEncoder
 from src.sampler.parallel import sample_decisions
 from src.sampler.questions import QuestionSpec, build_prompt, questions_signature
 from src.schemas import DecisionResult
@@ -24,6 +25,10 @@ logger = logging.getLogger("decision.service")
 
 FEATURE_DIM = 64
 DEFAULT_CHECKPOINT_DIR = "checkpoints"
+DEFAULT_MEDIA_WEIGHT = 0.5
+TEXT_MODALITY = "text"
+IMAGE_MODALITY = "image"
+VIDEO_MODALITY = "video"
 
 
 class HashStateEncoder:
@@ -52,14 +57,30 @@ class DecisionService:
         seed: int = 0,
         checkpoint_dir: str | Path | None = None,
         cache_size: int = 256,
+        vision_encoder: VisionEncoder | None = None,
     ):
         self.encoder = encoder or HashStateEncoder(dim)
         self.dim = dim
         self.seed = seed
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.cache_size = max(0, cache_size)
+        self.vision_encoder = vision_encoder
         self._heads_cache: dict[str, DecisionHeads] = {}
         self._feature_cache: OrderedDict[str, Tensor] = OrderedDict()
+
+    @property
+    def modalities(self) -> frozenset[str]:
+        """Модальности входа, которые сервис способен обработать."""
+        supported = {TEXT_MODALITY}
+        if self.vision_encoder is not None:
+            supported |= set(
+                getattr(
+                    self.vision_encoder,
+                    "modalities",
+                    {IMAGE_MODALITY, VIDEO_MODALITY},
+                )
+            )
+        return frozenset(supported)
 
     def get_heads(self, dim: int, questions: dict[str, QuestionSpec]) -> DecisionHeads:
         """Возвращает головы для набора вопросов, переиспользуя их между запросами."""
@@ -107,7 +128,9 @@ class DecisionService:
             return
         heads.load_state_dict(payload["state_dict"])
 
-    def _encode_prompts(self, prompts: list[str]) -> Tensor:
+    def _encode_prompts(self, prompts: list[str], *, use_cache: bool = True) -> Tensor:
+        if not use_cache:
+            return self.encoder.encode(prompts)
         rows: list[Tensor | None] = [None] * len(prompts)
         missing: list[str] = []
         missing_idx: list[int] = []
@@ -136,13 +159,72 @@ class DecisionService:
                         self._feature_cache.popitem(last=False)
         return torch.stack([row for row in rows if row is not None])
 
+    def _encode_media(
+        self,
+        images: list[str] | None,
+        videos: list[str] | None,
+        media_kwargs: dict[str, object] | None,
+    ) -> Tensor | None:
+        """Усреднённый вектор модальностей состояния (общий для всех вопросов)."""
+        kwargs = media_kwargs or {}
+        vectors: list[Tensor] = []
+        if images:
+            vectors.append(self.vision_encoder.encode_images(images).mean(dim=0))
+        if videos:
+            max_frames = int(kwargs.get("max_frames", 8))
+            vectors.append(
+                self.vision_encoder.encode_videos(videos, max_frames=max_frames).mean(
+                    dim=0
+                )
+            )
+        if not vectors:
+            return None
+        return torch.stack(vectors).mean(dim=0)
+
+    @staticmethod
+    def _fuse(
+        features: Tensor, media: Tensor | None, weight: float
+    ) -> Tensor:
+        if media is None or weight == 0.0:
+            return features
+        projected = media
+        if projected.shape[-1] != features.shape[-1]:
+            projection = torch.eye(
+                features.shape[-1], projected.shape[-1]
+            )
+            projected = projection @ projected
+        return features + (weight * projected).unsqueeze(0)
+
     def decide(
-        self, state: str, questions: dict[str, QuestionSpec]
+        self,
+        state: str,
+        questions: dict[str, QuestionSpec],
+        *,
+        images: list[str] | None = None,
+        videos: list[str] | None = None,
+        media_kwargs: dict[str, object] | None = None,
     ) -> dict[str, DecisionResult]:
         if not questions:
             return {}
+        has_media = bool(images or videos)
+        if has_media:
+            supported = self.modalities
+            requested = set()
+            if images:
+                requested.add(IMAGE_MODALITY)
+            if videos:
+                requested.add(VIDEO_MODALITY)
+            missing = requested - supported
+            if missing:
+                raise ValueError(
+                    f"service does not support modalities {sorted(missing)}; "
+                    "configure a matching vision encoder"
+                )
         prompts = [build_prompt(state, spec) for spec in questions.values()]
-        features = self._encode_prompts(prompts)
+        features = self._encode_prompts(prompts, use_cache=not has_media)
+        media = self._encode_media(images, videos, media_kwargs)
+        weight = float((media_kwargs or {}).get("media_weight", DEFAULT_MEDIA_WEIGHT))
+        features = self._fuse(features, media, weight)
         heads = self.get_heads(features.shape[-1], questions)
         results = sample_decisions(heads, features)
         for name, result in results.items():

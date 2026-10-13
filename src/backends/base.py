@@ -56,8 +56,18 @@ class Backend(Protocol):
 class LocalEngine(Protocol):
     """Движок локальных голов (см. ``api.server.service.DecisionService``)."""
 
+    @property
+    def modalities(self) -> frozenset[str]:
+        ...
+
     def decide(
-        self, state: str, questions: dict[str, QuestionSpec]
+        self,
+        state: str,
+        questions: dict[str, QuestionSpec],
+        *,
+        images: list[Any] | None = None,
+        videos: list[Any] | None = None,
+        media_kwargs: dict[str, Any] | None = None,
     ) -> dict[str, DecisionResult]:
         ...
 

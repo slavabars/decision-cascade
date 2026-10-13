@@ -94,6 +94,24 @@ def test_systemone_rejects_unsupported_image(client):
     assert "image" not in error["supported"]
 
 
+def test_systemone_accepts_images_with_vision_backend(monkeypatch):
+    from api.server import main
+    from api.server.service import DecisionService
+    from src.backends.local import LocalHeadsBackend
+    from src.encoder.vision import HashVisionEncoder
+
+    service = DecisionService(seed=0, vision_encoder=HashVisionEncoder(dim=64))
+    monkeypatch.setattr(main, "backend", LocalHeadsBackend(service))
+    payload = {
+        "state": "s",
+        "images": ["a screenshot"],
+        "questions": {"q": {"type": "noul", "instructions": "?"}},
+    }
+    with TestClient(main.app) as tc:
+        resp = tc.post("/v1/systemone", json=payload)
+    assert resp.status_code == 200
+
+
 def test_systemone_rejects_choice_without_options_or_criteria(client):
     payload = {"state": "s", "questions": {"q": {"type": "choice"}}}
     resp = client.post("/v1/systemone", json=payload)

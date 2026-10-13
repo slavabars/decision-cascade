@@ -23,16 +23,36 @@ from api.server.systemone import (
 from src.backends.base import Backend, missing_modalities, requested_modalities
 from src.backends.http import HttpSystemOneBackend, parse_modalities
 from src.backends.local import LocalHeadsBackend
+from src.encoder.vision import VisionEncoder
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
 from src.schemas import SCHEMA_VERSION, DecisionResult
+
+
+def create_vision_encoder() -> VisionEncoder | None:
+    """Vision-энкодер по окружению: DECISION_VISION_MODEL_ID включает CLIP."""
+    model_id = os.environ.get("DECISION_VISION_MODEL_ID")
+    if not model_id:
+        return None
+    from src.encoder.vision import ClipVisionEncoder
+
+    encoder = ClipVisionEncoder(
+        model_id=model_id,
+        dim=int(os.environ.get("DECISION_VISION_DIM", "512")),
+        device="cpu",
+    )
+    encoder.load()
+    return encoder
 
 
 def create_service() -> DecisionService:
     """Сервис по окружению: DECISION_MODEL_ID включает реальный state-энкодер."""
     checkpoint_dir = os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
+    vision_encoder = create_vision_encoder()
     model_id = os.environ.get("DECISION_MODEL_ID")
     if not model_id:
-        return DecisionService(checkpoint_dir=checkpoint_dir)
+        return DecisionService(
+            checkpoint_dir=checkpoint_dir, vision_encoder=vision_encoder
+        )
     from src.encoder.gemma import GemmaStateEncoder
 
     feature_dim = int(os.environ.get("DECISION_FEATURE_DIM", "768"))
@@ -47,6 +67,7 @@ def create_service() -> DecisionService:
         encoder=encoder,
         dim=feature_dim,
         checkpoint_dir=checkpoint_dir,
+        vision_encoder=vision_encoder,
     )
 
 

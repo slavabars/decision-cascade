@@ -128,6 +128,37 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
 | `DECISION_BACKEND_MODEL` | имя внешней модели (поле `model`) | `remote` |
 | `DECISION_BACKEND_MODALITIES` | модальности внешнего бэкенда | `text` |
+| `DECISION_VISION_MODEL_ID` | CLIP/SigLIP для локальных `images` | — (без vision) |
+| `DECISION_VISION_DIM` | размерность признаков vision-энкодера | `512` |
+
+### Локальная мультимодальность
+
+Локальный бэкенд умеет принимать `images`/`videos`, если у сервиса есть
+vision-энкодер. Каждый энкодер сам объявляет свои модальности
+(`VisionEncoder.modalities`), а сервис агрегирует их в `Capabilities`, поэтому
+`/v1/systemone` отклонит ровно те модальности, что не поддержаны.
+
+```bash
+# CLIP включается переменной окружения (только изображения — видео требует
+# отдельного декодирования кадров)
+DECISION_VISION_MODEL_ID=openai/clip-vit-base-patch32 \
+  uvicorn api.server.main:app --port 8000
+```
+
+Признаки состояния и медиа сливаются: вектор модальности усредняется и
+проецируется в размерность текстовых признаков, после чего добавляется к
+признакам каждого вопроса (вес — `media_kwargs.media_weight`, по умолчанию
+`0.5`; `max_frames` управляет числом кадров видео). Для офлайн-тестов и
+сервисов, где достаточно детерминированного сигнала, есть `HashVisionEncoder`.
+
+```python
+from api.server.service import DecisionService
+from src.encoder.vision import HashVisionEncoder
+
+svc = DecisionService(seed=0, vision_encoder=HashVisionEncoder(dim=64))
+svc.modalities  # frozenset({'text', 'image', 'video'})
+svc.decide("state", QUESTIONS, images=["shot.png"], videos=["clip.mp4"])
+```
 
 ### Бэкенды: локальные головы или внешняя модель
 
@@ -411,7 +442,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 118 passed
+.venv/bin/python -m pytest                          # 136 passed
 .venv/bin/python -m ruff check src api eval training tests examples
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
@@ -442,7 +473,7 @@ training/       — SFT (sft/) и RLCD (rlcd/)
 eval/           — калибровка (calibration/) и latency (latency/)
 deploy/         — Ubuntu/CentOS + systemd
 examples/       — примеры (русский разбор обращения)
-tests/          — pytest-набор (118 тестов)
+tests/          — pytest-набор (136 тестов)
 scripts/        — скрипты окружения (bootstrap.sh — скелет, не для повторного запуска)
 README.md       — этот файл
 requirements.txt

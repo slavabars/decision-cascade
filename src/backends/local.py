@@ -3,17 +3,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.backends.base import BackendResult, Capabilities, LocalEngine
+from src.backends.base import TEXT, BackendResult, Capabilities, LocalEngine
 from src.sampler.questions import QuestionSpec
 
 
 class LocalHeadsBackend:
-    """Оборачивает локальный движок голов; поддерживает только текст."""
+    """Оборачивает локальный движок голов и объявляет его модальности."""
 
     def __init__(self, engine: LocalEngine, name: str = "local"):
         self.engine = engine
         self.name = name
-        self.capabilities = Capabilities()
+        supported = getattr(engine, "modalities", frozenset({TEXT}))
+        self.capabilities = Capabilities(modalities=frozenset(supported))
 
     def decide(
         self,
@@ -24,8 +25,13 @@ class LocalHeadsBackend:
         videos: list[Any] | None = None,
         media_kwargs: dict[str, Any] | None = None,
     ) -> BackendResult:
-        del images, videos, media_kwargs  # текстовая модальность; медиа отклоняются выше
-        decisions = self.engine.decide(state, questions)
+        decisions = self.engine.decide(
+            state,
+            questions,
+            images=images,
+            videos=videos,
+            media_kwargs=media_kwargs,
+        )
         return BackendResult(
             decisions=decisions,
             usage={"questions": len(questions)},
