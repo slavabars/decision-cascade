@@ -12,7 +12,12 @@ from typing import Any, Protocol
 import numpy as np
 import torch
 
-from eval.calibration.metrics import brier_score, ece
+from eval.calibration.metrics import (
+    brier_score,
+    ece,
+    multiclass_brier_score,
+    top_label_ece,
+)
 from src.decision_head.heads import DecisionHeads
 from src.sampler.questions import (
     ChoiceSpec,
@@ -49,6 +54,8 @@ def categorical_metrics(probs: np.ndarray, labels: np.ndarray) -> dict[str, floa
         "type": "categorical",
         "accuracy": float((preds == labels).mean()),
         "mean_expected_label": float(expected.mean()),
+        "brier": multiclass_brier_score(probs, labels),
+        "ece": top_label_ece(probs, labels),
     }
 
 
@@ -125,6 +132,7 @@ def train_benchmark(
     train_steps: int = 0,
     lr: float = 0.1,
     seed: int = 0,
+    rlcd_steps: int = 0,
 ) -> tuple[DecisionHeads, dict[str, Any]]:
     """Обучает головы на ``examples`` и возвращает их вместе с отчётом на них же."""
     torch.manual_seed(seed)
@@ -132,13 +140,19 @@ def train_benchmark(
     dim = next(iter(per_question.values())).shape[-1]
     heads = DecisionHeads(dim, specs, seed=seed)
 
+    target_map = {
+        name: _build_targets(spec, [ex["labels"][name] for ex in examples])
+        for name, spec in specs.items()
+    }
     if train_steps:
-        target_map = {
-            name: _build_targets(spec, [ex["labels"][name] for ex in examples])
-            for name, spec in specs.items()
-        }
         SFTTrainer(heads, lr=lr).fit(
             features=per_question, targets=target_map, steps=train_steps, batch_size=32
+        )
+    if rlcd_steps:
+        from training.rlcd.train import calibrate_noul_heads
+
+        calibrate_noul_heads(
+            heads, per_question, target_map, steps=rlcd_steps
         )
 
     report = _metrics_report(specs, examples, per_question, heads)
@@ -146,6 +160,7 @@ def train_benchmark(
         n=len(examples),
         encoder=type(encoder).__name__,
         train_steps=train_steps,
+        rlcd_steps=rlcd_steps,
     )
     return heads, report
 

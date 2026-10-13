@@ -174,6 +174,29 @@ def test_score_criteria_length_mismatch_rejected(client):
     assert resp.status_code == 422
 
 
+def test_decisions_are_served_by_the_configured_backend(client, monkeypatch):
+    from api.server import main
+    from src.backends.base import BackendResult, Capabilities
+    from src.schemas import NoulResult
+
+    class SpyBackend:
+        name = "spy"
+        capabilities = Capabilities()
+
+        def decide(self, state, questions, **kwargs):
+            return BackendResult(
+                decisions={
+                    name: NoulResult(noul=0.9, confidence=0.8) for name in questions
+                },
+                usage={},
+            )
+
+    monkeypatch.setattr(main, "backend", SpyBackend())
+    body = client.post("/decisions", json=PAYLOAD).json()
+    assert body["decisions"]["is_urgent"]["noul"] == 0.9
+    assert body["decisions"]["department"]["type"] == "noul"
+
+
 def test_to_specs_carries_criteria():
     from api.server.main import ChoiceQuestion, ScoreQuestion, _to_specs
 

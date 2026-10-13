@@ -10,7 +10,14 @@ from typing import Any, Self
 
 import httpx
 
-from src.backends.base import IMAGE, TEXT, VIDEO, BackendResult, Capabilities
+from src.backends.base import (
+    IMAGE,
+    TEXT,
+    VIDEO,
+    BackendResult,
+    Capabilities,
+    decide_many_states,
+)
 from src.backends.protocol import answer_to_result, spec_to_request
 from src.sampler.questions import QuestionSpec
 
@@ -61,6 +68,25 @@ class HttpSystemOneBackend:
             for name, answer in body.get("answers", {}).items()
         }
         return BackendResult(decisions=decisions, usage=dict(body.get("usage", {})))
+
+    def decide_many(
+        self,
+        states: list[str],
+        questions: dict[str, QuestionSpec],
+        *,
+        images: list[Any] | None = None,
+        videos: list[Any] | None = None,
+        media_kwargs: dict[str, Any] | None = None,
+    ) -> list[BackendResult]:
+        """Внешний сервис вызывается по одному состоянию (у протокола нет батча)."""
+        return decide_many_states(
+            self,
+            states,
+            questions,
+            images=images,
+            videos=videos,
+            media_kwargs=media_kwargs,
+        )
 
     def close(self) -> None:
         self._client.close()

@@ -51,6 +51,17 @@ class Backend(Protocol):
     ) -> BackendResult:
         ...
 
+    def decide_many(
+        self,
+        states: list[str],
+        questions: dict[str, QuestionSpec],
+        *,
+        images: list[Any] | None = None,
+        videos: list[Any] | None = None,
+        media_kwargs: dict[str, Any] | None = None,
+    ) -> list[BackendResult]:
+        ...
+
 
 @runtime_checkable
 class LocalEngine(Protocol):
@@ -93,3 +104,21 @@ def missing_modalities(
     requested: frozenset[str], supported: frozenset[str]
 ) -> frozenset[str]:
     return frozenset(requested - supported)
+
+
+def decide_many_states(
+    backend: Backend,
+    states: list[str],
+    questions: dict[str, QuestionSpec],
+    *,
+    images: list[Any] | None = None,
+    videos: list[Any] | None = None,
+    media_kwargs: dict[str, Any] | None = None,
+) -> list[BackendResult]:
+    """Дефолтный батч: по одному состоянию через ``decide`` (без общей батч-оптимизации)."""
+    return [
+        backend.decide(
+            state, questions, images=images, videos=videos, media_kwargs=media_kwargs
+        )
+        for state in states
+    ]

@@ -1,5 +1,6 @@
 """Тесты офлайн-бенчмарка голов на сгенерированном датасете — RED до реализации."""
 import numpy as np
+import pytest
 
 from api.server.service import HashStateEncoder
 from eval.benchmark.core import (
@@ -29,6 +30,10 @@ def test_categorical_metrics_accuracy_and_mae():
     metrics = categorical_metrics(probs, labels)
     assert metrics["accuracy"] == 1.0
     assert abs(metrics["mean_expected_label"] - 1.05) < 1e-6
+    # Конкретные значения: sum((p - onehot)^2) усреднённое = 0.10;
+    # top-label ECE по бинам (.7) и (.8) = (0.3 + 0.2) / 2 = 0.25.
+    assert metrics["brier"] == pytest.approx(0.10, abs=1e-9)
+    assert metrics["ece"] == pytest.approx(0.25, abs=1e-9)
 
 
 def test_run_benchmark_report_structure():

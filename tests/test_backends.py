@@ -192,6 +192,33 @@ def test_http_backend_context_manager_closes():
     assert backend._client.is_closed
 
 
+def test_local_backend_decide_many_uses_engine_batch():
+    class BatchEngine:
+        def __init__(self):
+            self.many_calls = 0
+
+        @property
+        def modalities(self):
+            return frozenset({"text"})
+
+        def decide(self, *args, **kwargs):  # pragma: no cover - must not be called
+            raise AssertionError("single-state decide should not be used for a text batch")
+
+        def decide_many(self, states, questions):
+            self.many_calls += 1
+            return [
+                {name: NoulResult(noul=0.5, confidence=0.0) for name in questions}
+                for _ in states
+            ]
+
+    engine = BatchEngine()
+    backend = LocalHeadsBackend(engine)
+    results = backend.decide_many(["a", "b"], {"u": NoulSpec("?")})
+    assert engine.many_calls == 1
+    assert [set(r.decisions) for r in results] == [{"u"}, {"u"}]
+    assert all(r.usage["questions"] == 1 for r in results)
+
+
 def test_create_backend_defaults_to_local(monkeypatch):
     from api.server import main
 

@@ -110,6 +110,31 @@ def test_close_closes_both():
     assert primary.closed and fallback.closed
 
 
+def test_decide_many_confident_skips_fallback():
+    primary = _StubBackend("local", confidence=0.9)
+    fallback = _StubBackend("remote", confidence=0.9)
+    cascade = CascadeBackend(primary, fallback, threshold=0.6)
+
+    results = cascade.decide_many(["s1", "s2"], _questions(["a", "b"]))
+
+    assert len(results) == 2
+    assert fallback.calls == []
+    assert all(result.usage["escalated"] == 0 for result in results)
+
+
+def test_decide_many_escalates_uncertain_per_state():
+    primary = _StubBackend("local", confidence=0.3)
+    fallback = _StubBackend("remote", confidence=0.95)
+    cascade = CascadeBackend(primary, fallback, threshold=0.6)
+
+    results = cascade.decide_many(["s1", "s2"], _questions(["a"]))
+
+    assert len(results) == 2
+    assert all(result.usage["escalated"] == 1 for result in results)
+    assert [result.decisions["a"].confidence for result in results] == [0.95, 0.95]
+    assert fallback.calls == [("s1", ("a",)), ("s2", ("a",))]
+
+
 def test_create_backend_cascade_requires_url(monkeypatch):
     from api.server import main
 

@@ -3,7 +3,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.backends.base import TEXT, BackendResult, Capabilities, LocalEngine
+from src.backends.base import (
+    TEXT,
+    BackendResult,
+    Capabilities,
+    LocalEngine,
+    decide_many_states,
+)
 from src.sampler.questions import QuestionSpec
 
 
@@ -35,4 +41,30 @@ class LocalHeadsBackend:
         return BackendResult(
             decisions=decisions,
             usage={"questions": len(questions)},
+        )
+
+    def decide_many(
+        self,
+        states: list[str],
+        questions: dict[str, QuestionSpec],
+        *,
+        images: list[Any] | None = None,
+        videos: list[Any] | None = None,
+        media_kwargs: dict[str, Any] | None = None,
+    ) -> list[BackendResult]:
+        """Батч: если движок умеет ``decide_many`` (без медиа) — один прогон энкодера."""
+        engine_many = getattr(self.engine, "decide_many", None)
+        text_only = images is None and videos is None and media_kwargs is None
+        if engine_many is not None and text_only:
+            return [
+                BackendResult(decisions=decisions, usage={"questions": len(questions)})
+                for decisions in engine_many(states, questions)
+            ]
+        return decide_many_states(
+            self,
+            states,
+            questions,
+            images=images,
+            videos=videos,
+            media_kwargs=media_kwargs,
         )
