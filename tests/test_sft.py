@@ -1,4 +1,5 @@
 """Тесты SFT — написаны до реализации (TDD RED)."""
+import pytest
 import torch
 
 from src.decision_head.heads import DecisionHeads
@@ -55,3 +56,66 @@ def _accuracy(heads, features, labels):
         logits = heads.logits(features)["c"]
         preds = logits.argmax(-1)
         return float((preds == labels).float().mean().item())
+
+
+def _noul_accuracy(head, features, labels):
+    with torch.no_grad():
+        probs = torch.sigmoid(head.logits(features))
+        preds = (probs >= 0.5).float()
+        return float((preds == labels).float().mean().item())
+
+
+def test_sft_multi_question_trains_each_head_on_own_features():
+    """Каждая голова учится на своих промптах, а не на чужих строках батча."""
+    from training.sft.train import SFTTrainer
+
+    heads = DecisionHeads(
+        dim=2,
+        questions={"a": NoulSpec("?"), "b": NoulSpec("?")},
+    )
+    torch.manual_seed(0)
+    n = 500
+    base = torch.randn(n, 2)
+    feats_a = base.clone()
+    feats_b = base[:, [1, 0]].clone()
+    labels_a = (feats_a[:, 0] > 0).float()
+    labels_b = (feats_b[:, 0] > 0).float()
+
+    SFTTrainer(heads, lr=0.1).fit(
+        features={"a": feats_a, "b": feats_b},
+        targets={"a": labels_a, "b": labels_b},
+        steps=300,
+        batch_size=64,
+    )
+
+    assert _noul_accuracy(heads.heads["a"], feats_a, labels_a) > 0.9
+    assert _noul_accuracy(heads.heads["b"], feats_b, labels_b) > 0.9
+
+
+def test_sft_multi_question_requires_per_question_features():
+    """Единый тензор на несколько вопросов запрещён — иначе цели смешиваются."""
+    from training.sft.train import SFTTrainer
+
+    heads = DecisionHeads(
+        dim=2,
+        questions={"a": NoulSpec("?"), "b": NoulSpec("?")},
+    )
+    features = torch.randn(10, 2)
+    targets = {"a": torch.zeros(10), "b": torch.ones(10)}
+    with pytest.raises(ValueError):
+        SFTTrainer(heads).fit(features=features, targets=targets, steps=1)
+
+
+def test_sft_dict_features_must_cover_questions():
+    from training.sft.train import SFTTrainer
+
+    heads = DecisionHeads(
+        dim=2,
+        questions={"a": NoulSpec("?"), "b": NoulSpec("?")},
+    )
+    with pytest.raises(ValueError):
+        SFTTrainer(heads).fit(
+            features={"a": torch.randn(5, 2)},
+            targets={"a": torch.zeros(5)},
+            steps=1,
+        )
