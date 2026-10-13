@@ -46,6 +46,7 @@ checkpoints/
 # Агентная инфраструктура разработки
 .opencode/
 agents.md
+ROADMAP.md
 scripts/bootstrap.sh
 sudo-requests/
 

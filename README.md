@@ -790,7 +790,6 @@ tests/          — pytest-набор (306 тестов + opt-in GPU/модел�
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — окружение: bootstrap-user.sh (uv/pyenv/venv/gh), bootstrap.sh (скелет)
 README.md       — этот файл
-ROADMAP.md      — статус и план фаз A–F
 requirements.txt
 pytest.ini
 .pre-commit-config.yaml
@@ -810,6 +809,6 @@ pytest.ini
 - **Честная оценка**: синтетические сплиты тривиально разделимы (`1.000` — это про
   конвейер, а не про домен). Публичные числа — на AG News (accuracy 0.425 → 0.88)
   и в бенчмарке против конкурентов; для своего домена нужна своя разметка.
-- **Roadmap**: фазы A–F закрыты (см. `ROADMAP.md`); публикация весов — релизом
-  через `training/recipe/publish_release.sh` (один пак) или
+- **Roadmap**: фазы A–F закрыты; публикация весов — релизом через
+  `training/recipe/publish_release.sh` (один пак) или
   `training/recipe/publish_weight_packs.sh` (матрица).
