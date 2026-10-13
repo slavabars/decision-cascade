@@ -105,13 +105,16 @@ state (строка-описание) ──► StateEncoder ──► features 
 ## Установка окружения
 
 ```bash
-bash scripts/bootstrap-user.sh        # системные утилиты (cc, cmake, git, shellcheck)
+bash scripts/bootstrap-user.sh        # uv, pyenv, venv, зависимости, pre-commit, gh
 
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 # или через uv (быстрее):
 uv pip install --python .venv/bin/python -r requirements.txt
 ```
+
+`bootstrap-user.sh` работает без `sudo`: ставит `uv`/`pyenv` в `~/.local` и
+`~/.pyenv`, создаёт `.venv`, ставит зависимости и кладёт `gh` в `~/.local/bin`.
 
 > `scripts/bootstrap.sh` — генератор скелета проекта; повторно запускать не нужно.
 
@@ -136,7 +139,7 @@ DECISION_MODEL_ID=openai-community/gpt2 \
 При первом старте веса скачаются в `~/.cache/huggingface` (заложите время на
 медленных каналах). Останавливается сервер командой kill по порту — см. «Остановка».
 
-### Вариант 3 — большая модель (gemma-4-12B, дефолт проекта, GPU)
+### Вариант 3 — большая модель (gemma-4-12B, GPU)
 
 ```bash
 DECISION_MODEL_ID=google/gemma-4-12B \
@@ -153,10 +156,12 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 
 | Переменная | Назначение | По умолчанию |
 |------------|------------|--------------|
-| `DECISION_MODEL_ID` | имя модели на HF Hub | `google/gemma-4-12B` |
+| `DECISION_MODEL_ID` | имя модели на HF Hub | — (hash-энкодер) |
 | `DECISION_FEATURE_DIM` | размерность признаков | `768` |
 | `DECISION_MAX_LENGTH` | обрезка входа энкодера, токенов (`none` — без обрезки) | `256` |
 | `DECISION_ENCODE_BATCH` | размер батча кодирования состояний (1–4096) | `16` |
+| `DECISION_DEVICE` | устройство энкодера: `auto`, `cpu`, `cuda`, `cuda:N`, `mps` | `auto` |
+| `DECISION_DTYPE` | тип весов энкодера: `float32`, `float16`, `bfloat16` | `float32` |
 | `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
 | `DECISION_BACKEND` | исполнитель решений: `local`, `http` или `cascade` | `local` |
 | `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
@@ -169,6 +174,19 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_VISION_MODEL_ID` | CLIP/SigLIP для локальных `images` | — (без vision) |
 | `DECISION_VISION_DIM` | размерность признаков vision-энкодера (1–8192) | `512` |
 | `DECISION_MEDIA_ROOT` | allow-list каталог для чтения `images`/`videos` с диска | — (любой путь) |
+
+Фактическое устройство и тип можно задать при запуске:
+
+```bash
+DECISION_MODEL_ID=openai-community/gpt2 \
+DECISION_DEVICE=cuda DECISION_DTYPE=bfloat16 \
+  .venv/bin/python -m uvicorn api.server.main:app --port 8000
+```
+
+`auto` выбирает CUDA при её наличии, иначе CPU. Недоступное устройство — явная
+ошибка (без тихого отката), а `float16` на CPU запрещён. Наружу энкодер всегда
+отдаёт CPU-тензоры, поэтому головы и кэш признаков работают одинаково на любом
+устройстве.
 
 ### Локальная мультимодальность
 
@@ -515,6 +533,47 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 универсальное качество. Для `noul` дополнительно считаются Brier и ECE.
 Датасеты и отчёты складываются в `data/` (в `.gitignore`).
 
+### Публичная оценка (AG News): untrained vs trained
+
+Кроме синтетики есть адаптер публичного датасета `fancyzhx/ag_news` (4 темы:
+World/Sports/Business/Sci-Tech) и отчёт, который честно сравнивает необученные и
+обученные головы на отложенном test и рисует reliability-диаграммы:
+
+```bash
+# hash-энкодер (офлайн, быстро)
+.venv/bin/python -m eval.report.run --encoder hash --dim 64 --out-dir data/report
+
+# реальный gpt2 на GPU
+DECISION_DEVICE=cuda .venv/bin/python -m eval.report.run \
+  --encoder openai-community/gpt2 --dim 768 --out-dir data/report
+```
+
+Отчёт кладёт `metrics.json` и `reliability_*.png` в `--out-dir`. Для `choice`/`score`
+считаются top-1 accuracy, multi-class Brier и top-label ECE. Референс на AG News
+(gpt2, GPU): overall accuracy 0.425 → 0.884, ECE по темам 0.725 → 0.151.
+
+### Бенчмарк против конкурентов
+
+`eval.competitors` сравнивает локальные головы, каскад и внешние
+SystemOne-совместимые сервисы (Clef/Clef-Flash, Laya, Perplexity Decider) на одном
+наборе и одном наборе вопросов: качество (accuracy/Brier/ECE), латентность
+p50/p95/p99 и долю эскалаций.
+
+```bash
+# воспроизводимо и без сети (mock-конкурент)
+.venv/bin/python -m eval.competitors.run --specs support --limit 200 \
+  --mock --mock-latency-ms 5 --out data/competitors.json
+
+# реальные сервисы
+.venv/bin/python -m eval.competitors.run --specs public --limit 200 \
+  --remote clef-flash=http://127.0.0.1:8000 --out data/competitors.json
+```
+
+Методика и зафиксированные числа — в `docs/competitor-benchmark.md`. Ключевой
+вывод: каскад «local-first» сохраняет качество локальной модели, обращаясь к
+внешнему сервису лишь за единицы процентов решений (0.911 против 0.908 у local при
+1.94% эскалаций).
+
 ## Обучение голов
 
 ### SFT — учим на размеченных данных
@@ -551,12 +610,56 @@ SFTTrainer(heads, lr=0.1).fit(
   --encoder openai-community/gpt2 --dim 768 --train-steps 300
 ```
 
-На выходе `checkpoints/support/heads.pt` и `metadata.json`. Обученные веса весят
-мало и публикуются как **артефакт GitHub Release** (а не в git):
+На выходе `checkpoints/support/heads.pt` и `metadata.json`. Готовый end-to-end
+рецепт (gpt2 + SFT + RLCD-гейт, train/val/test) — в
+`training/recipe/train_reference_model.sh`: он сохраняет чекпоинт под **подписью
+схемы вопросов**, поэтому сервер подхватывает его автоматически.
+
+Матрица «несколько моделей × несколько датасетов» обучается одной командой
+(`training/recipe/train_weight_packs.sh`); каждый пак — отдельный каталог
+`checkpoints/packs/<dataset>-<model>/`, пригодный как `DECISION_CHECKPOINT_DIR`:
 
 ```bash
-training/recipe/publish_release.sh v0.1.0 checkpoints/support slavabars/jev
+# {support, public} x {gpt2, distilgpt2, gpt2-medium}. Переопределяется окружением:
+# SUPPORT_N/SUPPORT_STEPS/SUPPORT_RLCD, PUBLIC_LIMIT/PUBLIC_STEPS/PUBLIC_RLCD,
+# PACKS_ROOT, DECISION_DEVICE, DECISION_DTYPE.
+bash training/recipe/train_weight_packs.sh
 ```
+
+Обученные веса весят мало и публикуются как **артефакт GitHub Release** (а не в
+git) — либо один пак, либо вся матрица одним архивом + манифестом:
+
+```bash
+training/recipe/publish_release.sh v0.1.0 checkpoints/support       # один пак
+training/recipe/publish_weight_packs.sh v0.1.0 checkpoints/packs    # матрица + manifest.json
+```
+
+### Готовые паки весов (release)
+
+Релиз [`v0.1.0`](https://github.com/slavabars/decision-cascade/releases/tag/v0.1.0)
+содержит архив `v0.1.0-weights.tar.gz` (и `v0.1.0-manifest.json`) с шестью
+обученными паками: `{support, public} × {gpt2, distilgpt2, gpt2-medium}`. Все числа
+— на честном train/val/test (для `public` — настоящий test-сплит AG News):
+
+| Пак | Энкодер | dim | Датасет | test acc |
+|-----|---------|----:|---------|---------:|
+| `support-gpt2` | gpt2 | 768 | синтетика (саппорт), n=1000 | **0.926** |
+| `support-gpt2-medium` | gpt2-medium | 1024 | синтетика (саппорт), n=1000 | 0.914 |
+| `support-distilgpt2` | distilgpt2 | 768 | синтетика (саппорт), n=1000 | 0.868 |
+| `public-gpt2` | gpt2 | 768 | AG News, n=4000 | 0.880 |
+| `public-distilgpt2` | distilgpt2 | 768 | AG News, n=4000 | 0.879 |
+| `public-gpt2-medium` | gpt2-medium | 1024 | AG News, n=4000 | 0.873 |
+
+```bash
+tar -xzf v0.1.0-weights.tar.gz               # -> v0.1.0-weights/<pack>/
+DECISION_CHECKPOINT_DIR=v0.1.0-weights/support-gpt2 \
+DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
+  .venv/bin/python -m uvicorn api.server.main:app --port 8000
+```
+
+Паки `support-*` используют тот же набор вопросов, что сервис по умолчанию, и
+подхватываются автоматически. Паки `public-*` соответствуют вопросам AG News
+(`PUBLIC_QUESTIONS`) — их нужно подавать сервису вместе с этим набором вопросов.
 
 ### Чекпоинты голов и переиспользование
 
@@ -586,14 +689,25 @@ trainer = RLCDNoulTrainer(dim=2, lr=0.2)
 trainer.train(features, outcomes, steps=300)
 ```
 
+В рецепте калибровка идёт через `calibrate_noul_heads`: веса применяются, только
+если RLCD *улучшает* среднюю абсолютную ошибку (гейт «не навреди»), иначе голова
+откатывается к состоянию после SFT. Ограничение: гейт оценивается на train-сплите.
+
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 193 passed
-.venv/bin/python -m ruff check src api eval training tests examples
+.venv/bin/python -m pytest                          # 254 passed, 7 skipped
+.venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
+.venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
 shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
 ```
+
+Тесты на реальной модели — opt-in (по умолчанию пропускаются, чтобы `pytest` не
+качал веса): `DECISION_RUN_MODEL_TESTS=1 .venv/bin/python -m pytest -m model` —
+скачивает лёгкую `openai/clip-vit-base-patch32` (~0.6 ГБ) и проверяет
+`ClipVisionEncoder` на реальных изображениях (форма, детерминизм, инвариантность к
+батчу, проекция размерности, путь через `DecisionService`).
 
 > Совет: на машинах с малым объёмом RAM полный `pytest --cov` в одном процессе
 > может упасть (SIGILL на latency-тесте из-за кумулятивных torch-аллокаций).
@@ -614,17 +728,22 @@ systemctl status decision-api@api.service
 ## Структура репозитория
 
 ```
-src/            — модель: encoder, decision heads, sampler, бэкенды (backends/), схемы (schemas.py)
+src/            — модель: encoder (+device.py), decision heads, sampler, бэкенды
+                  (backends/), схемы (schemas.py)
 api/            — FastAPI-сервер (server/) и Python SDK (sdk/client.py)
 training/       — SFT (sft/), RLCD (rlcd/) и рецепт обучения голов (recipe/)
-eval/           — калибровка (calibration/), latency (latency/),
-                  генераторы датасетов (datasets/) и офлайн-бенчмарк (benchmark/)
+eval/           — калибровка (calibration/), latency (latency/), датасеты
+                  (datasets/, вкл. публичный AG News), офлайн-бенчмарк (benchmark/),
+                  отчёт untrained-vs-trained (report/) и сравнение с конкурентами
+                  (competitors/)
 deploy/         — Ubuntu/CentOS + systemd
+docs/           — методика бенчмарка против конкурентов (competitor-benchmark.md)
 examples/       — примеры (русский разбор обращения)
-tests/          — pytest-набор (193 теста)
+tests/          — pytest-набор (254 теста + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
-scripts/        — скрипты окружения (bootstrap.sh — скелет, не для повторного запуска)
+scripts/        — окружение: bootstrap-user.sh (uv/pyenv/venv/gh), bootstrap.sh (скелет)
 README.md       — этот файл
+ROADMAP.md      — статус и план фаз A–F
 requirements.txt
 pytest.ini
 .pre-commit-config.yaml
@@ -633,12 +752,17 @@ pytest.ini
 ## Ограничения и планы
 
 - **Качество по умолчанию**: головы по умолчанию случайные; осмысленные решения
-  требуют SFT+RLCD на вашей разметке. Обученные веса сохраняются в чекпоинты и
-  подгружаются при старте, но готовой обученной модели «из коробки» нет — это
-  особенность платформы, а не готовая модель.
-- **GPU-модели** (gemma-4-12B) требуют CUDA-машины; на CPU используйте gpt2.
-- **Качество отложенной оценки**: доступные сплиты синтетические и тривиально
-  разделимы (см. выше), поэтому `1.000` — это про конвейер, а не про реальный
-  домен. Реальная оценка требует размеченных данных.
-- **Roadmap**: реальная калибровка на gemma-выходе, вариант энкодера-трансформера
-  с attention-mask состояний, интеграция в чат-агентов.
+  требуют SFT+RLCD на вашей разметке. Есть рецепты и обученные паки весов
+  (`v0.1.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family);
+  в git веса не кладутся, поэтому после чистого клона «из коробки» — случайные
+  головы, пока не скачаете пак или не обучите свои.
+- **Устройство**: `DECISION_DEVICE`/`DECISION_DTYPE` выбирают CPU/GPU и тип;
+  gemma-4-12B требует ~24 ГБ и CUDA, на CPU используйте gpt2.
+- **Мультимодальность**: локальная CLIP поддерживает только изображения; видео
+  требует отдельного декодирования кадров.
+- **Честная оценка**: синтетические сплиты тривиально разделимы (`1.000` — это про
+  конвейер, а не про домен). Публичные числа — на AG News (accuracy 0.425 → 0.88)
+  и в бенчмарке против конкурентов; для своего домена нужна своя разметка.
+- **Roadmap**: открыта фаза F (см. `ROADMAP.md`); публикация весов — релизом через
+  `training/recipe/publish_release.sh` (один пак) или
+  `training/recipe/publish_weight_packs.sh` (матрица).
