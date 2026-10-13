@@ -646,6 +646,15 @@ training/recipe/publish_release.sh v0.1.0 checkpoints/support       # один �
 training/recipe/publish_weight_packs.sh v0.1.0 checkpoints/packs    # матрица + manifest.json
 ```
 
+RLCD-калибровка `noul`-голов на реальных признаках энкодера принимает изменение
+только если оно улучшает калибровку на **отложенном** val (гейт «не навреди»):
+
+```bash
+.venv/bin/python -m training.recipe.calibrate_rlcd --specs public \
+  --encoder openai-community/gpt2 --dim 768 --limit 4000 \
+  --checkpoint-dir checkpoints/packs/public-gpt2 --device cuda
+```
+
 ### Готовые паки весов (release)
 
 Релиз [`v0.1.0`](https://github.com/slavabars/decision-cascade/releases/tag/v0.1.0)

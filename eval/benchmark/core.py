@@ -133,8 +133,14 @@ def train_benchmark(
     lr: float = 0.1,
     seed: int = 0,
     rlcd_steps: int = 0,
+    rlcd_gate_examples: list[dict[str, Any]] | None = None,
 ) -> tuple[DecisionHeads, dict[str, Any]]:
-    """Обучает головы на ``examples`` и возвращает их вместе с отчётом на них же."""
+    """Обучает головы на ``examples`` и возвращает их вместе с отчётом на них же.
+
+    ``rlcd_gate_examples`` — отложенный набор для гейта «не навреди» RLCD: если
+    задан, калибровка принимается только когда она улучшает метрику *на нём*, а
+    не на обучающих признаках (защита от переобучения калибратора).
+    """
     torch.manual_seed(seed)
     per_question = encode_examples(specs, examples, encoder)
     dim = next(iter(per_question.values())).shape[-1]
@@ -151,8 +157,20 @@ def train_benchmark(
     if rlcd_steps:
         from training.rlcd.train import calibrate_noul_heads
 
+        gate_features = gate_targets = None
+        if rlcd_gate_examples is not None:
+            gate_features = encode_examples(specs, rlcd_gate_examples, encoder)
+            gate_targets = {
+                name: _build_targets(spec, [ex["labels"][name] for ex in rlcd_gate_examples])
+                for name, spec in specs.items()
+            }
         calibrate_noul_heads(
-            heads, per_question, target_map, steps=rlcd_steps
+            heads,
+            per_question,
+            target_map,
+            steps=rlcd_steps,
+            gate_features=gate_features,
+            gate_targets=gate_targets,
         )
 
     report = _metrics_report(specs, examples, per_question, heads)

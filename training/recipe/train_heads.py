@@ -160,6 +160,7 @@ def main(argv: list[str] | None = None) -> dict:
         lr=args.lr,
         seed=args.seed,
         rlcd_steps=args.rlcd_steps,
+        rlcd_gate_examples=splits["val"] or None,
     )
     metrics = {"train": train_report}
     for name in ("val", "test"):

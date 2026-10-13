@@ -86,3 +86,156 @@ def test_calibrate_noul_heads_reverts_when_already_calibrated():
     calibrate_noul_heads(heads, {"u": x}, targets, steps=200, lr=0.05)
 
     assert torch.allclose(before, heads.heads["u"].linear.weight.detach())
+
+
+class _FakePolicy(torch.nn.Module):
+    """Политика с нулевыми логитами (p = 0.5) и копируемыми weight/bias."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.zeros(1, dim))
+        self.bias = torch.nn.Parameter(torch.tensor([0.0]))
+
+    def forward(self, x):
+        return x @ self.weight.t() + self.bias
+
+
+class _FakeTrainer:
+    def __init__(self, dim, lr=1e-2, g=8):
+        self.policy = _FakePolicy(dim)
+
+    def train(self, features, outcomes, steps=200, batch_size=32):
+        return [0.0]
+
+
+def test_calibrate_gate_uses_held_out_split(monkeypatch):
+    """Гейт считается на переданном (отложенном) наборе, а не на train."""
+    from src.decision_head.heads import DecisionHeads
+    from src.sampler.questions import NoulSpec
+    from training.rlcd import train as rlcd
+
+    monkeypatch.setattr(rlcd, "RLCDNoulTrainer", _FakeTrainer)
+
+    heads = DecisionHeads(2, {"u": NoulSpec("urgent?")}, seed=0)
+    with torch.no_grad():
+        heads.heads["u"].linear.weight.zero_()
+        heads.heads["u"].linear.bias.fill_(-10.0)  # p ~ 0
+
+    x = torch.zeros(8, 2)
+    train_targets = {"u": torch.zeros(8)}  # на train p~0 идеально
+    gate_features = {"u": torch.zeros(8, 2)}
+    gate_targets = {"u": torch.ones(8)}  # на gate p~0 полностью неверно
+
+    gated = rlcd.calibrate_noul_heads(
+        heads,
+        {"u": x},
+        train_targets,
+        steps=1,
+        gate_features=gate_features,
+        gate_targets=gate_targets,
+    )
+    # gate: before=|0-1|=1, after=|0.5-1|=0.5 -> принимаем -> 0.5
+    assert gated["u"] == pytest.approx(0.5, abs=1e-6)
+
+    # Свежая голова: без gate (на train) before=|0-0|=0, after=0.5 -> откат -> 0
+    ungated_heads = DecisionHeads(2, {"u": NoulSpec("urgent?")}, seed=0)
+    with torch.no_grad():
+        ungated_heads.heads["u"].linear.weight.zero_()
+        ungated_heads.heads["u"].linear.bias.fill_(-10.0)
+    ungated = rlcd.calibrate_noul_heads(
+        ungated_heads, {"u": x}, train_targets, steps=1
+    )
+    assert ungated["u"] == pytest.approx(0.0, abs=1e-3)
+
+
+def test_train_benchmark_passes_gate_examples(monkeypatch):
+    from api.server.service import HashStateEncoder
+    from eval.benchmark.core import train_benchmark
+    from eval.datasets.text_dataset import SPECS, generate_examples
+    from training.rlcd import train as rlcd
+
+    captured: dict = {}
+
+    def fake_calibrate(
+        heads,
+        features,
+        targets,
+        *,
+        steps=0,
+        lr=0.01,
+        g=8,
+        gate_features=None,
+        gate_targets=None,
+    ):
+        captured["gate_features"] = gate_features
+        captured["gate_targets"] = gate_targets
+        return {}
+
+    monkeypatch.setattr(rlcd, "calibrate_noul_heads", fake_calibrate)
+
+    examples = generate_examples(n=40, seed=0)
+    gate = generate_examples(n=10, seed=1)
+    train_benchmark(
+        SPECS,
+        examples,
+        HashStateEncoder(16),
+        train_steps=2,
+        rlcd_steps=1,
+        rlcd_gate_examples=gate,
+    )
+
+    assert captured["gate_features"] is not None
+    assert captured["gate_targets"] is not None
+    assert next(iter(captured["gate_features"].values())).shape[0] == len(gate)
+
+
+def test_train_benchmark_without_gate_passes_none(monkeypatch):
+    from api.server.service import HashStateEncoder
+    from eval.benchmark.core import train_benchmark
+    from eval.datasets.text_dataset import SPECS, generate_examples
+    from training.rlcd import train as rlcd
+
+    captured: dict = {}
+
+    def fake_calibrate(heads, features, targets, **kwargs):
+        captured.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(rlcd, "calibrate_noul_heads", fake_calibrate)
+
+    train_benchmark(
+        SPECS,
+        generate_examples(n=30, seed=0),
+        HashStateEncoder(16),
+        train_steps=2,
+        rlcd_steps=1,
+    )
+    assert captured.get("gate_features") is None
+    assert captured.get("gate_targets") is None
+
+
+def test_calibrate_rlcd_script_runs(tmp_path):
+    from training.recipe.calibrate_rlcd import main
+
+    result = main(
+        [
+            "--specs",
+            "support",
+            "--limit",
+            "60",
+            "--encoder",
+            "hash",
+            "--dim",
+            "32",
+            "--steps",
+            "10",
+            "--out",
+            str(tmp_path),
+        ]
+    )
+
+    assert (tmp_path / "heads.pt").exists()
+    assert (tmp_path / "calibration.json").exists()
+    assert {"before", "after", "noul"} <= set(result)
+    assert result["noul"]  # есть хотя бы одна noul-голова
+    assert result["after"]["overall_accuracy"] >= 0.0

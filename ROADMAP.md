@@ -146,7 +146,11 @@ calibration (ECE): topic 0.725→0.151, business 0.122→0.063, tech_level 0.795
 - [x] F1. Трансформерный энкодер с attention-mask: `TransformerStateEncoder` (encoder-only,
   `AutoModel`) + общий `masked_mean_pool`; вид выбирается `DECISION_ENCODER_KIND`
   (`causal`/`encoder`) через `src/encoder/factory.py`. Тесты: unit + opt-in BERT (`-m model`).
-- [ ] F2. Реальная калибровка на выходе gemma (RLCD в масштабе).
+- [x] F2. Реальная калибровка на выходе энкодера (RLCD в масштабе): гейт «не навреди»
+  считается на **отложенном** val (`calibrate_noul_heads(gate_features=...)`),
+  `train_benchmark(rlcd_gate_examples=...)` прокидывается из рецепта, скрипт
+  `training/recipe/calibrate_rlcd.py` калибрует существующий пак и печатает
+  Brier/ECE до/после. Тесты: гейт на held-out, проброс gate, smoke-скрипт.
 - [ ] F3. Пример интеграции в чат-агента (клиент SDK + каскад).
 - [ ] F4. Политика версионирования схемы (`SCHEMA_VERSION`) и миграций.
 

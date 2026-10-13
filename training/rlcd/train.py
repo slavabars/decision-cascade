@@ -63,18 +63,19 @@ def calibrate_noul_heads(
     steps: int = 200,
     lr: float = 1e-2,
     g: int = 8,
+    gate_features: dict[str, Tensor] | None = None,
+    gate_targets: dict[str, Tensor] | None = None,
 ) -> dict[str, float]:
     """RLCD-калибровка noul-голов: reward = -|p - o|, веса копируются в головы.
 
     Для каждой noul-головы обучается отдельная политика на её (и только её)
     признаках. Калибровка применяется только если она *улучшает* среднюю
-    абсолютную ошибку вероятности на этих данных, иначе веса головы откатываются
-    (RLCD не должен ухудшать уже откалиброванную голову). Возвращает итоговую
-    среднюю абсолютную ошибку по каждой noul-голове.
+    абсолютную ошибку вероятности, иначе веса головы откатываются (RLCD не
+    должен ухудшать уже откалиброванную голову). Возвращает итоговую среднюю
+    абсолютную ошибку по каждой noul-голове.
 
-    Ограничение: гейт оценивается на тех же признаках, что и обучение, поэтому
-    гарантирует нерегрессию только на train; для строгой проверки передавайте
-    отложенный набор (в рецепте это пока train-сплит).
+    Гейт «не навреди» считается на ``gate_features``/``gate_targets``, если они
+    заданы (отложенный набор — честная нерегрессия), иначе на обучающих признаках.
     """
     from src.sampler.questions import NoulSpec
 
@@ -85,14 +86,22 @@ def calibrate_noul_heads(
         head = heads.heads[name]
         x = features[name]
         outcomes = targets[name].float()
+        if gate_features is not None and gate_targets is not None:
+            gate_x = gate_features[name]
+            gate_out = gate_targets[name].float()
+        else:
+            gate_x, gate_out = x, outcomes
+
         with torch.no_grad():
-            before = float((torch.sigmoid(head.logits(x)) - outcomes).abs().mean())
+            before = float((torch.sigmoid(head.logits(gate_x)) - gate_out).abs().mean())
 
         trainer = RLCDNoulTrainer(head.linear.in_features, lr=lr, g=g)
         trainer.train(x, outcomes, steps=steps)
         with torch.no_grad():
             after = float(
-                (torch.sigmoid(trainer.policy(x).squeeze(-1)) - outcomes).abs().mean()
+                (torch.sigmoid(trainer.policy(gate_x).squeeze(-1)) - gate_out)
+                .abs()
+                .mean()
             )
 
         if after < before:
