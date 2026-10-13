@@ -1,0 +1,16 @@
+[Unit]
+Description=System One Decision Model API (instance %i)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/decision-model
+ExecStart=/opt/decision-model/.venv/bin/uvicorn api.server.main:app --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=2
+User=decision
+Group=decision
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Окружение и кэши
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Модели и веса
+models/
+weights/
+*.safetensors
+*.bin
+*.gguf
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
+# Секреты
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Агентная инфраструктура разработки
+.opencode/
+agents.md
+scripts/bootstrap.sh
+sudo-requests/
+
+# Сторонний код, скопированный для знакомства (не часть проекта)
+vendor/
