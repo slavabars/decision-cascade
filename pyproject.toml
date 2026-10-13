@@ -1,0 +1,47 @@
+# Упаковка проекта «System One Decision Model» (дистрибутив decision-cascade).
+#
+# Зависимости берутся из requirements.txt — это единый источник и для bootstrap
+# окружения, и для deploy-скриптов, и для установки пакета из репозитория.
+# Версия — из src.__version__.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decision-cascade"
+dynamic = ["version", "dependencies"]
+description = "Локальный движок типизированных калибруемых решений (Noul/Choice/Score) с каскадом и протоколом SystemOne."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "slavabars", email = "slavabars@users.noreply.github.com" }]
+keywords = ["decision", "calibration", "routing", "cascade", "llm", "systemone"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/slavabars/decision-cascade"
+Repository = "https://github.com/slavabars/decision-cascade"
+Issues = "https://github.com/slavabars/decision-cascade/issues"
+Changelog = "https://github.com/slavabars/decision-cascade/blob/main/CHANGELOG.md"
+Releases = "https://github.com/slavabars/decision-cascade/releases"
+
+[tool.setuptools.dynamic]
+version = { attr = "src.__version__" }
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["src*", "api*", "eval*", "training*", "examples*"]
+exclude = ["tests*", "vendor*", "deploy*", "docs*", "scripts*", "data*", "checkpoints*"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"

@@ -20,6 +20,7 @@ from api.server.systemone import (
     result_to_answer_model,
     systemone_to_specs,
 )
+from src import __version__
 from src.backends.base import Backend, missing_modalities, requested_modalities
 from src.backends.cascade import CascadeBackend
 from src.backends.http import HttpSystemOneBackend, parse_modalities
@@ -166,7 +167,7 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     return CascadeBackend(primary, fallback, threshold=threshold)
 
 
-app = FastAPI(title="System One Decision API", version=SCHEMA_VERSION)
+app = FastAPI(title="System One Decision API", version=__version__)
 
 # Единый исполнитель решений для всех эндпоинтов: локальные головы, внешний
 # SystemOne-сервис или каскад (по DECISION_BACKEND). Локальный сервис создаётся
