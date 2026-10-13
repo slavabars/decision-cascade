@@ -72,9 +72,10 @@ state (строка-описание) ──► StateEncoder ──► features 
 от модели, железа и длины входа: ограничивайте длину входа через
 `DECISION_MAX_LENGTH` и закладывайте время на первый (холодный) инференс.
 
-Честное ограничение: это **проект-прототип для контроля и прозрачности**,
-а не готовый SaaS с UI. Если вам нужна «кнопка под ключ» — Jev удобнее; если нужны
-контроль, приватность, цена и калибруемость — этот проект.
+Честное ограничение: это **открытая beta для контроля и прозрачности**, а не
+готовый SaaS с UI. Головы «из коробки» случайны — значимое качество требует вашей
+разметки (SFT/RLCD) или скачивания пака весов. Если нужна «кнопка под ключ» — Jev
+удобнее; если нужны контроль, приватность, цена и калибруемость — этот проект.
 
 ### Открытые альтернативы и совместимость
 
@@ -115,6 +116,13 @@ uv pip install --python .venv/bin/python -r requirements.txt
 
 `bootstrap-user.sh` работает без `sudo`: ставит `uv`/`pyenv` в `~/.local` и
 `~/.pyenv`, создаёт `.venv`, ставит зависимости и кладёт `gh` в `~/.local/bin`.
+
+Проект упакован как дистрибутив `decision-cascade` (`pyproject.toml`), поэтому
+его можно поставить и редактируемо:
+
+```bash
+uv pip install --python .venv/bin/python -e .
+```
 
 ## Запуск сервера
 
@@ -824,6 +832,10 @@ scripts/        — bootstrap окружения (bootstrap-user.sh: uv/pyenv/ve
 README.md       — этот файл
 requirements.txt
 pytest.ini
+pyproject.toml  — упаковка (дистрибутив decision-cascade)
+LICENSE, NOTICE — лицензия Apache-2.0
+CHANGELOG.md, SECURITY.md
+.github/workflows/ci.yml — CI: ruff + shellcheck + pytest
 ```
 
 ## Ограничения и планы
@@ -842,3 +854,13 @@ pytest.ini
   и в бенчмарке против конкурентов; для своего домена нужна своя разметка.
 - **Публикация весов**: релизом через `training/recipe/publish_release.sh` (один
   пак) или `training/recipe/publish_weight_packs.sh` (матрица).
+
+## Лицензия
+
+Apache-2.0 — см. `LICENSE` и `NOTICE`. Copyright 2026 slavabars.
+
+## Безопасность
+
+Сервер не содержит встроенной аутентификации/CORS/rate-limit и рассчитан на
+локальный запуск за доверенным периметром (reverse-proxy с TLS). Как сообщить об
+уязвимости — см. `SECURITY.md`.
