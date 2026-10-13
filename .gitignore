@@ -22,6 +22,7 @@ data/
 # Модели и веса
 models/
 weights/
+checkpoints/
 *.safetensors
 *.bin
 *.gguf
