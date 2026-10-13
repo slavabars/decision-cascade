@@ -25,7 +25,7 @@ SERVER_PID=$!
 
 READY=0
 for _ in $(seq 1 60); do
-  if curl -fsS -o /dev/null "${BASE}/openapi.json"; then
+  if curl -fsS -o /dev/null "${BASE}/openapi.json" 2>/dev/null; then
     READY=1
     break
   fi

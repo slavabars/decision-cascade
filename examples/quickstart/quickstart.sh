@@ -40,7 +40,7 @@ echo "== Ожидание готовности =="
 for _ in $(seq 1 60); do
   if curl -fsS -o /dev/null -X POST "${BASE}/decisions" \
       -H 'content-type: application/json' \
-      -d '{"state":"ping","questions":{"ok":{"type":"noul","instructions":"ping"}}}'; then
+      -d '{"state":"ping","questions":{"ok":{"type":"noul","instructions":"ping"}}}' 2>/dev/null; then
     break
   fi
   sleep 0.5

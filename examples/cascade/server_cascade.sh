@@ -39,7 +39,7 @@ CA_PID=$!
 PAYLOAD='{"state":"Не приходит выплата Stripe, теряем выручку!","questions":{"team":{"type":"choice","criteria":{"billing":"оплата","support":"интерфейс"}},"urgent":{"type":"noul","criteria":["нет спешки","срочно"]}}}'
 for _ in $(seq 1 60); do
   if curl -fsS -o /dev/null -X POST "${CASCADE}/v1/systemone" \
-      -H 'content-type: application/json' -d "${PAYLOAD}"; then
+      -H 'content-type: application/json' -d "${PAYLOAD}" 2>/dev/null; then
     break
   fi
   sleep 0.5

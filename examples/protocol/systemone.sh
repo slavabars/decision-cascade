@@ -27,7 +27,7 @@ SERVER_PID=$!
 for _ in $(seq 1 60); do
   if curl -fsS -o /dev/null -X POST "${BASE}/v1/systemone" \
       -H 'content-type: application/json' \
-      -d '{"state":"ping","questions":{"ok":{"type":"noul","criteria":["no","yes"]}}}'; then
+      -d '{"state":"ping","questions":{"ok":{"type":"noul","criteria":["no","yes"]}}}' 2>/dev/null; then
     break
   fi
   sleep 0.5

@@ -40,7 +40,7 @@ GW_PID=$!
 PAYLOAD='{"state":"Сервис недоступен, нужна помощь","questions":{"team":{"type":"choice","criteria":{"billing":"оплата","support":"интерфейс"}}}}'
 for _ in $(seq 1 60); do
   if curl -fsS -o /dev/null -X POST "${GATEWAY}/v1/systemone" \
-      -H 'content-type: application/json' -d "${PAYLOAD}"; then
+      -H 'content-type: application/json' -d "${PAYLOAD}" 2>/dev/null; then
     break
   fi
   sleep 0.5
