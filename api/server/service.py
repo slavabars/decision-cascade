@@ -195,6 +195,26 @@ class DecisionService:
             projected = projection @ projected
         return features + (weight * projected).unsqueeze(0)
 
+    def decide_many(
+        self,
+        states: list[str],
+        questions: dict[str, QuestionSpec],
+    ) -> list[dict[str, DecisionResult]]:
+        """Решает набор состояний одним прогоном энкодера (все промпты за раз)."""
+        if not states or not questions:
+            return [{} for _ in states]
+        names = list(questions)
+        prompts = [
+            build_prompt(state, questions[name]) for state in states for name in names
+        ]
+        features = self._encode_prompts(prompts)
+        heads = self.get_heads(features.shape[-1], questions)
+        width = len(names)
+        return [
+            sample_decisions(heads, features[i * width : (i + 1) * width])
+            for i in range(len(states))
+        ]
+
     def decide(
         self,
         state: str,

@@ -35,10 +35,31 @@ class VisionEncoder(Protocol):
         ...
 
 
-def _read_source(ref: MediaRef) -> bytes:
-    """Читает байты из файла, если путь существует, иначе трактует ref как данные."""
+def _resolve_media_path(ref: MediaRef, media_root: Path) -> Path:
+    """Разрешает путь к медиа внутри allow-listed корня и запрещает выход наружу."""
+    if isinstance(ref, bytes):
+        raise TypeError("media reference is bytes, not a path")
+    root = Path(media_root).resolve()
+    raw = Path(ref)
+    candidate = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError(f"media path {ref!r} escapes media root {root}")
+    return candidate
+
+
+def _read_source(ref: MediaRef, media_root: Path | None = None) -> bytes:
+    """Читает байты из файла, если путь существует, иначе трактует ref как данные.
+
+    При заданном ``media_root`` чтение из файловой системы разрешено только
+    внутри этого каталога — защита от чтения произвольных путей.
+    """
     if isinstance(ref, bytes):
         return ref
+    if media_root is not None:
+        path = _resolve_media_path(ref, media_root)
+        if path.is_file():
+            return path.read_bytes()[:_MAX_BYTES]
+        return ref.encode("utf-8")
     try:
         path = Path(ref)
         if path.is_file():
@@ -59,9 +80,15 @@ class HashVisionEncoder(VisionEncoder):
 
     modalities = frozenset({"image", "video"})
 
-    def __init__(self, dim: int = VISION_FEATURE_DIM, max_bytes: int = _MAX_BYTES):
+    def __init__(
+        self,
+        dim: int = VISION_FEATURE_DIM,
+        max_bytes: int = _MAX_BYTES,
+        media_root: Path | None = None,
+    ):
         self.dim = dim
         self.max_bytes = max_bytes
+        self.media_root = Path(media_root) if media_root is not None else None
 
     def _vector(self, data: bytes) -> Tensor:
         vector = torch.zeros(self.dim)
@@ -73,7 +100,10 @@ class HashVisionEncoder(VisionEncoder):
         return vector / norm if norm > 0 else vector
 
     def encode_images(self, images: list[MediaRef]) -> Tensor:
-        rows = [self._vector(_read_source(image)[: self.max_bytes]) for image in images]
+        rows = [
+            self._vector(_read_source(image, self.media_root)[: self.max_bytes])
+            for image in images
+        ]
         if not rows:
             return torch.zeros(0, self.dim)
         return torch.stack(rows)
@@ -85,7 +115,7 @@ class HashVisionEncoder(VisionEncoder):
             raise ValueError("max_frames must be >= 1")
         rows = []
         for video in videos:
-            data = _read_source(video)[: self.max_bytes]
+            data = _read_source(video, self.media_root)[: self.max_bytes]
             segment = max(1, len(data) // max_frames)
             frame_vectors = [
                 self._vector(data[start : start + segment])
@@ -114,12 +144,20 @@ class ClipVisionEncoder(VisionEncoder):  # pragma: no cover - требует з�
         model_id: str = "openai/clip-vit-base-patch32",
         dim: int = 512,
         device: str | None = None,
+        media_root: Path | None = None,
     ):
         self.model_id = model_id
         self.dim = dim
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.media_root = Path(media_root) if media_root is not None else None
         self._model = None
         self._processor = None
+
+    def _resolve(self, ref: MediaRef) -> MediaRef:
+        """Разрешает путь внутри allow-listed корня (если он задан)."""
+        if isinstance(ref, bytes) or self.media_root is None:
+            return Path(ref) if isinstance(ref, str) else ref
+        return _resolve_media_path(ref, self.media_root)
 
     def load(self) -> ClipVisionEncoder:
         from transformers import CLIPModel, CLIPProcessor
@@ -145,7 +183,7 @@ class ClipVisionEncoder(VisionEncoder):  # pragma: no cover - требует з�
     def encode_images(self, images: list[str]) -> Tensor:
         from PIL import Image
 
-        pil = [Image.open(image).convert("RGB") for image in images]
+        pil = [Image.open(self._resolve(image)).convert("RGB") for image in images]
         if not pil:
             return torch.zeros(0, self.dim)
         return self._encode_pil(pil)

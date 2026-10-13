@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Annotated, Literal
 
 import torch
@@ -21,6 +22,7 @@ from api.server.systemone import (
     systemone_to_specs,
 )
 from src.backends.base import Backend, missing_modalities, requested_modalities
+from src.backends.cascade import CascadeBackend
 from src.backends.http import HttpSystemOneBackend, parse_modalities
 from src.backends.local import LocalHeadsBackend
 from src.encoder.vision import VisionEncoder
@@ -35,13 +37,37 @@ def create_vision_encoder() -> VisionEncoder | None:
         return None
     from src.encoder.vision import ClipVisionEncoder
 
+    media_root = os.environ.get("DECISION_MEDIA_ROOT")
     encoder = ClipVisionEncoder(
         model_id=model_id,
-        dim=int(os.environ.get("DECISION_VISION_DIM", "512")),
+        dim=parse_dim(
+            "DECISION_VISION_DIM",
+            os.environ.get("DECISION_VISION_DIM"),
+            default=512,
+            lo=1,
+            hi=8192,
+        ),
         device="cpu",
+        media_root=Path(media_root) if media_root else None,
     )
     encoder.load()
     return encoder
+
+
+def parse_dim(
+    name: str, raw: str | None, *, default: int, lo: int, hi: int
+) -> int:
+    """Разбирает размерность из окружения и держит её в разумных границах."""
+    value = default if raw is None else raw
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"{name} must be an int in [{lo}, {hi}], got {value!r}"
+        ) from exc
+    if not lo <= parsed <= hi:
+        raise RuntimeError(f"{name} must be in [{lo}, {hi}], got {parsed}")
+    return parsed
 
 
 def parse_max_length(raw: str) -> int | None:
@@ -69,7 +95,13 @@ def create_service() -> DecisionService:
         )
     from src.encoder.gemma import GemmaStateEncoder
 
-    feature_dim = int(os.environ.get("DECISION_FEATURE_DIM", "768"))
+    feature_dim = parse_dim(
+        "DECISION_FEATURE_DIM",
+        os.environ.get("DECISION_FEATURE_DIM"),
+        default=768,
+        lo=1,
+        hi=8192,
+    )
     max_length = parse_max_length(os.environ.get("DECISION_MAX_LENGTH", "256"))
     encoder = GemmaStateEncoder(
         model_id=model_id,
@@ -99,7 +131,28 @@ def create_backend(service: DecisionService | None = None) -> Backend:
             os.environ.get("DECISION_BACKEND_MODALITIES", "text")
         )
         return HttpSystemOneBackend(url, model=model, modalities=modalities)
+    if kind == "cascade":
+        return create_cascade_backend(service)
     return LocalHeadsBackend(service or create_service())
+
+
+def create_cascade_backend(service: DecisionService | None = None) -> CascadeBackend:
+    """Локальные головы как primary, внешний SystemOne как fallback."""
+    url = os.environ.get("DECISION_CASCADE_FALLBACK_URL")
+    if not url:
+        raise RuntimeError(
+            "DECISION_BACKEND=cascade requires DECISION_CASCADE_FALLBACK_URL"
+        )
+    threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
+    primary = LocalHeadsBackend(service or create_service())
+    fallback = HttpSystemOneBackend(
+        url,
+        model=os.environ.get("DECISION_CASCADE_FALLBACK_MODEL", "remote"),
+        modalities=parse_modalities(
+            os.environ.get("DECISION_CASCADE_FALLBACK_MODALITIES", "text")
+        ),
+    )
+    return CascadeBackend(primary, fallback, threshold=threshold)
 
 
 app = FastAPI(title="System One Decision API", version=SCHEMA_VERSION)
@@ -161,6 +214,23 @@ class DecisionResponse(BaseModel):
     decisions: dict[str, Annotated[DecisionResult, Field(discriminator="type")]]
 
 
+class BatchDecisionRequest(BaseModel):
+    states: list[str] = Field(..., min_length=1, max_length=256)
+    questions: dict[str, Question] = Field(..., min_length=1)
+
+    @field_validator("states")
+    @classmethod
+    def _non_empty_states(cls, states: list[str]) -> list[str]:
+        if any(not state.strip() for state in states):
+            raise ValueError("states must be non-empty strings")
+        return states
+
+
+class BatchDecisionResponse(BaseModel):
+    schema_version: str
+    results: list[dict[str, Annotated[DecisionResult, Field(discriminator="type")]]]
+
+
 def _to_specs(questions: dict[str, Question]) -> dict[str, QuestionSpec]:
     specs = {}
     for name, q in questions.items():
@@ -185,6 +255,13 @@ async def create_decisions(req: DecisionRequest) -> DecisionResponse:
     """Оценивает все вопросы параллельно одним прогоном энкодера + голов."""
     decisions = service.decide(req.state, _to_specs(req.questions))
     return DecisionResponse(schema_version=SCHEMA_VERSION, decisions=decisions)
+
+
+@app.post("/decisions/batch", response_model=BatchDecisionResponse)
+async def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse:
+    """Батч: все состояния и вопросы одним прогоном энкодера."""
+    results = service.decide_many(req.states, _to_specs(req.questions))
+    return BatchDecisionResponse(schema_version=SCHEMA_VERSION, results=results)
 
 
 @app.post("/v1/systemone", response_model=SystemOneResponse)
