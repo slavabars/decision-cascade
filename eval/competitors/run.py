@@ -15,6 +15,12 @@
         --remote clef-flash=http://127.0.0.1:8000 \
         --remote laya=https://api.laya.example \
         --out data/competitors.json
+
+Публичный decision-датасет RouterBench (маршрутизация LLM) и кривая
+«качество против доли эскалаций» (``--sweep``):
+
+    python -m eval.competitors.run --specs routerbench --limit 500 \
+        --mock --mock-latency-ms 2 --sweep --out data/competitors_routerbench.json
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from eval.competitors.evaluate import evaluate_backend
+from eval.datasets.routerbench import ROUTERBENCH_FILES
 from eval.datasets.text_dataset import QUESTIONS as SUPPORT_QUESTIONS
 from eval.datasets.text_dataset import generate_examples, spec_from_api
 from src.backends.base import Backend
@@ -36,6 +43,10 @@ from src.sampler.questions import QuestionSpec
 def _specs(kind: str) -> dict[str, QuestionSpec]:
     if kind == "support":
         source = SUPPORT_QUESTIONS
+    elif kind == "routerbench":
+        from eval.datasets.routerbench import ROUTERBENCH_QUESTIONS
+
+        source = ROUTERBENCH_QUESTIONS
     else:
         from eval.datasets.public_dataset import PUBLIC_QUESTIONS
 
@@ -43,9 +54,15 @@ def _specs(kind: str) -> dict[str, QuestionSpec]:
     return {name: spec_from_api(data) for name, data in source.items()}
 
 
-def _examples(kind: str, limit: int, seed: int) -> list[dict[str, Any]]:
+def _examples(
+    kind: str, limit: int, seed: int, shot: str = "0shot"
+) -> list[dict[str, Any]]:
     if kind == "support":
         return generate_examples(n=limit, seed=seed)
+    if kind == "routerbench":
+        from eval.datasets.routerbench import load_routerbench
+
+        return load_routerbench(limit or None, shot=shot)["test"]
     from eval.datasets.public_dataset import load_ag_news
 
     return load_ag_news(limit or None)["test"]
@@ -77,38 +94,59 @@ def _parse_remotes(values: list[str]) -> list[tuple[str, str]]:
     return remotes
 
 
-def _build_targets(args) -> list[Backend]:
-    local = _local_backend(args)
-    targets: list[Backend] = [local]
-
-    fallback: Backend | None = None
+def _build_fallbacks(args) -> list[Backend]:
+    """Внешние бэкенды-участники; первый становится fallback каскада."""
+    fallbacks: list[Backend] = []
     if args.mock:
         from eval.competitors.mocks import mock_systemone_transport
 
-        mock = HttpSystemOneBackend(
-            "http://mock",
-            model="mock",
-            transport=mock_systemone_transport(
-                seed=args.seed, latency_ms=args.mock_latency_ms
-            ),
+        fallbacks.append(
+            HttpSystemOneBackend(
+                "http://mock",
+                model="mock",
+                transport=mock_systemone_transport(
+                    seed=args.seed, latency_ms=args.mock_latency_ms
+                ),
+            )
         )
-        targets.append(mock)
-        fallback = mock
-
     for name, url in _parse_remotes(args.remote):
-        remote = HttpSystemOneBackend(url, model=name, timeout=args.timeout)
-        targets.append(remote)
-        fallback = fallback or remote
+        fallbacks.append(HttpSystemOneBackend(url, model=name, timeout=args.timeout))
+    return fallbacks
 
-    if fallback is not None:
-        targets.append(CascadeBackend(local, fallback, threshold=args.threshold))
-    return targets
+
+def _threshold_grid(points: int) -> list[float]:
+    points = max(2, points)
+    return [i / (points - 1) for i in range(points)]
+
+
+def _sweep_cascade(
+    args,
+    local: Backend,
+    fallback: Backend,
+    specs: dict[str, QuestionSpec],
+    examples: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Кривая «качество против доли эскалаций»: порог от 0.0 до 1.0."""
+    rows: list[dict[str, Any]] = []
+    for threshold in _threshold_grid(args.sweep_points):
+        cascade = CascadeBackend(local, fallback, threshold=threshold)
+        report = evaluate_backend(
+            specs, examples, cascade.decide, name=cascade.name, warmup=0
+        )
+        rows.append(
+            {
+                "threshold": threshold,
+                "overall_accuracy": report["overall_accuracy"],
+                "escalation_rate": report["escalation_rate"],
+                "requests_with_escalation": report["requests_with_escalation"],
+                "latency_ms": report["latency_ms"],
+            }
+        )
+    return rows
 
 
 def _print_table(reports: list[dict[str, Any]]) -> None:
-    header = (
-        f"{'target':<28} {'acc':>7} {'p50ms':>8} {'p95ms':>8} {'esc%':>7}"
-    )
+    header = f"{'target':<28} {'acc':>7} {'p50ms':>8} {'p95ms':>8} {'esc%':>7}"
     print(header)
     print("-" * len(header))
     for report in reports:
@@ -121,9 +159,22 @@ def _print_table(reports: list[dict[str, Any]]) -> None:
         )
 
 
+def _print_sweep(fallback_name: str, rows: list[dict[str, Any]]) -> None:
+    print(f"cascade sweep -> {fallback_name}")
+    print(f"{'threshold':>9} {'acc':>7} {'esc%':>7} {'p50ms':>8}")
+    for row in rows:
+        print(
+            f"{row['threshold']:>9.2f} {row['overall_accuracy']:>7.3f} "
+            f"{100 * row['escalation_rate']:>7.2f} "
+            f"{row['latency_ms'].get('p50', float('nan')):>8.2f}"
+        )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Competitor benchmark")
-    parser.add_argument("--specs", choices=["support", "public"], default="support")
+    parser.add_argument(
+        "--specs", choices=["support", "public", "routerbench"], default="support"
+    )
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--threshold", type=float, default=0.6)
@@ -143,39 +194,71 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--dtype", default="float32")
     parser.add_argument("--checkpoint-dir", default=None)
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument(
+        "--shot",
+        choices=sorted(ROUTERBENCH_FILES),
+        default="0shot",
+        help="RouterBench: 0-shot или 5-shot",
+    )
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="кривая качество/эскалация каскада при пороге от 0.0 до 1.0",
+    )
+    parser.add_argument("--sweep-points", type=int, default=11)
     parser.add_argument("--out", type=Path, default=Path("data/competitors.json"))
     args = parser.parse_args(argv)
 
     specs = _specs(args.specs)
-    examples = _examples(args.specs, args.limit, args.seed)
+    examples = _examples(args.specs, args.limit, args.seed, args.shot)
     print(
         f"specs={args.specs} n={len(examples)} questions={len(specs)} "
         f"threshold={args.threshold}"
     )
 
-    targets = _build_targets(args)
+    local = _local_backend(args)
+    fallbacks = _build_fallbacks(args)
+    targets: list[Backend] = [local, *fallbacks]
+    primary_fallback = fallbacks[0] if fallbacks else None
+    if primary_fallback is not None and not args.sweep:
+        targets.append(
+            CascadeBackend(local, primary_fallback, threshold=args.threshold)
+        )
+
     reports = []
+    sweep_rows: list[dict[str, Any]] = []
     try:
         for target in targets:
             report = evaluate_backend(
                 specs, examples, target.decide, name=target.name, warmup=args.warmup
             )
             reports.append(report)
+        if args.sweep and primary_fallback is not None:
+            sweep_rows = _sweep_cascade(
+                args, local, primary_fallback, specs, examples
+            )
     finally:
-        for target in targets:
+        for target in [local, *fallbacks]:
             close = getattr(target, "close", None)
             if callable(close):
                 close()
 
     _print_table(reports)
+    if sweep_rows:
+        _print_sweep(primary_fallback.name, sweep_rows)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict[str, Any] = {
         "specs": args.specs,
         "n": len(examples),
         "threshold": args.threshold,
         "reports": reports,
     }
+    if sweep_rows:
+        payload["cascade_sweep"] = {
+            "fallback": primary_fallback.name,
+            "rows": sweep_rows,
+        }
     args.out.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

@@ -54,7 +54,14 @@ def _encoder(name: str, dim: int, device: str | None, dtype: str | None):
 
 
 def _specs(name: str) -> dict[str, QuestionSpec]:
-    source = SUPPORT_QUESTIONS if name == "support" else _public_questions()
+    if name == "support":
+        source = SUPPORT_QUESTIONS
+    elif name == "routerbench":
+        from eval.datasets.routerbench import ROUTERBENCH_QUESTIONS
+
+        source = ROUTERBENCH_QUESTIONS
+    else:
+        source = _public_questions()
     return {key: spec_from_api(data) for key, data in source.items()}
 
 
@@ -77,6 +84,15 @@ def _load_splits(args) -> dict[str, list[dict[str, Any]]]:
         from eval.datasets.public_dataset import load_ag_news
 
         splits = load_ag_news(args.limit or None)
+        carved = split_examples(
+            splits["train"], val_fraction=0.1, test_fraction=0.0, seed=args.seed
+        )
+        carved["test"] = splits["test"]
+        return carved
+    if args.specs == "routerbench":
+        from eval.datasets.routerbench import load_routerbench
+
+        splits = load_routerbench(args.limit or None, shot=args.shot, seed=args.seed)
         carved = split_examples(
             splits["train"], val_fraction=0.1, test_fraction=0.0, seed=args.seed
         )
@@ -166,7 +182,9 @@ def _print_compare(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Untrained vs trained report")
-    parser.add_argument("--specs", choices=["support", "public"], default="public")
+    parser.add_argument(
+        "--specs", choices=["support", "public", "routerbench"], default="public"
+    )
     parser.add_argument("--dataset", type=Path, default=None, help="каталог train/test jsonl")
     parser.add_argument("--encoder", default="hash", help="'hash' или model_id")
     parser.add_argument("--dim", type=int, default=64)
@@ -175,6 +193,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--limit", type=int, default=4000)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--shot", choices=["0shot", "5shot"], default="0shot", help="RouterBench"
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dtype", default="float32")
     parser.add_argument("--out-dir", type=Path, default=Path("data/report"))
