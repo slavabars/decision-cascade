@@ -70,6 +70,28 @@ def _read_source(ref: MediaRef, media_root: Path | None = None) -> bytes:
     return ref.encode("utf-8")
 
 
+def _extract_image_features(outputs: object) -> Tensor:
+    """Достаёт тензор признаков изображения из результата ``get_image_features``.
+
+    В transformers >=5 ``CLIPModel.get_image_features`` возвращает
+    ``BaseModelOutputWithPooling`` (уже спроецированный вектор лежит в
+    ``pooler_output``), в старых версиях — сразу тензор. Поддерживаем оба, плюс
+    ``image_embeds`` и усреднение ``last_hidden_state`` как запасной вариант.
+    """
+    if isinstance(outputs, Tensor):
+        return outputs
+    for attr in ("pooler_output", "image_embeds"):
+        value = getattr(outputs, attr, None)
+        if isinstance(value, Tensor):
+            return value
+    hidden = getattr(outputs, "last_hidden_state", None)
+    if isinstance(hidden, Tensor):
+        return hidden.mean(dim=1)
+    raise RuntimeError(
+        f"cannot extract image features from {type(outputs).__name__}"
+    )
+
+
 class HashVisionEncoder(VisionEncoder):
     """Детерминированный fallback: хэш содержимого в вектор признаков.
 
@@ -172,12 +194,15 @@ class ClipVisionEncoder(VisionEncoder):  # pragma: no cover - требует з�
             raise RuntimeError("ClipVisionEncoder.load() must be called before encode")
         inputs = self._processor(images=images, return_tensors="pt").to(self.device)
         with torch.no_grad():
-            features = self._model.get_image_features(**inputs)
+            outputs = self._model.get_image_features(**inputs)
+        features = _extract_image_features(outputs)
         if features.shape[-1] != self.dim:
-            features = torch.nn.functional.linear(
-                features,
-                torch.eye(self.dim, features.shape[-1], device=self.device),
+            # Устройство/тип берём у самих признаков, чтобы не ловить рассинхрон
+            # с self.device (модель может отдать тензоры на другом устройстве).
+            projection = torch.eye(
+                self.dim, features.shape[-1], device=features.device, dtype=features.dtype
             )
+            features = torch.nn.functional.linear(features, projection)
         return features.detach().float().cpu()
 
     def encode_images(self, images: list[str]) -> Tensor:

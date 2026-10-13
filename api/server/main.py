@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 from typing import Annotated, Literal
 
-import torch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -25,6 +24,7 @@ from src.backends.base import Backend, missing_modalities, requested_modalities
 from src.backends.cascade import CascadeBackend
 from src.backends.http import HttpSystemOneBackend, parse_modalities
 from src.backends.local import LocalHeadsBackend
+from src.device import check_dtype_device, resolve_device, resolve_dtype
 from src.encoder.vision import VisionEncoder
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
 from src.schemas import SCHEMA_VERSION, DecisionResult
@@ -47,7 +47,7 @@ def create_vision_encoder() -> VisionEncoder | None:
             lo=1,
             hi=8192,
         ),
-        device="cpu",
+        device=resolve_device(os.environ.get("DECISION_DEVICE")),
         media_root=Path(media_root) if media_root else None,
     )
     encoder.load()
@@ -110,11 +110,14 @@ def create_service() -> DecisionService:
         lo=1,
         hi=4096,
     )
+    device = resolve_device(os.environ.get("DECISION_DEVICE"))
+    dtype = resolve_dtype(os.environ.get("DECISION_DTYPE"))
+    check_dtype_device(dtype, device)
     encoder = GemmaStateEncoder(
         model_id=model_id,
         feature_dim=feature_dim,
-        dtype=torch.float32,
-        device="cpu",
+        dtype=dtype,
+        device=device,
         max_length=max_length,
         batch_size=batch_size,
     )
@@ -165,8 +168,10 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
 
 app = FastAPI(title="System One Decision API", version=SCHEMA_VERSION)
 
-service = create_service()
-backend: Backend = create_backend(service)
+# Единый исполнитель решений для всех эндпоинтов: локальные головы, внешний
+# SystemOne-сервис или каскад (по DECISION_BACKEND). Локальный сервис создаётся
+# лениво — только если выбранный бэкенд его действительно использует.
+backend: Backend = create_backend()
 
 
 class NoulQuestion(BaseModel):
@@ -258,22 +263,27 @@ def _to_specs(questions: dict[str, Question]) -> dict[str, QuestionSpec]:
     return specs
 
 
+# Все эндпоинты — синхронные (``def``): FastAPI выполняет их в threadpool, поэтому
+# тяжёлый CPU-инференс не блокирует event loop и остальные соединения.
 @app.post("/decisions", response_model=DecisionResponse)
-async def create_decisions(req: DecisionRequest) -> DecisionResponse:
+def create_decisions(req: DecisionRequest) -> DecisionResponse:
     """Оценивает все вопросы параллельно одним прогоном энкодера + голов."""
-    decisions = service.decide(req.state, _to_specs(req.questions))
-    return DecisionResponse(schema_version=SCHEMA_VERSION, decisions=decisions)
+    result = backend.decide(req.state, _to_specs(req.questions))
+    return DecisionResponse(schema_version=SCHEMA_VERSION, decisions=result.decisions)
 
 
 @app.post("/decisions/batch", response_model=BatchDecisionResponse)
-async def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse:
+def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse:
     """Батч: все состояния и вопросы за один вызов энкодера (внутри — батчами)."""
-    results = service.decide_many(req.states, _to_specs(req.questions))
+    results = [
+        result.decisions
+        for result in backend.decide_many(req.states, _to_specs(req.questions))
+    ]
     return BatchDecisionResponse(schema_version=SCHEMA_VERSION, results=results)
 
 
 @app.post("/v1/systemone", response_model=SystemOneResponse)
-async def create_systemone_decisions(
+def create_systemone_decisions(
     req: SystemOneRequest,
 ) -> SystemOneResponse | JSONResponse:
     """Стандартный протокол Jev/SystemOne: state + типизированные вопросы -> ответы.

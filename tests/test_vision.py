@@ -1,4 +1,5 @@
 """Тесты vision-энкодера (offline fallback) — написаны до реализации (TDD RED)."""
+import pytest
 import torch
 
 from src.encoder.vision import HashVisionEncoder
@@ -58,3 +59,94 @@ def test_hash_vision_encoder_satisfies_protocol():
     from src.encoder.vision import VisionEncoder
 
     assert isinstance(HashVisionEncoder(dim=8), VisionEncoder)
+
+
+# --- ClipVisionEncoder: извлечение признаков без загрузки модели (unit) ---
+
+
+class _FakeBatch(dict):
+    def to(self, device):
+        return self
+
+
+class _FakeProcessor:
+    def __call__(self, images=None, return_tensors=None):
+        return _FakeBatch(pixel_values=torch.zeros(len(images), 3, 4, 4))
+
+
+class _OutputObject:
+    """Имитация BaseModelOutputWithPooling из transformers >=5."""
+
+    def __init__(self, features):
+        self.pooler_output = features
+        self.last_hidden_state = features.unsqueeze(1)
+
+
+class _ObjectClipModel:
+    def get_image_features(self, **inputs):
+        n = inputs["pixel_values"].shape[0]
+        return _OutputObject(torch.ones(n, 512))
+
+
+class _TensorClipModel:
+    def get_image_features(self, **inputs):
+        n = inputs["pixel_values"].shape[0]
+        return torch.ones(n, 512)
+
+
+def _fake_encoder(dim: int, model) -> "object":
+    from src.encoder.vision import ClipVisionEncoder
+
+    encoder = ClipVisionEncoder(model_id="fake", dim=dim, device="cpu")
+    encoder._processor = _FakeProcessor()
+    encoder._model = model
+    return encoder
+
+
+def test_clip_encoder_reads_features_from_output_object(tmp_path):
+    from PIL import Image
+
+    image = tmp_path / "x.png"
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(image)
+
+    encoder = _fake_encoder(512, _ObjectClipModel())
+    out = encoder.encode_images([str(image), str(image)])
+
+    assert out.shape == (2, 512)
+    assert out.dtype == torch.float32
+
+
+def test_clip_encoder_reads_features_from_tensor(tmp_path):
+    from PIL import Image
+
+    image = tmp_path / "x.png"
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(image)
+
+    encoder = _fake_encoder(512, _TensorClipModel())
+    out = encoder.encode_images([str(image)])
+
+    assert out.shape == (1, 512)
+
+
+def test_clip_encoder_projects_to_requested_dim(tmp_path):
+    from PIL import Image
+
+    image = tmp_path / "x.png"
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(image)
+
+    encoder = _fake_encoder(64, _TensorClipModel())
+    out = encoder.encode_images([str(image)])
+
+    assert out.shape == (1, 64)
+
+
+def test_clip_encoder_requires_load_before_encode(tmp_path):
+    from PIL import Image
+
+    from src.encoder.vision import ClipVisionEncoder
+
+    image = tmp_path / "x.png"
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(image)
+    encoder = ClipVisionEncoder(model_id="fake", dim=512, device="cpu")
+    with pytest.raises(RuntimeError, match="load"):
+        encoder.encode_images([str(image)])

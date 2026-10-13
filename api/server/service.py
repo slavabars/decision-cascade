@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from collections import OrderedDict
 from pathlib import Path
 
@@ -67,6 +68,9 @@ class DecisionService:
         self.vision_encoder = vision_encoder
         self._heads_cache: dict[str, DecisionHeads] = {}
         self._feature_cache: OrderedDict[str, Tensor] = OrderedDict()
+        # Эндпоинты синхронные и обслуживаются threadpool'ом FastAPI, поэтому
+        # общие кэши (головы и признаков) прикрываем блокировкой.
+        self._lock = threading.RLock()
 
     @property
     def modalities(self) -> frozenset[str]:
@@ -86,11 +90,12 @@ class DecisionService:
         """Возвращает головы для набора вопросов, переиспользуя их между запросами."""
         signature = questions_signature(questions)
         key = f"{dim}:{signature}"
-        heads = self._heads_cache.get(key)
-        if heads is None:
-            heads = DecisionHeads(dim, questions, seed=self.seed)
-            self._load_checkpoint_into(heads, dim)
-            self._heads_cache[key] = heads
+        with self._lock:
+            heads = self._heads_cache.get(key)
+            if heads is None:
+                heads = DecisionHeads(dim, questions, seed=self.seed)
+                self._load_checkpoint_into(heads, dim)
+                self._heads_cache[key] = heads
         return heads
 
     def save_heads(
@@ -115,7 +120,23 @@ class DecisionService:
 
     def _load_checkpoint_into(self, heads: DecisionHeads, dim: int) -> None:
         path = self._checkpoint_path(heads.questions)
-        if path is None or not path.exists():
+        if path is None:
+            return
+        if not path.exists():
+            # Молчаливое обслуживание необученными головами — источник трудно
+            # диагностируемых низких метрик. Если каталог есть, а нужной подписи
+            # нет (например, критерии в вопросе не совпали с обучением) — предупреждаем.
+            if path.parent.exists():
+                logger.warning(
+                    "no checkpoint %s for questions signature %s; "
+                    "serving untrained heads",
+                    path.name,
+                    questions_signature(heads.questions),
+                )
+            else:
+                logger.info(
+                    "no checkpoint dir %s; serving untrained heads", path.parent
+                )
             return
         payload = torch.load(path, map_location="cpu", weights_only=True)
         if int(payload.get("dim", -1)) != dim:
@@ -129,19 +150,23 @@ class DecisionService:
         heads.load_state_dict(payload["state_dict"])
 
     def _encode_prompts(self, prompts: list[str], *, use_cache: bool = True) -> Tensor:
-        if not use_cache:
+        if not use_cache or not self.cache_size:
             return self.encoder.encode(prompts)
-        rows: list[Tensor | None] = [None] * len(prompts)
-        missing: list[str] = []
-        missing_idx: list[int] = []
-        for i, prompt in enumerate(prompts):
-            cached = self._feature_cache.get(prompt)
-            if cached is not None:
-                self._feature_cache.move_to_end(prompt)
-                rows[i] = cached
-            else:
-                missing.append(prompt)
-                missing_idx.append(i)
+        # Блокировка оберегает только кэш (OrderedDict). Сам forward энкодера
+        # выполняется вне блокировки, иначе синхронные эндпоинты в threadpool
+        # сериализовались бы на время дорогого encode/GPU-прохода.
+        with self._lock:
+            rows: list[Tensor | None] = [None] * len(prompts)
+            missing: list[str] = []
+            missing_idx: list[int] = []
+            for i, prompt in enumerate(prompts):
+                cached = self._feature_cache.get(prompt)
+                if cached is not None:
+                    self._feature_cache.move_to_end(prompt)
+                    rows[i] = cached
+                else:
+                    missing.append(prompt)
+                    missing_idx.append(i)
         if missing:
             features = self.encoder.encode(missing)
             if features.shape[0] != len(missing):
@@ -149,10 +174,10 @@ class DecisionService:
                     "encoder returned "
                     f"{features.shape[0]} rows for {len(missing)} prompts"
                 )
-            for j, i in enumerate(missing_idx):
-                vector = features[j]
-                rows[i] = vector
-                if self.cache_size:
+            with self._lock:
+                for j, i in enumerate(missing_idx):
+                    vector = features[j]
+                    rows[i] = vector
                     self._feature_cache[prompts[i]] = vector
                     self._feature_cache.move_to_end(prompts[i])
                     while len(self._feature_cache) > self.cache_size:

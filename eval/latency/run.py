@@ -41,17 +41,54 @@ HTTP_PAYLOAD: dict[str, Any] = {
 }
 
 
-def _run_local(warmup: int, n: int) -> dict[str, Any]:
-    from api.server.service import DecisionService
+def _run_local(
+    warmup: int,
+    n: int,
+    *,
+    encoder_id: str | None = None,
+    dim: int = 768,
+    device: str = "auto",
+    dtype: str = "float32",
+    max_length: int | None = 256,
+    batch_size: int = 16,
+) -> dict[str, Any]:
+    from src.device import check_dtype_device, resolve_device, resolve_dtype
 
-    service = DecisionService(seed=0)
+    resolved_device = resolve_device(device)
+    resolved_dtype = resolve_dtype(dtype)
+    check_dtype_device(resolved_dtype, resolved_device)
+    if encoder_id:
+        from src.encoder.gemma import GemmaStateEncoder
+
+        encoder = GemmaStateEncoder(
+            model_id=encoder_id,
+            feature_dim=dim,
+            dtype=resolved_dtype,
+            device=resolved_device,
+            max_length=max_length,
+            batch_size=batch_size,
+        ).load()
+        from api.server.service import DecisionService
+
+        service = DecisionService(encoder=encoder, dim=dim)
+    else:
+        from api.server.service import DecisionService
+
+        service = DecisionService(seed=0)
     phases = profile_phases(
         service, DEMO_STATE, DEMO_QUESTIONS, repeats=n, warmup=warmup
     )
     end_to_end = LatencyBenchmark(
         callable=lambda: service.decide(DEMO_STATE, DEMO_QUESTIONS)
     ).run(warmup=warmup, n=n)
-    return {"mode": "local", "phases": phases, "end_to_end": end_to_end}
+    return {
+        "mode": "local",
+        "encoder": encoder_id or "hash",
+        "device": resolved_device,
+        "dtype": str(resolved_dtype),
+        "phases": phases,
+        "end_to_end": end_to_end,
+    }
 
 
 def _run_http(url: str, warmup: int, n: int, timeout: float) -> dict[str, Any]:
@@ -73,6 +110,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=3, help="прогревочные прогоны")
     parser.add_argument("--timeout", type=float, default=60.0, help="таймаут HTTP, с")
     parser.add_argument(
+        "--encoder",
+        help="HF-id текстового энкодера для локального режима (иначе hash-энкодер)",
+    )
+    parser.add_argument("--dim", type=int, default=768, help="feature_dim энкодера")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="auto|cpu|cuda|cuda:0|mps (DECISION_DEVICE-совместимо)",
+    )
+    parser.add_argument(
+        "--dtype",
+        default="float32",
+        help="float32|float16|bfloat16 (DECISION_DTYPE-совместимо)",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="выводить только JSON-отчёт"
     )
     return parser.parse_args(argv)
@@ -83,7 +135,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.http:
         report = _run_http(args.http, args.warmup, args.n, args.timeout)
     else:
-        report = _run_local(args.warmup, args.n)
+        report = _run_local(
+            args.warmup,
+            args.n,
+            encoder_id=args.encoder,
+            dim=args.dim,
+            device=args.device,
+            dtype=args.dtype,
+        )
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
