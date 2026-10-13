@@ -124,6 +124,36 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_MODEL_ID` | имя модели на HF Hub | `google/gemma-4-12B` |
 | `DECISION_FEATURE_DIM` | размерность признаков | `768` |
 | `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
+| `DECISION_BACKEND` | исполнитель решений: `local` или `http` | `local` |
+| `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
+| `DECISION_BACKEND_MODEL` | имя внешней модели (поле `model`) | `remote` |
+| `DECISION_BACKEND_MODALITIES` | модальности внешнего бэкенда | `text` |
+
+### Бэкенды: локальные головы или внешняя модель
+
+`/v1/systemone` обслуживается «бэкендом». По умолчанию это локальные головы
+(`local`, только текст). Если задать `DECISION_BACKEND=http` и
+`DECISION_BACKEND_URL`, сервис становится прокси к любому внешнему
+SystemOne-совместимому сервису — Cloudflare Clef / Clef-Flash (Workers AI,
+SGLang, vLLM), Perplexity Decider и т.п.:
+
+```bash
+DECISION_BACKEND=http \
+DECISION_BACKEND_URL=http://127.0.0.1:30000 \
+DECISION_BACKEND_MODEL=clef-flash \
+DECISION_BACKEND_MODALITIES=text,image,video \
+  uvicorn api.server.main:app --port 8000
+```
+
+Бэкенд объявляет поддерживаемые модальности (`Capabilities`). Если запрос
+содержит неподдерживаемую модальность (например, `images` на текстовом
+локальном бэкенде), сервис отвечает структурированной ошибкой, не пытаясь
+тихо деградировать:
+
+```json
+{"error": {"code": "MODALITY_NOT_SUPPORTED",
+           "supported": ["text"], "requested": ["text", "image"]}}
+```
 
 Указывать размерность необязательно: головы строятся по фактической размерности
 выхода энкодера (`features.shape[-1]`), а если она отличается от 768 — вход
@@ -171,6 +201,14 @@ ss -ltn | grep ':8000 ' || echo "порт 8000 свободен"
 
 ## Использование: справочник API
 
+Есть два эндпоинта с одной и той же моделью решений:
+
+- `POST /decisions` — собственный типизированный API (обёртка со
+  `schema_version`), удобен для SDK и русскоязычных примеров;
+- `POST /v1/systemone` — стандартный протокол Jev/SystemOne, совместимый с
+  Clef/Clef-Flash/Perplexity Decider (поле `model`, ответы в `answers`,
+  `usage`, необязательные `images`/`videos`).
+
 ### Формат вопросов
 
 | Тип | Использование | Запрос |
@@ -202,6 +240,45 @@ ss -ltn | grep ':8000 ' || echo "порт 8000 свободен"
   }
 }
 ```
+
+### Протокол Jev/SystemOne (`/v1/systemone`)
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v1/systemone \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "model": "local",
+        "state": "Stripe failing for 3 days, losing sales",
+        "questions": {
+          "urgent": {"type": "noul", "instructions": "Is this urgent?"},
+          "team":   {"type": "choice", "criteria": {"billing": "money", "technical": "errors"}},
+          "risk":   {"type": "score",  "criteria": ["low", "medium", "high"]}
+        }
+      }'
+```
+
+Ответ:
+
+```json
+{
+  "model": "local",
+  "answers": {
+    "urgent": {"type": "noul", "probability": 0.72, "confidence": 0.44},
+    "team":   {"type": "choice", "choice": "technical",
+               "confidence": 0.61, "probabilities": {"billing": 0.39, "technical": 0.61}},
+    "risk":   {"type": "score", "score": 1.4, "confidence": 0.52,
+               "probabilities": {"low": 0.2, "medium": 0.4, "high": 0.4},
+               "legend": ["low", "medium", "high"]}
+  },
+  "usage": {"questions": 3}
+}
+```
+
+Особенности протокола: `instructions` необязателен (при отсутствии берётся id
+вопроса), а для `choice`/`score` допустимые варианты можно задавать только через
+`criteria` (ключи/элементы становятся опциями). Поля `images`, `videos`,
+`media_kwargs` принимаются; если бэкенд их не поддерживает — возвращается ошибка
+`MODALITY_NOT_SUPPORTED`.
 
 ### curl
 
@@ -320,7 +397,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 95 passed
+.venv/bin/python -m pytest                          # 114 passed
 .venv/bin/python -m ruff check src api eval training tests examples
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
@@ -345,13 +422,13 @@ systemctl status decision-api@api.service
 ## Структура репозитория
 
 ```
-src/            — модель: encoder, decision heads, sampler, схемы (schemas.py)
+src/            — модель: encoder, decision heads, sampler, бэкенды (backends/), схемы (schemas.py)
 api/            — FastAPI-сервер (server/) и Python SDK (sdk/client.py)
 training/       — SFT (sft/) и RLCD (rlcd/)
 eval/           — калибровка (calibration/) и latency (latency/)
 deploy/         — Ubuntu/CentOS + systemd
 examples/       — примеры (русский разбор обращения)
-tests/          — pytest-набор (95 тестов)
+tests/          — pytest-набор (114 тестов)
 scripts/        — скрипты окружения (bootstrap.sh — скелет, не для повторного запуска)
 README.md       — этот файл
 requirements.txt
