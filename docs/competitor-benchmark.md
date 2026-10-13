@@ -27,6 +27,18 @@ Perplexity Decider и любые vLLM/SGLang-эндпоинты на `POST /v1/s
 multi-class Brier, top-label ECE). Каскад, помимо качества, показывает
 `requests_with_escalation` — сколько запросов потребовали внешнего вызова.
 
+## Наборы (`--specs`)
+
+| `--specs` | Источник | Вопросы |
+| --- | --- | --- |
+| `support` | синтетические тикеты (`eval.datasets.text_dataset`) | 6 вопросов всех типов |
+| `public` | AG News (`eval.datasets.public_dataset`) | тема/бизнес/техноуровень |
+| `routerbench` | RouterBench (`eval.datasets.routerbench`) | `escalate`/`route`/`benefit` |
+
+`routerbench` — публичный decision-датасет маршрутизации LLM (см.
+`docs/routerbench.md`): метки реальные, промпты разнородные. Для него доступен
+`--shot 0shot|5shot` (по умолчанию `0shot`).
+
 ## Участники
 
 - `local` — наши локальные головы (`LocalHeadsBackend` над `DecisionService`;
@@ -66,6 +78,22 @@ python -m eval.competitors.run --specs public --limit 200 \
 Любой сервис, отвечающий на `POST /v1/systemone` схемой
 `{"answers": {name: {...}}, "usage": {...}}`, подключается одной строкой
 `--remote`.
+
+## Кривая «качество против доли эскалаций» (`--sweep`)
+
+Каскад — это компромисс: чем ниже порог уверенности, тем больше внешних вызовов
+и тем выше качество. `--sweep` считает всю кривую (порог от 0.0 до 1.0) и кладёт
+её в отчёт как `cascade_sweep`:
+
+```bash
+python -m eval.competitors.run --specs routerbench --limit 500 \
+    --mock --mock-latency-ms 2 --sweep --sweep-points 11 \
+    --out data/competitors_routerbench.json
+```
+
+Вывод: таблица `cascade sweep -> <fallback>` (`threshold`, `acc`, `esc%`, `p50ms`)
+и тот же набор строк в JSON. Порог `0.0` — чисто локальный ответ, `1.0` — всё
+уходит во внешний сервис; между ними виден фронт «качество/цена».
 
 ## Зафиксированный прогон (референс)
 

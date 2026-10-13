@@ -592,6 +592,30 @@ DECISION_DEVICE=cuda .venv/bin/python -m eval.report.run \
 считаются top-1 accuracy, multi-class Brier и top-label ECE. Референс на AG News
 (gpt2, GPU): overall accuracy 0.425 → 0.884, ECE по темам 0.725 → 0.151.
 
+### Публичная оценка (RouterBench): маршрутизация LLM
+
+Второй публичный адаптер — `withmartian/routerbench` (Hu et al., 2024,
+arXiv:2403.12031): ~36k промптов из MMLU/GSM-8K/HellaSwag/... с оценками качества
+и стоимостью ответов 11 моделей. Это настоящая decision-задача — «стоит ли
+эскалировать на более сильную модель», а не классификация тем. Из оценок трёх
+уровней (`mistral-7b` → `mixtral-8x7b` → `gpt-4`) выводятся три типизированных
+вопроса: `escalate` (noul, триггер каскада), `route` (choice) и `benefit`
+(score).
+
+```bash
+.venv/bin/python -m eval.datasets.routerbench --out-dir data/routerbench --limit 6000
+DECISION_MAX_LENGTH=256 .venv/bin/python -m eval.report.run --specs routerbench \
+  --encoder openai-community/gpt2 --dim 768 --train-steps 600 \
+  --device cuda --limit 4000 --out-dir data/report_routerbench
+```
+
+Референс (gpt2, GPU): overall accuracy 0.356 → 0.593; `escalate` 0.214 → 0.787
+(ECE 0.786 → 0.213). **Честно:** маршрутизация трудна, и заморожённый gpt2 даёт
+умеренный прирост — `escalate` выходит лишь на базовую частоту класса (~0.79), а
+`route`/`benefit` ненамного лучше majority. Набор ценен как честный публичный
+бенчмарк (`accuracy < 1.0`), а не как доказательство высокого качества. Детали —
+в `docs/routerbench.md`.
+
 ### Бенчмарк против конкурентов
 
 `eval.competitors` сравнивает локальные головы, каскад и внешние
@@ -607,12 +631,16 @@ p50/p95/p99 и долю эскалаций.
 # реальные сервисы
 .venv/bin/python -m eval.competitors.run --specs public --limit 200 \
   --remote clef-flash=http://127.0.0.1:8000 --out data/competitors.json
+
+# публичный decision-датасет RouterBench + кривая «качество/цена» (--sweep)
+.venv/bin/python -m eval.competitors.run --specs routerbench --limit 500 \
+  --mock --mock-latency-ms 2 --sweep --out data/competitors_routerbench.json
 ```
 
-Методика и зафиксированные числа — в `docs/competitor-benchmark.md`. Ключевой
-вывод: каскад «local-first» сохраняет качество локальной модели, обращаясь к
-внешнему сервису лишь за единицы процентов решений (0.911 против 0.908 у local при
-1.94% эскалаций).
+Методика и зафиксированные числа — в `docs/competitor-benchmark.md` (RouterBench
+и `--sweep` — там же). Ключевой вывод: каскад «local-first» сохраняет качество
+локальной модели, обращаясь к внешнему сервису лишь за единицы процентов решений
+(0.911 против 0.908 у local при 1.94% эскалаций).
 
 ## Обучение голов
 
@@ -746,7 +774,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 331 passed, 10 skipped
+.venv/bin/python -m pytest                          # 347 passed, 10 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
@@ -783,14 +811,14 @@ src/            — модель: encoder (+device.py), decision heads, sampler,
 api/            — FastAPI-сервер (server/) и Python SDK (sdk/: client.py, agent.py)
 training/       — SFT (sft/), RLCD (rlcd/) и рецепт обучения голов (recipe/)
 eval/           — калибровка (calibration/), latency (latency/), датасеты
-                  (datasets/, вкл. публичный AG News), офлайн-бенчмарк (benchmark/),
-                  отчёт untrained-vs-trained (report/) и сравнение с конкурентами
-                  (competitors/)
+                  (datasets/, вкл. публичные AG News и RouterBench),
+                  офлайн-бенчмарк (benchmark/), отчёт untrained-vs-trained
+                  (report/) и сравнение с конкурентами (competitors/)
 deploy/         — Ubuntu/CentOS + systemd
-docs/           — методика бенчмарка против конкурентов (competitor-benchmark.md)
+docs/           — методика бенчмарков (competitor-benchmark.md, routerbench.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
                   SystemOne, каскады, vision, интеграции, эксплуатация)
-tests/          — pytest-набор (331 тест + opt-in GPU/модель)
+tests/          — pytest-набор (347 тестов + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh: uv/pyenv/venv/gh)
 README.md       — этот файл
