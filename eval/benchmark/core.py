@@ -88,7 +88,36 @@ def _evaluate_head(
         return metrics
 
 
-def run_benchmark(
+def encode_examples(
+    specs: dict[str, QuestionSpec],
+    examples: list[dict[str, Any]],
+    encoder: TextEncoder,
+) -> dict[str, torch.Tensor]:
+    """Признаки по каждому вопросу: [n_examples, dim]."""
+    states = [ex["state"] for ex in examples]
+    return {
+        name: encoder.encode([build_prompt(state, spec) for state in states])
+        for name, spec in specs.items()
+    }
+
+
+def _metrics_report(
+    specs: dict[str, QuestionSpec],
+    examples: list[dict[str, Any]],
+    per_question: dict[str, torch.Tensor],
+    heads: DecisionHeads,
+) -> dict[str, Any]:
+    question_metrics: dict[str, dict[str, float]] = {}
+    for name, spec in specs.items():
+        labels = [ex["labels"][name] for ex in examples]
+        question_metrics[name] = _evaluate_head(
+            heads.heads[name], per_question[name], spec, labels
+        )
+    overall = float(np.mean([m["accuracy"] for m in question_metrics.values()]))
+    return {"questions": question_metrics, "overall_accuracy": overall}
+
+
+def train_benchmark(
     specs: dict[str, QuestionSpec],
     examples: list[dict[str, Any]],
     encoder: TextEncoder,
@@ -96,14 +125,10 @@ def run_benchmark(
     train_steps: int = 0,
     lr: float = 0.1,
     seed: int = 0,
-) -> dict[str, Any]:
+) -> tuple[DecisionHeads, dict[str, Any]]:
+    """Обучает головы на ``examples`` и возвращает их вместе с отчётом на них же."""
     torch.manual_seed(seed)
-    states = [ex["state"] for ex in examples]
-    per_question: dict[str, torch.Tensor] = {}
-    for name, spec in specs.items():
-        prompts = [build_prompt(state, spec) for state in states]
-        per_question[name] = encoder.encode(prompts)
-
+    per_question = encode_examples(specs, examples, encoder)
     dim = next(iter(per_question.values())).shape[-1]
     heads = DecisionHeads(dim, specs, seed=seed)
 
@@ -116,18 +141,62 @@ def run_benchmark(
             features=per_question, targets=target_map, steps=train_steps, batch_size=32
         )
 
-    question_metrics: dict[str, dict[str, float]] = {}
-    for name, spec in specs.items():
-        labels = [ex["labels"][name] for ex in examples]
-        question_metrics[name] = _evaluate_head(
-            heads.heads[name], per_question[name], spec, labels
-        )
+    report = _metrics_report(specs, examples, per_question, heads)
+    report.update(
+        n=len(examples),
+        encoder=type(encoder).__name__,
+        train_steps=train_steps,
+    )
+    return heads, report
 
-    overall = float(np.mean([m["accuracy"] for m in question_metrics.values()]))
-    return {
-        "n": len(examples),
-        "encoder": type(encoder).__name__,
-        "train_steps": train_steps,
-        "questions": question_metrics,
-        "overall_accuracy": overall,
-    }
+
+def evaluate_benchmark(
+    specs: dict[str, QuestionSpec],
+    examples: list[dict[str, Any]],
+    encoder: TextEncoder,
+    heads: DecisionHeads,
+) -> dict[str, Any]:
+    """Метрики готовых голов на произвольном (например, отложенном) наборе."""
+    per_question = encode_examples(specs, examples, encoder)
+    report = _metrics_report(specs, examples, per_question, heads)
+    report["n"] = len(examples)
+    return report
+
+
+def run_benchmark(
+    specs: dict[str, QuestionSpec],
+    examples: list[dict[str, Any]],
+    encoder: TextEncoder,
+    *,
+    train_steps: int = 0,
+    lr: float = 0.1,
+    seed: int = 0,
+    splits: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Единый прогон. Без ``splits`` — train/eval на одних примерах; со сплитами
+    обучает на ``splits["train"]`` и меряет обобщение на ``val``/``test``.
+    """
+    if splits is None:
+        _, report = train_benchmark(
+            specs, examples, encoder, train_steps=train_steps, lr=lr, seed=seed
+        )
+        return report
+
+    heads, train_report = train_benchmark(
+        specs, splits["train"], encoder, train_steps=train_steps, lr=lr, seed=seed
+    )
+    split_reports: dict[str, dict[str, Any]] = {"train": train_report}
+    for name, part in splits.items():
+        if name == "train":
+            continue
+        split_reports[name] = evaluate_benchmark(specs, part, encoder, heads)
+
+    primary_name = "test" if "test" in split_reports else "val"
+    primary = split_reports[primary_name]
+    report = dict(primary)
+    report.update(
+        encoder=type(encoder).__name__,
+        train_steps=train_steps,
+        splits=split_reports,
+    )
+    return report

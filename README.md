@@ -157,12 +157,17 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_FEATURE_DIM` | размерность признаков | `768` |
 | `DECISION_MAX_LENGTH` | обрезка входа энкодера, токенов (`none` — без обрезки) | `256` |
 | `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
-| `DECISION_BACKEND` | исполнитель решений: `local` или `http` | `local` |
+| `DECISION_BACKEND` | исполнитель решений: `local`, `http` или `cascade` | `local` |
 | `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
 | `DECISION_BACKEND_MODEL` | имя внешней модели (поле `model`) | `remote` |
 | `DECISION_BACKEND_MODALITIES` | модальности внешнего бэкенда | `text` |
+| `DECISION_CASCADE_FALLBACK_URL` | URL fallback для `cascade` | — (обязателен) |
+| `DECISION_CASCADE_FALLBACK_MODEL` | имя fallback-модели | `remote` |
+| `DECISION_CASCADE_FALLBACK_MODALITIES` | модальности fallback | `text` |
+| `DECISION_CASCADE_THRESHOLD` | порог уверенности для эскалации (0–1) | `0.6` |
 | `DECISION_VISION_MODEL_ID` | CLIP/SigLIP для локальных `images` | — (без vision) |
-| `DECISION_VISION_DIM` | размерность признаков vision-энкодера | `512` |
+| `DECISION_VISION_DIM` | размерность признаков vision-энкодера (1–8192) | `512` |
+| `DECISION_MEDIA_ROOT` | allow-list каталог для чтения `images`/`videos` с диска | — (любой путь) |
 
 ### Локальная мультимодальность
 
@@ -219,6 +224,25 @@ DECISION_BACKEND_MODALITIES=text,image,video \
            "supported": ["text"], "requested": ["text", "image"]}}
 ```
 
+#### Каскад: локальные головы + внешняя модель (опционально)
+
+Режим `DECISION_BACKEND=cascade` запускает **local-first** схему: сначала отвечают
+локальные головы, а во внешнюю модель эскалируются только вопросы с
+`confidence` ниже порога (или неподдерживаемую модальность — целиком). Так
+внешний вызов платится лишь за действительно неясные случаи:
+
+```bash
+DECISION_BACKEND=cascade \
+DECISION_CASCADE_FALLBACK_URL=http://127.0.0.1:30000 \
+DECISION_CASCADE_FALLBACK_MODEL=clef-flash \
+DECISION_CASCADE_THRESHOLD=0.6 \
+  uvicorn api.server.main:app --port 8000
+```
+
+В `usage` возвращается `escalated` — число эскалированных вопросов, и `fallback`
+с расходом внешнего бэкенда. Модальности каскада — объединение модальностей
+primary и fallback.
+
 Указывать размерность необязательно: головы строятся по фактической размерности
 выхода энкодера (`features.shape[-1]`), а если она отличается от 768 — вход
 проектируется автоматически.
@@ -265,13 +289,27 @@ ss -ltn | grep ':8000 ' || echo "порт 8000 свободен"
 
 ## Использование: справочник API
 
-Есть два эндпоинта с одной и той же моделью решений:
+Есть три эндпоинта с одной и той же моделью решений:
 
 - `POST /decisions` — собственный типизированный API (обёртка со
   `schema_version`), удобен для SDK и русскоязычных примеров;
+- `POST /decisions/batch` — тот же контракт для списка состояний (`states`):
+  все промпты кодируются одним прогоном энкодера, ответ — список `results`;
 - `POST /v1/systemone` — стандартный протокол Jev/SystemOne, совместимый с
   Clef/Clef-Flash/Perplexity Decider (поле `model`, ответы в `answers`,
   `usage`, необязательные `images`/`videos`).
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/decisions/batch \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "states": ["Stripe недоступен, теряем заказы", "Как сменить тариф?"],
+        "questions": {
+          "срочность": {"type": "noul",   "instructions": "Срочно?"},
+          "команда":   {"type": "choice", "instructions": "Кто?", "options": ["биллинг", "интеграция"]}
+        }
+      }'
+```
 
 ### Формат вопросов
 
@@ -444,19 +482,30 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 # текст (тиккеты с метками) + изображения (фигуры) в ./data
 .venv/bin/python -m eval.datasets.run --text-n 1000 --image-n 500 --out-dir data
 
-# бенчмарк: обучение голов на датасете и метрики accuracy / Brier / ECE
+# бенчмарк: обучение голов на train и метрики на отложенных val/test
 .venv/bin/python -m eval.benchmark.run \
   --dataset data/support_tickets.jsonl --encoder hash --train-steps 200 \
-  --out data/report.json
+  --val-fraction 0.2 --test-fraction 0.2 --out data/report.json
 ```
 
 Генератор строит состояние из латентного сценария и вплетает в текст ключевые
 слова, коррелирующие с меткой, — так головы действительно могут выучить
 соответствие, а бенчмарк измерить его. Каждый вопрос кодируется своим промптом
-(как в рантайме), поэтому головы не смешивают цели. Пример прогона на 1000
-тиккетов (hash-энкодер): `overall_accuracy` ≈ 0.276 без обучения (уровень
-случайного угадывания) и 1.000 после 200 шагов SFT. Для `noul` дополнительно
-считаются Brier и ECE. Датасеты и отчёты складываются в `data/` (в `.gitignore`).
+(как в рантайме), поэтому головы не смешивают цели.
+
+`--val-fraction`/`--test-fraction` включают честный train/val/test-сплит: головы
+обучаются **только** на train, а метрики считаются на отложенных наборах
+(`report["splits"]`), при этом поля `report["questions"]`/`overall_accuracy`
+указывают на test. Без сплитов обучение и оценка идут на одних данных.
+
+**Честная оговорка.** Синтетические метки линейно отделимы по ключевым словам,
+поэтому даже hash-энкодер с линейной головой после 200 шагов SFT даёт
+`overall_accuracy = 1.000` не только на train, но и на отложенных val/test
+(по 200 примеров каждый). Это метрика **на синтетике**, и она доказывает
+работоспособность конвейера, а не качество на реальных данных: без обучения та
+же схема даёт ≈ 0.276 (уровень случайного угадывания). Для `noul`
+дополнительно считаются Brier и ECE. Датасеты и отчёты складываются в `data/`
+(в `.gitignore`).
 
 ## Обучение голов
 
@@ -476,6 +525,29 @@ SFTTrainer(heads, lr=0.1).fit(
 )
 # target: "choice"/"score" — классы-индексы, "noul" — float-цели в [0,1].
 # Для одного вопроса допустим единый тензор features.
+```
+
+### Рецепт обучения голов (train/val/test)
+
+Готовый рецепт обучает головы на train-сплите и сохраняет чекпоинт вместе с
+метаданными (энкодер, размерность, хэш датасета, метрики по сплитам):
+
+```bash
+# сгенерировать данные и обучить головы
+.venv/bin/python -m training.recipe.train_heads --generate 1000 \
+  --out-dir checkpoints/support --encoder hash --dim 64 --train-steps 300
+
+# или на своём датасете
+.venv/bin/python -m training.recipe.train_heads \
+  --dataset data/support_tickets.jsonl --out-dir checkpoints/support \
+  --encoder openai-community/gpt2 --dim 768 --train-steps 300
+```
+
+На выходе `checkpoints/support/heads.pt` и `metadata.json`. Обученные веса весят
+мало и публикуются как **артефакт GitHub Release** (а не в git):
+
+```bash
+training/recipe/publish_release.sh v0.1.0 checkpoints/support slavabars/jev
 ```
 
 ### Чекпоинты голов и переиспользование
@@ -509,7 +581,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 162 passed
+.venv/bin/python -m pytest                          # 190 passed
 .venv/bin/python -m ruff check src api eval training tests examples
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
@@ -536,12 +608,12 @@ systemctl status decision-api@api.service
 ```
 src/            — модель: encoder, decision heads, sampler, бэкенды (backends/), схемы (schemas.py)
 api/            — FastAPI-сервер (server/) и Python SDK (sdk/client.py)
-training/       — SFT (sft/) и RLCD (rlcd/)
+training/       — SFT (sft/), RLCD (rlcd/) и рецепт обучения голов (recipe/)
 eval/           — калибровка (calibration/), latency (latency/),
                   генераторы датасетов (datasets/) и офлайн-бенчмарк (benchmark/)
 deploy/         — Ubuntu/CentOS + systemd
 examples/       — примеры (русский разбор обращения)
-tests/          — pytest-набор (162 теста)
+tests/          — pytest-набор (190 тестов)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — скрипты окружения (bootstrap.sh — скелет, не для повторного запуска)
 README.md       — этот файл
@@ -557,5 +629,8 @@ pytest.ini
   подгружаются при старте, но готовой обученной модели «из коробки» нет — это
   особенность платформы, а не готовая модель.
 - **GPU-модели** (gemma-4-12B) требуют CUDA-машины; на CPU используйте gpt2.
-- **Roadmap**: реальная калибровка на gemma-выходе, батч-опросы многих состояний,
-  вариант энкодера-трансформера с attention-mask состояний, интеграция в чат-агентов.
+- **Качество отложенной оценки**: доступные сплиты синтетические и тривиально
+  разделимы (см. выше), поэтому `1.000` — это про конвейер, а не про реальный
+  домен. Реальная оценка требует размеченных данных.
+- **Roadmap**: реальная калибровка на gemma-выходе, вариант энкодера-трансформера
+  с attention-mask состояний, интеграция в чат-агентов.

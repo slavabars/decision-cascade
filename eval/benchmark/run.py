@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from api.server.service import HashStateEncoder
 from eval.benchmark.core import run_benchmark
-from eval.datasets.text_dataset import QUESTIONS, spec_from_api
+from eval.datasets.text_dataset import QUESTIONS, spec_from_api, split_examples
 
 
 def _load_examples(path: Path) -> list[dict]:
@@ -20,12 +21,21 @@ def _load_examples(path: Path) -> list[dict]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
+def _max_length() -> int | None:
+    raw = os.environ.get("DECISION_MAX_LENGTH", "256").strip().lower()
+    if raw in ("", "none", "0"):
+        return None
+    return int(raw)
+
+
 def _make_encoder(name: str, dim: int):
     if name == "hash":
         return HashStateEncoder(dim)
     from src.encoder.gemma import GemmaStateEncoder
 
-    return GemmaStateEncoder(model_id=name, feature_dim=dim)
+    return GemmaStateEncoder(
+        model_id=name, feature_dim=dim, max_length=_max_length()
+    ).load()
 
 
 def main() -> None:
@@ -37,6 +47,8 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--limit", type=int, default=0, help="0 = все примеры")
+    parser.add_argument("--val-fraction", type=float, default=0.0)
+    parser.add_argument("--test-fraction", type=float, default=0.0)
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
@@ -45,9 +57,24 @@ def main() -> None:
         examples = examples[: args.limit]
     specs = {name: spec_from_api(data) for name, data in QUESTIONS.items()}
 
+    splits = None
+    if args.val_fraction or args.test_fraction:
+        splits = split_examples(
+            examples,
+            val_fraction=args.val_fraction,
+            test_fraction=args.test_fraction,
+            seed=args.seed,
+        )
+
     encoder = _make_encoder(args.encoder, args.dim)
     report = run_benchmark(
-        specs, examples, encoder, train_steps=args.train_steps, lr=args.lr, seed=args.seed
+        specs,
+        examples,
+        encoder,
+        train_steps=args.train_steps,
+        lr=args.lr,
+        seed=args.seed,
+        splits=splits,
     )
 
     print(f"n={report['n']} encoder={report['encoder']} train_steps={report['train_steps']}")
@@ -59,6 +86,8 @@ def main() -> None:
             extra = f" mean_label={metrics['mean_expected_label']:.2f}"
         print(f"  {name:<12} [{metrics['type']:<5}] acc={metrics['accuracy']:.3f}{extra}")
     print(f"overall_accuracy={report['overall_accuracy']:.3f}")
+    for split_name, split_report in report.get("splits", {}).items():
+        print(f"  [{split_name}] acc={split_report['overall_accuracy']:.3f}")
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

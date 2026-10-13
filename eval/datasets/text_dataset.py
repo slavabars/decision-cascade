@@ -178,6 +178,29 @@ def generate_examples(n: int, seed: int = 0) -> list[dict[str, Any]]:
     return examples
 
 
+def split_examples(
+    examples: list[dict[str, Any]],
+    *,
+    val_fraction: float = 0.1,
+    test_fraction: float = 0.1,
+    seed: int = 0,
+) -> dict[str, list[dict[str, Any]]]:
+    """Детерминированно делит примеры на train/val/test без пересечений."""
+    if not 0.0 <= val_fraction < 1.0 or not 0.0 <= test_fraction < 1.0:
+        raise ValueError("fractions must be in [0.0, 1.0)")
+    if val_fraction + test_fraction >= 1.0:
+        raise ValueError("val_fraction + test_fraction must be < 1.0")
+    shuffled = list(examples)
+    Random(seed).shuffle(shuffled)
+    n = len(shuffled)
+    n_test = round(n * test_fraction)
+    n_val = round(n * val_fraction)
+    test = shuffled[:n_test]
+    val = shuffled[n_test : n_test + n_val]
+    train = shuffled[n_test + n_val :]
+    return {"train": train, "val": val, "test": test}
+
+
 def write_jsonl(path: str | Path, examples: list[dict[str, Any]]) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
