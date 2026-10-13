@@ -18,6 +18,9 @@
 
 ### Changed
 
+- Vision-энкодер `ClipVisionEncoder` грузит бэкбон через
+  `AutoModel`/`AutoImageProcessor`, поэтому поддерживает не только CLIP, но и
+  **SigLIP** (`google/siglip-*`) по одному `model_id` (токенизатор не грузится).
 - Бренд унифицирован на **decision-cascade**: README, NOTICE, метаданные пакета,
   заголовок HTTP-API и служебные описания. `SystemOne` остаётся названием
   внешнего протокола совместимости (Jev/TypeSafe AI); в README добавлен раздел

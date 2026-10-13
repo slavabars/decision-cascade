@@ -73,7 +73,7 @@ def _read_source(ref: MediaRef, media_root: Path | None = None) -> bytes:
 def _extract_image_features(outputs: object) -> Tensor:
     """Достаёт тензор признаков изображения из результата ``get_image_features``.
 
-    В transformers >=5 ``CLIPModel.get_image_features`` возвращает
+    В transformers >=5 ``get_image_features`` (CLIP/SigLIP) возвращает
     ``BaseModelOutputWithPooling`` (уже спроецированный вектор лежит в
     ``pooler_output``), в старых версиях — сразу тензор. Поддерживаем оба, плюс
     ``image_embeds`` и усреднение ``last_hidden_state`` как запасной вариант.
@@ -152,11 +152,29 @@ class HashVisionEncoder(VisionEncoder):
         return torch.stack(rows)
 
 
+def _load_vision_backbone(model_id: str) -> tuple[object, object]:
+    """Загружает vision-бэкбон через ``AutoModel``/``AutoImageProcessor``.
+
+    Для признаков изображений нужен только image-процессор, поэтому токенизатор
+    не грузится (и его опциональные зависимости — например, ``sentencepiece``
+    у SigLIP — не требуются). Подходят и CLIP (``openai/clip-vit-*``), и SigLIP
+    (``google/siglip-*``): у обеих архитектур есть ``get_image_features``.
+    Возвращает ``(processor, model)``.
+    """
+    from transformers import AutoImageProcessor, AutoModel
+
+    processor = AutoImageProcessor.from_pretrained(model_id)
+    model = AutoModel.from_pretrained(model_id)
+    return processor, model
+
+
 class ClipVisionEncoder(VisionEncoder):  # pragma: no cover - требует загрузки модели
     """Реальный vision-энкодер на CLIP/SigLIP (transformers, опционально).
 
-    Поддерживает только изображения: видео требует отдельного декодирования
-    кадров (см. ``encode_images``).
+    Загрузка идёт через ``AutoModel``/``AutoImageProcessor``, поэтому подходят и
+    CLIP (``openai/clip-vit-*``), и SigLIP (``google/siglip-*``) — у обеих
+    архитектур есть ``get_image_features``. Поддерживаются только изображения:
+    видео требует отдельного декодирования кадров (см. ``encode_images``).
     """
 
     modalities = frozenset({"image"})
@@ -182,11 +200,10 @@ class ClipVisionEncoder(VisionEncoder):  # pragma: no cover - требует з�
         return _resolve_media_path(ref, self.media_root)
 
     def load(self) -> ClipVisionEncoder:
-        from transformers import CLIPModel, CLIPProcessor
-
-        self._processor = CLIPProcessor.from_pretrained(self.model_id)
-        self._model = CLIPModel.from_pretrained(self.model_id).to(self.device)
-        self._model.eval()
+        # Бэкбон грузится через Auto* (CLIP и SigLIP), затем переносится на
+        # устройство и переводится в eval-режим.
+        self._processor, self._model = _load_vision_backbone(self.model_id)
+        self._model = self._model.to(self.device).eval()
         return self
 
     def _encode_pil(self, images: list[object]) -> Tensor:

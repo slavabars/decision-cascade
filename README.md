@@ -224,8 +224,9 @@ vision-энкодер. Каждый энкодер сам объявляет с�
 `/v1/systemone` отклонит ровно те модальности, что не поддержаны.
 
 ```bash
-# CLIP включается переменной окружения (только изображения — видео требует
-# отдельного декодирования кадров)
+# CLIP/SigLIP включается переменной окружения: любая contrastive vision-модель
+# с get_image_features (например, google/siglip-base-patch16-224). Только
+# изображения — видео требует отдельного декодирования кадров.
 DECISION_VISION_MODEL_ID=openai/clip-vit-base-patch32 \
   uvicorn api.server.main:app --port 8000
 ```

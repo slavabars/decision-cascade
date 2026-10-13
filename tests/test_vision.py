@@ -150,3 +150,34 @@ def test_clip_encoder_requires_load_before_encode(tmp_path):
     encoder = ClipVisionEncoder(model_id="fake", dim=512, device="cpu")
     with pytest.raises(RuntimeError, match="load"):
         encoder.encode_images([str(image)])
+
+
+def test_clip_encoder_load_uses_auto_backbone(monkeypatch):
+    # load() должен быть архитектурно-нейтральным: бэкбон грузится через
+    # AutoModel/AutoProcessor, поэтому подходит и SigLIP, и CLIP.
+    from src.encoder import vision
+
+    captured = {}
+
+    class _FakeModel:
+        def to(self, device):
+            captured["device"] = device
+            return self
+
+        def eval(self):
+            captured["eval"] = True
+            return self
+
+    def _fake_backbone(model_id):
+        captured["model_id"] = model_id
+        return "processor", _FakeModel()
+
+    monkeypatch.setattr(vision, "_load_vision_backbone", _fake_backbone)
+
+    model_id = "google/siglip-base-patch16-224"
+    encoder = vision.ClipVisionEncoder(model_id=model_id, dim=768, device="cpu")
+    encoder.load()
+
+    assert captured == {"model_id": model_id, "device": "cpu", "eval": True}
+    assert encoder._processor == "processor"
+    assert isinstance(encoder._model, _FakeModel)
