@@ -9,14 +9,14 @@
 Запуск (сервер должен быть поднят, см. README):
 
     .venv/bin/python -m uvicorn api.server.main:app --port 8000
-    .venv/bin/python examples/chat_agent.py
-    .venv/bin/python examples/chat_agent.py --fallback http://remote:8080
+    .venv/bin/python examples/integrations/chat_agent.py
+    .venv/bin/python examples/integrations/chat_agent.py --fallback http://remote:8080
 """
 import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from api.sdk.agent import route_ticket
 from api.sdk.client import DecisionClient
