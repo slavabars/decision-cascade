@@ -23,6 +23,7 @@ from src.schemas import (
     confidence_noul,
     validate_distribution,
 )
+from src.versioning import CHECKPOINT_VERSION, migrate_checkpoint
 
 
 def _require_unique(name: str, field: str, values: tuple[str, ...]) -> None:
@@ -134,6 +135,7 @@ class DecisionHeads(nn.Module):
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
             {
+                "schema_version": CHECKPOINT_VERSION,
                 "dim": self.dim,
                 "questions": {
                     name: spec_to_dict(spec) for name, spec in self.questions.items()
@@ -146,8 +148,13 @@ class DecisionHeads(nn.Module):
 
     @classmethod
     def load_checkpoint(cls, path: str | Path, seed: int | None = None) -> DecisionHeads:
-        """Восстанавливает головы (структуру и веса) из чекпоинта."""
+        """Восстанавливает головы (структуру и веса) из чекпоинта.
+
+        Legacy-чекпоинты без ``schema_version`` читаются как версия ``1``; более
+        новый major отклоняется, чтобы старый код не читал неизвестный формат.
+        """
         payload = torch.load(Path(path), map_location="cpu", weights_only=True)
+        payload = migrate_checkpoint(payload)
         questions = {
             name: spec_from_dict(data) for name, data in payload["questions"].items()
         }

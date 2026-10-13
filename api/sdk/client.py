@@ -7,6 +7,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from src.schemas import SCHEMA_VERSION
+from src.versioning import is_compatible
 
 QuestionPayload = dict[str, Any]
 
@@ -43,11 +44,18 @@ class _Response(BaseModel):
 
 
 def validate_response(payload: dict[str, Any]) -> list[str] | None:
-    """Проверяет ответ API на соответствие типизированному контракту."""
+    """Проверяет ответ API на соответствие типизированному контракту.
+
+    Версия схемы должна быть совместима по major (аддитивные minor-изменения не
+    ломают клиент), см. ``src/versioning.py``.
+    """
     schema_version = payload.get("schema_version")
-    if not isinstance(schema_version, str) or schema_version != SCHEMA_VERSION:
+    if not isinstance(schema_version, str) or not is_compatible(
+        SCHEMA_VERSION, schema_version
+    ):
         raise ValueError(
-            f"schema_version mismatch: expected {SCHEMA_VERSION}, got {schema_version!r}"
+            f"schema_version mismatch: expected major of {SCHEMA_VERSION}, "
+            f"got {schema_version!r}"
         )
     _Response.model_validate(payload)
     for name, res in payload["decisions"].items():

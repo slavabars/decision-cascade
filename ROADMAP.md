@@ -26,7 +26,7 @@
 | Честная оценка на публичном датасете (AG News) | ✅ (13.10) | `eval/datasets/public_dataset.py`, `eval/report/run.py` |
 | Калибровка для `choice`/`score` (Brier/ECE) | ✅ (13.10) | `eval/calibration/metrics.py`, `eval/benchmark/core.py` |
 | Бенчмарк против конкурентов + mock | ✅ (13.10) | `eval/competitors/`, `docs/competitor-benchmark.md` |
-| Тесты | ✅ **254 passing** (ruff + shellcheck чисто) | `tests/` |
+| Тесты | ✅ **306 passing** (ruff + shellcheck чисто) | `tests/` |
 | Протокол Jev/SystemOne + прокси к Clef/Laya/Perplexity | ✅ | `api/server/systemone.py`, `src/backends/http.py` |
 | SFT + RLCD + рецепт train/val/test + публикация весов артефактом | ✅ (код) | `training/` |
 
@@ -141,7 +141,7 @@ calibration (ECE): topic 0.725→0.151, business 0.122→0.063, tech_level 0.795
 **Замер:** `cascade[local->mock]` acc **0.911** против local **0.908** при **1.94%**
 эскалаций — то же/лучшее качество при почти нулевых внешних вызовах.
 
-### Фаза F — Развитие (P2)
+### Фаза F — Развитие (P2) · ✅ сделано
 
 - [x] F1. Трансформерный энкодер с attention-mask: `TransformerStateEncoder` (encoder-only,
   `AutoModel`) + общий `masked_mean_pool`; вид выбирается `DECISION_ENCODER_KIND`
@@ -155,7 +155,10 @@ calibration (ECE): topic 0.725→0.151, business 0.122→0.063, tech_level 0.795
   (`route_ticket` → команда/приоритет/эскалация/тон), пример
   `examples/chat_agent.py` с клиентским фолбэком на внешний SystemOne-сервис,
   тесты `tests/test_agent.py`.
-- [ ] F4. Политика версионирования схемы (`SCHEMA_VERSION`) и миграций.
+- [x] F4. Политика версионирования схемы и миграций: `src/versioning.py`
+  (совместимость по major, legacy-версии), `schema_version` в чекпоинтах +
+  `migrate_checkpoint` (legacy → текущая, отказ на новом major), SDK принимает
+  совместимый minor. Тесты `tests/test_versioning.py`, `tests/test_service_sdk.py`.
 
 ---
 
@@ -194,7 +197,7 @@ A (masked pooling) ─┬─► B (GPU) ─────────────�
 
 ## 7. Definition of Done (общая)
 
-- `ruff check` и `shellcheck` чисто; `pytest` зелёный (254 passed, 7 skipped —
+- `ruff check` и `shellcheck` чисто; `pytest` зелёный (306 passed, 10 skipped —
   opt-in GPU/модель; GPU-тесты auto-skip без CUDA).
 - Каждая фаза сопровождается тестами; README/ROADMAP обновляются по ходу.
 - Никаких «сырых» чисел без команды воспроизведения и указания железа/версий.

@@ -378,6 +378,16 @@ curl -s -X POST http://127.0.0.1:8000/decisions/batch \
 }
 ```
 
+### Версионирование схемы (`schema_version`)
+
+Версии — `<major>[.<minor>]`, совместимость — по **major** (см.
+`src/versioning.py`): клиент, ожидающий `1.x`, принимает любой `1.y`, но не `2.*`.
+**minor** — аддитивные изменения (необязательные поля/вопросы), **major** —
+ломающие (удаление/переименование полей, смена семантики) с миграцией. Тот же
+принцип применяется к чекпоинтам голов: payload содержит `schema_version`
+(`CHECKPOINT_VERSION`), legacy-файлы без версии читаются как `1`, а более новый
+major отклоняется явной ошибкой, а не молчаливым чтением неизвестного формата.
+
 ### Протокол Jev/SystemOne (`/v1/systemone`)
 
 ```bash
@@ -733,7 +743,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 254 passed, 7 skipped
+.venv/bin/python -m pytest                          # 306 passed, 10 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
@@ -776,7 +786,7 @@ eval/           — калибровка (calibration/), latency (latency/), д�
 deploy/         — Ubuntu/CentOS + systemd
 docs/           — методика бенчмарка против конкурентов (competitor-benchmark.md)
 examples/       — примеры (русский разбор обращения, чат-агент с каскадом)
-tests/          — pytest-набор (254 теста + opt-in GPU/модель)
+tests/          — pytest-набор (306 тестов + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — окружение: bootstrap-user.sh (uv/pyenv/venv/gh), bootstrap.sh (скелет)
 README.md       — этот файл
@@ -800,6 +810,6 @@ pytest.ini
 - **Честная оценка**: синтетические сплиты тривиально разделимы (`1.000` — это про
   конвейер, а не про домен). Публичные числа — на AG News (accuracy 0.425 → 0.88)
   и в бенчмарке против конкурентов; для своего домена нужна своя разметка.
-- **Roadmap**: открыта фаза F (см. `ROADMAP.md`); публикация весов — релизом через
-  `training/recipe/publish_release.sh` (один пак) или
+- **Roadmap**: фазы A–F закрыты (см. `ROADMAP.md`); публикация весов — релизом
+  через `training/recipe/publish_release.sh` (один пак) или
   `training/recipe/publish_weight_packs.sh` (матрица).

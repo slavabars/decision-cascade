@@ -102,3 +102,29 @@ def test_sdk_validation_rejects_missing_confidence():
     del bad["decisions"]["u"]["confidence"]
     with pytest.raises(ValueError):
         validate_response(bad)
+
+
+def test_sdk_accepts_compatible_minor_version():
+    from api.sdk.client import validate_response
+
+    compatible = _json_payload()
+    compatible["schema_version"] = "1.7"
+    assert validate_response(compatible) is None
+
+
+def test_sdk_rejects_incompatible_major_version():
+    from api.sdk.client import validate_response
+
+    incompatible = _json_payload()
+    incompatible["schema_version"] = "2"
+    with pytest.raises(ValueError, match="schema_version"):
+        validate_response(incompatible)
+
+
+def test_sdk_rejects_malformed_version():
+    from api.sdk.client import validate_response
+
+    malformed = _json_payload()
+    malformed["schema_version"] = "not-a-version"
+    with pytest.raises(ValueError, match="schema_version"):
+        validate_response(malformed)
