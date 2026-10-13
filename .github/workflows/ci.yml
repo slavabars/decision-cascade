@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # CPU-only torch: заметно легче и быстрее, чем CUDA-сборка по умолчанию.
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate packaging (editable install)
+        run: pip install -e . --no-deps
+
+      - name: Lint (ruff)
+        run: ruff check src api eval training tests examples scripts
+
+      - name: Lint shell (shellcheck)
+        run: shellcheck -x $(git ls-files '*.sh')
+
+      - name: Tests
+        run: pytest -q
