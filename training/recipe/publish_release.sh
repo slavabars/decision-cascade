@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Публикует чекпоинт голов как артефакт GitHub Release (веса не коммитим в git).
 # Usage: training/recipe/publish_release.sh <tag> <checkpoint-dir> [repo]
+#
+# Загружаются все *.pt из каталога (heads.pt + копия под подписью вопросов,
+# которую сервис ищет в DECISION_CHECKPOINT_DIR) и metadata.json.
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
@@ -17,7 +20,13 @@ if [[ ! -f "$dir/heads.pt" ]]; then
   exit 1
 fi
 
-args=(release create "$tag" "$dir/heads.pt" "$dir/metadata.json"
+files=()
+for checkpoint in "$dir"/*.pt; do
+  [[ -e "$checkpoint" ]] && files+=("$checkpoint")
+done
+files+=("$dir/metadata.json")
+
+args=(release create "$tag" "${files[@]}"
   --title "$tag" --notes "Decision heads $tag")
 if [[ -n "$repo" ]]; then
   args+=(--repo "$repo")

@@ -59,15 +59,23 @@ QUESTIONS: dict[str, dict[str, Any]] = {
 
 def spec_from_api(data: dict[str, Any]) -> QuestionSpec:
     kind = data["type"]
+    criteria = data.get("criteria")
     if kind == "noul":
-        return NoulSpec(instructions=data["instructions"])
+        return NoulSpec(
+            instructions=data["instructions"],
+            criteria=tuple(criteria) if criteria else None,
+        )
     if kind == "choice":
         return ChoiceSpec(
-            instructions=data["instructions"], options=tuple(data["options"])
+            instructions=data["instructions"],
+            options=tuple(data["options"]),
+            criteria=dict(criteria) if criteria else None,
         )
     if kind == "score":
         return ScoreSpec(
-            instructions=data["instructions"], levels=tuple(data["levels"])
+            instructions=data["instructions"],
+            levels=tuple(data["levels"]),
+            criteria=tuple(criteria) if criteria else None,
         )
     raise ValueError(f"unsupported question type: {kind!r}")
 

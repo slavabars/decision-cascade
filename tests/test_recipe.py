@@ -105,6 +105,12 @@ def test_recipe_writes_checkpoint_and_metadata(tmp_path):
     for metrics in payload["metrics"].values():
         assert 0.0 <= metrics["overall_accuracy"] <= 1.0
     assert set(payload["questions"]) == set(SPECS)
+    # Копия под канонической подписью — drop-in для DECISION_CHECKPOINT_DIR.
+    from src.sampler.questions import questions_signature
+
+    signature = questions_signature(SPECS)
+    assert payload["questions_signature"] == signature
+    assert (out_dir / f"{signature}.pt").exists()
 
 
 def test_recipe_generates_dataset_when_missing(tmp_path):
@@ -124,4 +130,50 @@ def test_recipe_generates_dataset_when_missing(tmp_path):
         ]
     )
     assert (out_dir / "heads.pt").exists()
+    assert (out_dir / "dataset.jsonl").exists()
+
+
+def test_recipe_public_specs_uses_ag_news(tmp_path, monkeypatch):
+    from eval.datasets import public_dataset
+    from training.recipe import train_heads
+
+    def fake_ag_news(limit=None):
+        labels = {"topic": "World", "business": 0, "tech_level": 0}
+        return {
+            "train": [
+                {"id": f"t{i}", "state": f"news {i}", "labels": labels}
+                for i in range(40)
+            ],
+            "test": [
+                {"id": f"e{i}", "state": f"news test {i}", "labels": labels}
+                for i in range(10)
+            ],
+        }
+
+    monkeypatch.setattr(public_dataset, "load_ag_news", fake_ag_news)
+
+    out_dir = tmp_path / "ckpt"
+    meta = train_heads.main(
+        [
+            "--specs",
+            "public",
+            "--limit",
+            "40",
+            "--out-dir",
+            str(out_dir),
+            "--encoder",
+            "hash",
+            "--dim",
+            "32",
+            "--train-steps",
+            "5",
+            "--seed",
+            "0",
+        ]
+    )
+
+    assert meta["specs"] == "public"
+    assert meta["dataset_name"] == "ag_news"
+    assert set(meta["questions"]) == {"topic", "business", "tech_level"}
+    assert meta["splits"] == {"train": 32, "val": 8, "test": 10}
     assert (out_dir / "dataset.jsonl").exists()

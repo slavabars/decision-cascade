@@ -26,7 +26,7 @@ from eval.datasets.text_dataset import (
     split_examples,
     write_jsonl,
 )
-from src.sampler.questions import spec_to_dict
+from src.sampler.questions import questions_signature, spec_to_dict
 from src.schemas import SCHEMA_VERSION
 
 
@@ -42,11 +42,17 @@ def _encode_batch() -> int:
 def _make_encoder(name: str, dim: int):
     if name == "hash":
         return HashStateEncoder(dim)
+    from src.device import check_dtype_device, resolve_device, resolve_dtype
     from src.encoder.gemma import GemmaStateEncoder
 
+    device = resolve_device(os.environ.get("DECISION_DEVICE"))
+    dtype = resolve_dtype(os.environ.get("DECISION_DTYPE"))
+    check_dtype_device(dtype, device)
     return GemmaStateEncoder(
         model_id=name,
         feature_dim=dim,
+        dtype=dtype,
+        device=device,
         max_length=_max_length(),
         batch_size=_encode_batch(),
     ).load()
@@ -63,17 +69,77 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train decision heads (recipe)")
     parser.add_argument("--dataset", type=Path, default=None, help="JSONL датасет")
     parser.add_argument(
-        "--generate", type=int, default=0, help="сгенерировать N примеров"
+        "--generate", type=int, default=0, help="сгенерировать N примеров (support)"
+    )
+    parser.add_argument(
+        "--specs",
+        choices=["support", "public"],
+        default="support",
+        help="набор вопросов: синтетические тикеты или публичный AG News",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0, help="для public: ограничение train-сплита"
     )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--encoder", default="hash", help="'hash' или model_id")
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--train-steps", type=int, default=200)
     parser.add_argument("--lr", type=float, default=0.1)
+    parser.add_argument(
+        "--rlcd-steps",
+        type=int,
+        default=0,
+        help="шаги RLCD-калибровки noul-голов после SFT (0 — выключено)",
+    )
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=0)
     return parser
+
+
+def _load_data(
+    args: argparse.Namespace, out_dir: Path
+) -> tuple[dict, dict[str, list], Path, str]:
+    """Готовит (спецификации, сплиты, путь датасета, имя датасета).
+
+    ``support`` — синтетические тикеты (train/val/test режутся из одного набора),
+    ``public`` — публичный AG News с настоящим train/test-сплитом.
+    """
+    if args.specs == "public":
+        from eval.datasets.public_dataset import PUBLIC_SPECS, load_ag_news
+
+        base = load_ag_news(args.limit or None)
+        carved = split_examples(
+            base["train"],
+            val_fraction=args.val_fraction,
+            test_fraction=0.0,
+            seed=args.seed,
+        )
+        splits = {
+            "train": carved["train"],
+            "val": carved["val"],
+            "test": base["test"],
+        }
+        examples = splits["train"] + splits["test"]
+        dataset_path = out_dir / "dataset.jsonl"
+        write_jsonl(dataset_path, examples)
+        return PUBLIC_SPECS, splits, dataset_path, "ag_news"
+
+    specs = {name: spec_from_api(data) for name, data in QUESTIONS.items()}
+    if args.dataset is not None:
+        dataset_path = Path(args.dataset)
+        examples = _load_jsonl(dataset_path)
+    else:
+        examples = generate_examples(n=args.generate or 200, seed=args.seed)
+        dataset_path = out_dir / "dataset.jsonl"
+        write_jsonl(dataset_path, examples)
+    splits = split_examples(
+        examples,
+        val_fraction=args.val_fraction,
+        test_fraction=args.test_fraction,
+        seed=args.seed,
+    )
+    return specs, splits, dataset_path, "support"
 
 
 def main(argv: list[str] | None = None) -> dict:
@@ -81,23 +147,9 @@ def main(argv: list[str] | None = None) -> dict:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.dataset is not None:
-        dataset_path = Path(args.dataset)
-        examples = _load_jsonl(dataset_path)
-    else:
-        n = args.generate or 200
-        examples = generate_examples(n=n, seed=args.seed)
-        dataset_path = out_dir / "dataset.jsonl"
-        write_jsonl(dataset_path, examples)
+    specs, splits, dataset_path, dataset_name = _load_data(args, out_dir)
 
     dataset_hash = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
-    specs = {name: spec_from_api(data) for name, data in QUESTIONS.items()}
-    splits = split_examples(
-        examples,
-        val_fraction=args.val_fraction,
-        test_fraction=args.test_fraction,
-        seed=args.seed,
-    )
 
     encoder = _make_encoder(args.encoder, args.dim)
     heads, train_report = train_benchmark(
@@ -107,21 +159,30 @@ def main(argv: list[str] | None = None) -> dict:
         train_steps=args.train_steps,
         lr=args.lr,
         seed=args.seed,
+        rlcd_steps=args.rlcd_steps,
     )
     metrics = {"train": train_report}
     for name in ("val", "test"):
         metrics[name] = evaluate_benchmark(specs, splits[name], encoder, heads)
 
     checkpoint = heads.save_checkpoint(out_dir / "heads.pt")
+    # Копия под канонической подписью набора вопросов: сервис ищет чекпоинт как
+    # ``<checkpoint_dir>/<questions_signature>.pt``, поэтому файл можно положить
+    # в каталог DECISION_CHECKPOINT_DIR и он подхватится автоматически.
+    signature = questions_signature(specs)
+    signature_checkpoint = heads.save_checkpoint(out_dir / f"{signature}.pt")
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "encoder": args.encoder,
         "feature_dim": heads.dim,
         "max_length": _max_length(),
+        "specs": args.specs,
+        "dataset_name": dataset_name,
+        "questions_signature": signature,
         "dataset": {
             "path": str(dataset_path),
             "sha256": dataset_hash,
-            "n": len(examples),
+            "n": sum(1 for line in dataset_path.open(encoding="utf-8") if line.strip()),
         },
         "splits": {name: len(part) for name, part in splits.items()},
         "metrics": {
@@ -133,6 +194,7 @@ def main(argv: list[str] | None = None) -> dict:
         },
         "questions": {name: spec_to_dict(spec) for name, spec in specs.items()},
         "train_steps": args.train_steps,
+        "rlcd_steps": args.rlcd_steps,
         "lr": args.lr,
         "seed": args.seed,
     }
@@ -142,6 +204,7 @@ def main(argv: list[str] | None = None) -> dict:
     )
 
     print(f"checkpoint -> {checkpoint}")
+    print(f"signature  -> {signature_checkpoint}")
     print(f"metadata   -> {meta_path}")
     for name in ("train", "val", "test"):
         acc = metadata["metrics"][name]["overall_accuracy"]

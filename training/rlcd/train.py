@@ -53,3 +53,53 @@ class RLCDNoulTrainer:
             self.optimizer.step()
             history.append(float(rewards.mean().detach().item()))
         return history
+
+
+def calibrate_noul_heads(
+    heads,
+    features: dict[str, Tensor],
+    targets: dict[str, Tensor],
+    *,
+    steps: int = 200,
+    lr: float = 1e-2,
+    g: int = 8,
+) -> dict[str, float]:
+    """RLCD-калибровка noul-голов: reward = -|p - o|, веса копируются в головы.
+
+    Для каждой noul-головы обучается отдельная политика на её (и только её)
+    признаках. Калибровка применяется только если она *улучшает* среднюю
+    абсолютную ошибку вероятности на этих данных, иначе веса головы откатываются
+    (RLCD не должен ухудшать уже откалиброванную голову). Возвращает итоговую
+    среднюю абсолютную ошибку по каждой noul-голове.
+
+    Ограничение: гейт оценивается на тех же признаках, что и обучение, поэтому
+    гарантирует нерегрессию только на train; для строгой проверки передавайте
+    отложенный набор (в рецепте это пока train-сплит).
+    """
+    from src.sampler.questions import NoulSpec
+
+    history: dict[str, float] = {}
+    for name, spec in heads.questions.items():
+        if not isinstance(spec, NoulSpec):
+            continue
+        head = heads.heads[name]
+        x = features[name]
+        outcomes = targets[name].float()
+        with torch.no_grad():
+            before = float((torch.sigmoid(head.logits(x)) - outcomes).abs().mean())
+
+        trainer = RLCDNoulTrainer(head.linear.in_features, lr=lr, g=g)
+        trainer.train(x, outcomes, steps=steps)
+        with torch.no_grad():
+            after = float(
+                (torch.sigmoid(trainer.policy(x).squeeze(-1)) - outcomes).abs().mean()
+            )
+
+        if after < before:
+            with torch.no_grad():
+                head.linear.weight.copy_(trainer.policy.weight)
+                head.linear.bias.copy_(trainer.policy.bias)
+            history[name] = after
+        else:
+            history[name] = before
+    return history
