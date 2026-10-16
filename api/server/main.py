@@ -7,13 +7,17 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from api.server.service import DEFAULT_CHECKPOINT_DIR, DecisionService
+from api.server.service import (
+    DEFAULT_CHECKPOINT_DIR,
+    UNTRAINED_POLICIES,
+    DecisionService,
+)
 from api.server.systemone import (
     SystemOneRequest,
     SystemOneResponse,
@@ -27,6 +31,7 @@ from src.backends.http import HttpSystemOneBackend, parse_modalities
 from src.backends.local import LocalHeadsBackend
 from src.device import check_dtype_device, resolve_device, resolve_dtype
 from src.encoder.vision import VisionEncoder
+from src.errors import UntrainedDecisionError
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
 from src.schemas import SCHEMA_VERSION, DecisionResult
 
@@ -85,14 +90,36 @@ def parse_max_length(raw: str) -> int | None:
     return parsed if parsed >= 1 else None
 
 
+def resolve_untrained_policy() -> str:
+    """Разбирает ``DECISION_UNTRAINED``: ``allow``/``refuse``/``fallback``/``auto``.
+
+    ``auto`` (по умолчанию) — строгий режим, если каталог чекпоинтов задан явно
+    (``DECISION_CHECKPOINT_DIR``): тогда обученные головы ожидаются, и отдавать
+    случайные нельзя. Без этой переменной это осознанный демо-режим — ``allow``.
+    Решение не зависит от файловой системы, поэтому поведение воспроизводимо.
+    """
+    value = os.environ.get("DECISION_UNTRAINED", "auto").strip().lower()
+    if value == "auto":
+        return "refuse" if "DECISION_CHECKPOINT_DIR" in os.environ else "allow"
+    if value not in UNTRAINED_POLICIES:
+        raise RuntimeError(
+            f"DECISION_UNTRAINED must be one of {(*UNTRAINED_POLICIES, 'auto')}, "
+            f"got {value!r}"
+        )
+    return value
+
+
 def create_service() -> DecisionService:
     """Сервис по окружению: DECISION_MODEL_ID включает реальный state-энкодер."""
     checkpoint_dir = os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
+    untrained_policy = resolve_untrained_policy()
     vision_encoder = create_vision_encoder()
     model_id = os.environ.get("DECISION_MODEL_ID")
     if not model_id:
         return DecisionService(
-            checkpoint_dir=checkpoint_dir, vision_encoder=vision_encoder
+            checkpoint_dir=checkpoint_dir,
+            vision_encoder=vision_encoder,
+            untrained_policy=untrained_policy,
         )
     from src.encoder.factory import create_state_encoder
 
@@ -128,6 +155,7 @@ def create_service() -> DecisionService:
         dim=feature_dim,
         checkpoint_dir=checkpoint_dir,
         vision_encoder=vision_encoder,
+        untrained_policy=untrained_policy,
     )
 
 
@@ -226,6 +254,7 @@ class DecisionRequest(BaseModel):
 class DecisionResponse(BaseModel):
     schema_version: str
     decisions: dict[str, Annotated[DecisionResult, Field(discriminator="type")]]
+    trained: bool | None = None
 
 
 class BatchDecisionRequest(BaseModel):
@@ -243,6 +272,48 @@ class BatchDecisionRequest(BaseModel):
 class BatchDecisionResponse(BaseModel):
     schema_version: str
     results: list[dict[str, Annotated[DecisionResult, Field(discriminator="type")]]]
+    trained: bool | None = None
+
+
+def _batch_trained(usages: list[dict[str, Any]]) -> bool | None:
+    """Сводный статус батча: ``False`` — если хоть где-то не обучены, иначе ``True``/``None``."""
+    values = [usage.get("trained") for usage in usages]
+    if any(value is False for value in values):
+        return False
+    if values and all(value is True for value in values):
+        return True
+    return None
+
+
+def _untrained_response(exc: UntrainedDecisionError) -> JSONResponse:
+    """409 на запрос схемы, под которую нет обученных голов (политика refuse)."""
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": {
+                "code": "UNTRAINED_HEADS",
+                "message": str(exc),
+                "signature": exc.signature,
+                "checkpoint_dir": exc.checkpoint_dir,
+            }
+        },
+    )
+
+
+def _engine_info(backend: Backend) -> dict[str, Any] | None:
+    """Лучшее, что можно сказать о движке: локальный сервис или каскад."""
+    engine = getattr(backend, "engine", None)
+    describe = getattr(engine, "info", None)
+    if callable(describe):
+        return describe()
+    primary = getattr(backend, "primary", None)
+    fallback = getattr(backend, "fallback", None)
+    if primary is not None or fallback is not None:
+        return {
+            "primary": _engine_info(primary) if primary is not None else None,
+            "fallback": _engine_info(fallback) if fallback is not None else None,
+        }
+    return None
 
 
 def _to_specs(questions: dict[str, Question]) -> dict[str, QuestionSpec]:
@@ -267,20 +338,42 @@ def _to_specs(questions: dict[str, Question]) -> dict[str, QuestionSpec]:
 # Все эндпоинты — синхронные (``def``): FastAPI выполняет их в threadpool, поэтому
 # тяжёлый CPU-инференс не блокирует event loop и остальные соединения.
 @app.post("/decisions", response_model=DecisionResponse)
-def create_decisions(req: DecisionRequest) -> DecisionResponse:
+def create_decisions(req: DecisionRequest) -> DecisionResponse | JSONResponse:
     """Оценивает все вопросы параллельно одним прогоном энкодера + голов."""
-    result = backend.decide(req.state, _to_specs(req.questions))
-    return DecisionResponse(schema_version=SCHEMA_VERSION, decisions=result.decisions)
+    try:
+        result = backend.decide(req.state, _to_specs(req.questions))
+    except UntrainedDecisionError as exc:
+        return _untrained_response(exc)
+    return DecisionResponse(
+        schema_version=SCHEMA_VERSION,
+        decisions=result.decisions,
+        trained=result.usage.get("trained"),
+    )
 
 
 @app.post("/decisions/batch", response_model=BatchDecisionResponse)
-def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse:
+def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse | JSONResponse:
     """Батч: все состояния и вопросы за один вызов энкодера (внутри — батчами)."""
-    results = [
-        result.decisions
-        for result in backend.decide_many(req.states, _to_specs(req.questions))
-    ]
-    return BatchDecisionResponse(schema_version=SCHEMA_VERSION, results=results)
+    try:
+        backend_results = backend.decide_many(req.states, _to_specs(req.questions))
+    except UntrainedDecisionError as exc:
+        return _untrained_response(exc)
+    return BatchDecisionResponse(
+        schema_version=SCHEMA_VERSION,
+        results=[result.decisions for result in backend_results],
+        trained=_batch_trained([result.usage for result in backend_results]),
+    )
+
+
+@app.get("/info")
+def get_info() -> dict[str, Any]:
+    """Конфигурация сервиса: бэкенд, модальности и статус локальных голов."""
+    return {
+        "version": __version__,
+        "backend": backend.name,
+        "modalities": sorted(backend.capabilities.modalities),
+        "engine": _engine_info(backend),
+    }
 
 
 @app.post("/v1/systemone", response_model=SystemOneResponse)
@@ -316,13 +409,16 @@ def create_systemone_decisions(
             status_code=422,
             content={"error": {"code": "INVALID_QUESTION", "message": str(exc)}},
         )
-    result = backend.decide(
-        req.state,
-        specs,
-        images=req.images,
-        videos=req.videos,
-        media_kwargs=req.media_kwargs,
-    )
+    try:
+        result = backend.decide(
+            req.state,
+            specs,
+            images=req.images,
+            videos=req.videos,
+            media_kwargs=req.media_kwargs,
+        )
+    except UntrainedDecisionError as exc:
+        return _untrained_response(exc)
     answers = {
         name: result_to_answer_model(decision)
         for name, decision in result.decisions.items()

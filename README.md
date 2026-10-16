@@ -180,6 +180,7 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_DEVICE` | устройство энкодера: `auto`, `cpu`, `cuda`, `cuda:N`, `mps` | `auto` |
 | `DECISION_DTYPE` | тип весов энкодера: `float32`, `float16`, `bfloat16` | `float32` |
 | `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
+| `DECISION_UNTRAINED` | поведение без обученных голов: `allow`, `refuse`, `fallback`, `auto` | `auto` |
 | `DECISION_BACKEND` | исполнитель решений: `local`, `http` или `cascade` | `local` |
 | `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
 | `DECISION_BACKEND_MODEL` | имя внешней модели (поле `model`) | `remote` |
@@ -349,7 +350,13 @@ ss -ltn | grep ':8000 ' || echo "порт 8000 свободен"
   `DECISION_ENCODE_BATCH`), ответ — список `results`;
 - `POST /v1/systemone` — стандартный протокол Jev/SystemOne, совместимый с
   Clef/Clef-Flash/Perplexity Decider (поле `model`, ответы в `answers`,
-  `usage`, необязательные `images`/`videos`).
+  `usage`, необязательные `images`/`videos`);
+- `GET /info` — конфигурация сервиса: бэкенд, модальности, устройство и статус
+  загруженных голов (`trained`).
+
+`POST /decisions` и `POST /decisions/batch` возвращают поле `trained`: `true`,
+если решения посчитаны обученными головами, `false` — если весов под эту схему
+нет и отвечают случайно инициализированные головы (см. `DECISION_UNTRAINED`).
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/decisions/batch \
@@ -389,11 +396,15 @@ curl -s -X POST http://127.0.0.1:8000/decisions/batch \
 ```json
 {
   "schema_version": "1",
+  "trained": true,
   "decisions": {
     "имя_вопроса": { "type": "…", "…": "…" }
   }
 }
 ```
+
+`trained` — необязательное поле статуса (см. `DECISION_UNTRAINED`): `false`
+означает, что под эту схему вопросов нет обученного чекпоинта.
 
 ### Версионирование схемы (`schema_version`)
 
@@ -778,6 +789,20 @@ svc.save_heads(dim=768, questions=QUESTIONS)      # -> checkpoints/<schema>.pt
 загружает веса. Это делает качество воспроизводимым между перезапусками, а
 латентность — без повторного прогона энкодера по неизменному состоянию (кэш
 признаков по промпту).
+
+Если под **новую** схему вопросов чекпоинта нет, головы создаются со случайной
+инициализацией — их `confidence` ничего не значит, и отдавать по ним решения
+(тем более эскалировать в каскаде) нельзя. Поэтому сервер явно сообщает статус
+(`trained: false`) и управляется переменной `DECISION_UNTRAINED`:
+
+- `auto` (по умолчанию) — `refuse`, если `DECISION_CHECKPOINT_DIR` задан явно
+  (обученные головы ожидаются), иначе `allow` (демо-режим);
+- `allow` — отдаёт решения и помечает ответ `trained: false`;
+- `refuse` — отклоняет запрос: `409` с кодом `UNTRAINED_HEADS`;
+- `fallback` — сигналит каскаду эскалировать во внешнюю модель; без каскада
+  ведёт себя как `refuse`.
+
+Текущий статус голов виден в `GET /info`.
 
 ### RLCD — учим калибровке
 

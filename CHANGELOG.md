@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Политика обслуживания необученных голов `DECISION_UNTRAINED`
+  (`allow`/`refuse`/`fallback`/`auto`): не отдавать решения со случайно
+  инициализированных голов. `refuse` отвечает `409 UNTRAINED_HEADS`, `fallback`
+  эскалирует каскад во внешнюю модель.
+- Поле `trained` в ответах `POST /decisions` и `POST /decisions/batch` и новый
+  эндпоинт `GET /info` (бэкенд, модальности, устройство, статус голов).
+
 ## [0.4.0] — 2026-10-14
 
 ### Added

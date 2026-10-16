@@ -11,6 +11,7 @@ import logging
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import Tensor
@@ -18,6 +19,7 @@ from torch import Tensor
 from src.decision_head.heads import DecisionHeads
 from src.encoder.base import StateEncoder
 from src.encoder.vision import VisionEncoder
+from src.errors import UntrainedDecisionError
 from src.sampler.parallel import sample_decisions
 from src.sampler.questions import QuestionSpec, build_prompt, questions_signature
 from src.schemas import DecisionResult
@@ -30,6 +32,12 @@ DEFAULT_MEDIA_WEIGHT = 0.5
 TEXT_MODALITY = "text"
 IMAGE_MODALITY = "image"
 VIDEO_MODALITY = "video"
+
+# Политика поведения на необученных головах:
+#   allow    — отдаём решения (в ответе видно ``trained: false``);
+#   refuse   — отклоняем запрос (API отвечает 409 UNTRAINED_HEADS);
+#   fallback — сигналим каскаду эскалировать во внешнюю модель (без каскада — как refuse).
+UNTRAINED_POLICIES = ("allow", "refuse", "fallback")
 
 
 class HashStateEncoder:
@@ -59,6 +67,7 @@ class DecisionService:
         checkpoint_dir: str | Path | None = None,
         cache_size: int = 256,
         vision_encoder: VisionEncoder | None = None,
+        untrained_policy: str = "allow",
     ):
         self.encoder = encoder or HashStateEncoder(dim)
         self.dim = dim
@@ -66,7 +75,15 @@ class DecisionService:
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.cache_size = max(0, cache_size)
         self.vision_encoder = vision_encoder
+        policy = str(untrained_policy).strip().lower()
+        if policy not in UNTRAINED_POLICIES:
+            raise ValueError(
+                f"untrained_policy must be one of {UNTRAINED_POLICIES}, "
+                f"got {untrained_policy!r}"
+            )
+        self.untrained_policy = policy
         self._heads_cache: dict[str, DecisionHeads] = {}
+        self._trained: dict[str, bool] = {}
         self._feature_cache: OrderedDict[str, Tensor] = OrderedDict()
         # Эндпоинты синхронные и обслуживаются threadpool'ом FastAPI, поэтому
         # общие кэши (головы и признаков) прикрываем блокировкой.
@@ -86,17 +103,60 @@ class DecisionService:
             )
         return frozenset(supported)
 
-    def get_heads(self, dim: int, questions: dict[str, QuestionSpec]) -> DecisionHeads:
-        """Возвращает головы для набора вопросов, переиспользуя их между запросами."""
-        signature = questions_signature(questions)
-        key = f"{dim}:{signature}"
+    @staticmethod
+    def _heads_key(dim: int, questions: dict[str, QuestionSpec]) -> str:
+        return f"{dim}:{questions_signature(questions)}"
+
+    def _ensure_heads(
+        self, dim: int, questions: dict[str, QuestionSpec]
+    ) -> tuple[DecisionHeads, bool]:
+        """Возвращает головы и признак «обучены» (загружен обученный чекпоинт)."""
+        key = self._heads_key(dim, questions)
         with self._lock:
             heads = self._heads_cache.get(key)
             if heads is None:
                 heads = DecisionHeads(dim, questions, seed=self.seed)
-                self._load_checkpoint_into(heads, dim)
+                trained = self._load_checkpoint_into(heads, dim)
                 self._heads_cache[key] = heads
-        return heads
+                self._trained[key] = trained
+            else:
+                trained = self._trained.get(key, False)
+        return heads, trained
+
+    def get_heads(self, dim: int, questions: dict[str, QuestionSpec]) -> DecisionHeads:
+        """Возвращает головы для набора вопросов, переиспользуя их между запросами."""
+        return self._ensure_heads(dim, questions)[0]
+
+    def is_trained(self, questions: dict[str, QuestionSpec]) -> bool:
+        """Есть ли под текущий набор вопросов загруженный обученный чекпоинт.
+
+        Ключ строится по ``self.dim``: энкодеры сервиса создаются под эту
+        размерность, поэтому она совпадает с фактической размерностью признаков.
+        """
+        key = self._heads_key(self.dim, questions)
+        with self._lock:
+            return self._trained.get(key, False)
+
+    def info(self) -> dict[str, Any]:
+        """Снимок конфигурации и загруженных голов — для эндпоинта ``/info``."""
+        with self._lock:
+            heads = [
+                {
+                    "dim": int(key.split(":", 1)[0]),
+                    "signature": key.split(":", 1)[1],
+                    "trained": self._trained.get(key, False),
+                }
+                for key in self._heads_cache
+            ]
+        return {
+            "encoder": type(self.encoder).__name__,
+            "dim": self.dim,
+            "untrained_policy": self.untrained_policy,
+            "checkpoint_dir": (
+                str(self.checkpoint_dir) if self.checkpoint_dir else None
+            ),
+            "heads": heads,
+        }
 
     def save_heads(
         self,
@@ -118,10 +178,10 @@ class DecisionService:
             return None
         return self.checkpoint_dir / f"{questions_signature(questions)}.pt"
 
-    def _load_checkpoint_into(self, heads: DecisionHeads, dim: int) -> None:
+    def _load_checkpoint_into(self, heads: DecisionHeads, dim: int) -> bool:
         path = self._checkpoint_path(heads.questions)
         if path is None:
-            return
+            return False
         if not path.exists():
             # Молчаливое обслуживание необученными головами — источник трудно
             # диагностируемых низких метрик. Если каталог есть, а нужной подписи
@@ -137,7 +197,7 @@ class DecisionService:
                 logger.info(
                     "no checkpoint dir %s; serving untrained heads", path.parent
                 )
-            return
+            return False
         payload = torch.load(path, map_location="cpu", weights_only=True)
         if int(payload.get("dim", -1)) != dim:
             logger.warning(
@@ -146,8 +206,20 @@ class DecisionService:
                 dim,
                 path,
             )
-            return
+            return False
         heads.load_state_dict(payload["state_dict"])
+        return True
+
+    def _check_trained(
+        self, questions: dict[str, QuestionSpec], trained: bool
+    ) -> None:
+        """Не отдаём решения необученными головами, если политика это запрещает."""
+        if trained or self.untrained_policy == "allow":
+            return
+        raise UntrainedDecisionError(
+            questions_signature(questions),
+            str(self.checkpoint_dir) if self.checkpoint_dir else None,
+        )
 
     def _encode_prompts(self, prompts: list[str], *, use_cache: bool = True) -> Tensor:
         if not use_cache or not self.cache_size:
@@ -233,7 +305,8 @@ class DecisionService:
             build_prompt(state, questions[name]) for state in states for name in names
         ]
         features = self._encode_prompts(prompts)
-        heads = self.get_heads(features.shape[-1], questions)
+        heads, trained = self._ensure_heads(features.shape[-1], questions)
+        self._check_trained(questions, trained)
         width = len(names)
         return [
             sample_decisions(heads, features[i * width : (i + 1) * width])
@@ -270,7 +343,8 @@ class DecisionService:
         media = self._encode_media(images, videos, media_kwargs)
         weight = float((media_kwargs or {}).get("media_weight", DEFAULT_MEDIA_WEIGHT))
         features = self._fuse(features, media, weight)
-        heads = self.get_heads(features.shape[-1], questions)
+        heads, trained = self._ensure_heads(features.shape[-1], questions)
+        self._check_trained(questions, trained)
         results = sample_decisions(heads, features)
         for name, result in results.items():
             dist = getattr(result, "probabilities", None) or {"p": result.noul}

@@ -16,6 +16,7 @@ from src.backends.base import (
     missing_modalities,
     requested_modalities,
 )
+from src.errors import UntrainedDecisionError
 from src.sampler.questions import QuestionSpec
 
 DEFAULT_THRESHOLD = 0.6
@@ -61,6 +62,16 @@ class CascadeBackend:
             | fallback.capabilities.modalities
         )
 
+    def untrained_falls_back(self) -> bool:
+        """Эскалировать ли во внешнюю модель, если primary не обучен.
+
+        Имеет смысл только при политике ``fallback``: тогда сервис сигналит
+        ``UntrainedDecisionError``, и каскад обязан обслужить запрос удалённо.
+        При ``refuse`` исключение пробрасывается наружу (API вернёт 409).
+        """
+        engine = getattr(self.primary, "engine", None)
+        return getattr(engine, "untrained_policy", None) == "fallback"
+
     def decide(
         self,
         state: str,
@@ -82,9 +93,24 @@ class CascadeBackend:
             usage = self._merge_usage({}, result.usage, len(questions), reason="modality")
             return BackendResult(decisions=dict(result.decisions), usage=usage)
 
-        primary_result = self.primary.decide(
-            state, questions, images=images, videos=videos, media_kwargs=media_kwargs
-        )
+        try:
+            primary_result = self.primary.decide(
+                state, questions, images=images, videos=videos, media_kwargs=media_kwargs
+            )
+        except UntrainedDecisionError:
+            if not self.untrained_falls_back():
+                raise
+            result = self.fallback.decide(
+                state,
+                questions,
+                images=images,
+                videos=videos,
+                media_kwargs=media_kwargs,
+            )
+            usage = self._merge_usage(
+                {}, result.usage, len(questions), reason="untrained"
+            )
+            return BackendResult(decisions=dict(result.decisions), usage=usage)
         uncertain = [
             name
             for name, decision in primary_result.decisions.items()
@@ -140,14 +166,35 @@ class CascadeBackend:
                 for result in fallback_results
             ]
 
-        primary_results = _decide_many(
-            self.primary,
-            states,
-            questions,
-            images=images,
-            videos=videos,
-            media_kwargs=media_kwargs,
-        )
+        try:
+            primary_results = _decide_many(
+                self.primary,
+                states,
+                questions,
+                images=images,
+                videos=videos,
+                media_kwargs=media_kwargs,
+            )
+        except UntrainedDecisionError:
+            if not self.untrained_falls_back():
+                raise
+            fallback_results = _decide_many(
+                self.fallback,
+                states,
+                questions,
+                images=images,
+                videos=videos,
+                media_kwargs=media_kwargs,
+            )
+            return [
+                BackendResult(
+                    decisions=dict(result.decisions),
+                    usage=self._merge_usage(
+                        {}, result.usage, len(questions), reason="untrained"
+                    ),
+                )
+                for result in fallback_results
+            ]
         results: list[BackendResult] = []
         for state, primary_result in zip(states, primary_results):
             uncertain = [

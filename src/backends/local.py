@@ -22,6 +22,13 @@ class LocalHeadsBackend:
         supported = getattr(engine, "modalities", frozenset({TEXT}))
         self.capabilities = Capabilities(modalities=frozenset(supported))
 
+    def _trained(self, questions: dict[str, QuestionSpec]) -> bool | None:
+        """Обучены ли головы под схему (``None`` — движок не сообщает)."""
+        is_trained = getattr(self.engine, "is_trained", None)
+        if callable(is_trained):
+            return bool(is_trained(questions))
+        return None
+
     def decide(
         self,
         state: str,
@@ -40,7 +47,7 @@ class LocalHeadsBackend:
         )
         return BackendResult(
             decisions=decisions,
-            usage={"questions": len(questions)},
+            usage={"questions": len(questions), "trained": self._trained(questions)},
         )
 
     def decide_many(
@@ -54,10 +61,14 @@ class LocalHeadsBackend:
     ) -> list[BackendResult]:
         """Батч: если движок умеет ``decide_many`` (без медиа) — один прогон энкодера."""
         engine_many = getattr(self.engine, "decide_many", None)
+        trained = self._trained(questions)
         text_only = images is None and videos is None and media_kwargs is None
         if engine_many is not None and text_only:
             return [
-                BackendResult(decisions=decisions, usage={"questions": len(questions)})
+                BackendResult(
+                    decisions=decisions,
+                    usage={"questions": len(questions), "trained": trained},
+                )
                 for decisions in engine_many(states, questions)
             ]
         return decide_many_states(
