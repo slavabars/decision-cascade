@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-16
+
 ### Added
 
 - Голова выбора option-scoring (`DECISION_CHOICE_HEAD=option_scoring`): оценивает
@@ -130,7 +132,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.6.0
 [0.4.0]: https://github.com/slavabars/decision-cascade/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/slavabars/decision-cascade/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/slavabars/decision-cascade/compare/v0.1.0...v0.2.0
