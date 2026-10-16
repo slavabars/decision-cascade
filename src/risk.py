@@ -154,10 +154,20 @@ class ErrorRiskModel:
 
     @classmethod
     def from_dict(cls, payload: dict) -> ErrorRiskModel:
+        weights = np.asarray(payload["weights"], dtype=float)
+        names = payload.get("feature_names")
+        if names is None:
+            # файл без списка признаков: определяем состав по числу весов, иначе
+            # трёхвесовый ``risk.json`` из старого формата не загрузится
+            names = (
+                LEGACY_FEATURE_NAMES
+                if weights.size == len(LEGACY_FEATURE_NAMES)
+                else FEATURE_NAMES
+            )
         return cls(
-            weights=np.asarray(payload["weights"], dtype=float),
+            weights=weights,
             bias=float(payload["bias"]),
-            feature_names=tuple(payload.get("feature_names", FEATURE_NAMES)),
+            feature_names=tuple(names),
         )
 
     def save(self, path: str | Path) -> Path:

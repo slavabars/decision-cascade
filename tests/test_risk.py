@@ -139,6 +139,25 @@ def test_save_load_roundtrip(tmp_path):
     assert restored.feature_names == model.feature_names
 
 
+def test_from_dict_without_feature_names_infers_legacy():
+    # трёхвесовый файл без feature_names (внешний/очень старый) читается
+    model = ErrorRiskModel.from_dict({"weights": [-6.0, 1.5, 0.5], "bias": 3.0})
+    assert model.feature_names == LEGACY_FEATURE_NAMES
+    expected = ErrorRiskModel(
+        weights=np.array([-6.0, 1.5, 0.5]),
+        bias=3.0,
+        feature_names=LEGACY_FEATURE_NAMES,
+    )
+    assert model.predict_error(_noul(0.9)) == pytest.approx(
+        expected.predict_error(_noul(0.9))
+    )
+
+
+def test_from_dict_without_feature_names_six_weights_is_full():
+    model = ErrorRiskModel.from_dict({"weights": [0.0] * 6, "bias": 0.0})
+    assert model.feature_names == FEATURE_NAMES
+
+
 def test_weights_size_mismatch_rejected():
     with pytest.raises(ValueError):
         ErrorRiskModel(weights=np.array([1.0, 2.0]), bias=0.0)
