@@ -7,6 +7,8 @@
 Проверяются:
 
 - `base(3)` — три базовых признака: прежняя модель (до расширения);
+- `random` — случайный балл («без навыка»): его AURC ≈ базовая частота ошибок,
+  то есть граница «хуже случайного»;
 - `+log_odds_gap`, `+n_classes`, `+noul_logit` — base плюс **один** новый
   признак (видно, кто тянет выигрыш);
 - `production` — все признаки из `FEATURE_NAMES`, то есть ровно то, что
@@ -15,6 +17,15 @@
 - `+option_similarity` — production плюс признак, которому нужны
   **внутренности головы** (средняя попарная косинусная близость направлений
   вариантов) и потому поле в схеме `DecisionResult`.
+
+С `--state` добавляются варианты с **состоянием энкодера** (пулированный вектор
+промпта, размерность `--dim`): `state[C]` — только состояние, `prod+state[C]` —
+шесть признаков плюс состояние. Состояние стандартизуется по валидации, а сила L2
+(`C`) меньше, чем у шести признаков, иначе 768 измерений на 400 строках валидации
+переобучаются; можно задать несколько `--state-C`, чтобы увидеть чувствительность.
+Это проверка гипотезы «признаки из головы — узкое место, нужен сигнал из
+состояния», а не production-путь: в сервисе оценщик риска пока видит только
+`DecisionResult`.
 
 Вариант `+option_similarity` измеряется, но в production не подключён: его
 выигрыш меньше, чем цена изменения схемы и API.
@@ -35,7 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -161,6 +172,13 @@ def feature_variants(
         ),
         "base(3)": (val_matrix[:, columns], test_matrix[:, columns]),
     }
+    # «без навыка»: случайный балл. Его AURC ≈ базовая частота ошибок, поэтому
+    # он отделяет «модель вообще не работает» от «модель работает хуже случайной».
+    rng = np.random.default_rng(0)
+    variants["random"] = (
+        rng.random(len(_flat(val_decisions))).reshape(-1, 1),
+        rng.random(len(_flat(test_decisions))).reshape(-1, 1),
+    )
     for offset in range(BASE_WIDTH, len(FEATURE_NAMES)):
         selected = columns + [offset]
         variants[f"+{FEATURE_NAMES[offset]}"] = (
@@ -184,6 +202,33 @@ def _flat(decisions: dict[str, list[DecisionResult]]) -> list[DecisionResult]:
     return [decision for group in decisions.values() for decision in group]
 
 
+def _c_label(c: float) -> str:
+    return f"[{c:g}]"
+
+
+def with_state_variants(
+    variants: dict[str, tuple[np.ndarray, np.ndarray]],
+    states: tuple[np.ndarray, np.ndarray],
+    cs: list[float],
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Добавляет варианты с состоянием энкодера: ``state[C]`` и ``prod+state[C]``.
+
+    Состояние стандартизуется по статистике валидации (иначе масштаб колонок
+    разъезжается и L2 штрафует их неравномерно).
+    """
+    state_val, state_test = _scaled(states[0], states[1], True)
+    prod_val, prod_test = variants[PRODUCTION_VARIANT]
+    out = dict(variants)
+    for c in cs:
+        label = _c_label(c)
+        out[f"state{label}"] = (state_val, state_test)
+        out[f"prod+state{label}"] = (
+            np.hstack([prod_val, state_val]),
+            np.hstack([prod_test, state_test]),
+        )
+    return out
+
+
 def _groups(specs: dict[str, QuestionSpec], decisions) -> list[str]:
     """Имя вопроса по каждой строке — в том же порядке, что у `flatten`."""
     return [name for name in specs for _ in decisions[name]]
@@ -201,6 +246,8 @@ class _Prepared:
     groups: tuple[list[str], list[str]]
     #: порядок вопросов
     questions: list[str]
+    #: вариант -> сила L2 (для вариантов с состоянием она своя)
+    cs: dict[str, float] = field(default_factory=dict)
 
 
 def prepare(
@@ -211,8 +258,14 @@ def prepare(
     test: list[dict[str, Any]],
     *,
     scale: bool = False,
+    with_state: bool = False,
+    state_cs: list[float] | None = None,
 ) -> _Prepared:
-    """Один раз считает решения, признаки и корректность для A/B и LOO."""
+    """Один раз считает решения, признаки и корректность для A/B и LOO.
+
+    ``with_state`` добавляет варианты с состоянием энкодера (см.
+    `with_state_variants`), ``state_cs`` — их силы L2.
+    """
     val_features = encode_examples(specs, val, encoder)
     val_decisions = decisions_for_examples(heads, val_features, len(val))
     val_flat, val_correct = flatten(specs, val_decisions, val)
@@ -223,14 +276,38 @@ def prepare(
     val_matrix, test_matrix = _scaled(
         features_matrix(val_flat), features_matrix(test_flat), scale
     )
+    variants = feature_variants(
+        heads, specs, val_decisions, test_decisions, val_matrix, test_matrix,
+        scale=scale,
+    )
+    cs: dict[str, float] = {}
+    if with_state:
+        state_cs = list(state_cs or [0.05])
+        # порядок строк — question-major, как у ``flatten``
+        states = (
+            _state_matrix(val_features, specs),
+            _state_matrix(test_features, specs),
+        )
+        variants = with_state_variants(variants, states, state_cs)
+        for c in state_cs:
+            label = _c_label(c)
+            cs[f"state{label}"] = c
+            cs[f"prod+state{label}"] = c
     return _Prepared(
-        variants=feature_variants(
-            heads, specs, val_decisions, test_decisions, val_matrix, test_matrix,
-            scale=scale,
-        ),
+        variants=variants,
         correct=(val_correct, test_correct),
         groups=(_groups(specs, val_decisions), _groups(specs, test_decisions)),
         questions=list(specs),
+        cs=cs,
+    )
+
+
+def _state_matrix(
+    features: dict[str, Any], specs: dict[str, QuestionSpec]
+) -> np.ndarray:
+    """Пулированные состояния по строкам в порядке question-major."""
+    return np.concatenate(
+        [features[question].detach().cpu().numpy().astype(float) for question in specs]
     )
 
 
@@ -250,6 +327,11 @@ def _scores(
     return 1.0 - error
 
 
+def _c_for(prepared: _Prepared, name: str, default: float) -> float:
+    """Сила L2 для варианта: у вариантов с состоянием она своя."""
+    return prepared.cs.get(name, default)
+
+
 def run_ab(
     prepared: _Prepared, *, seed: int = 0, C: float = 1.0
 ) -> list[dict[str, float]]:
@@ -257,7 +339,10 @@ def run_ab(
     _, test_correct = prepared.correct
     rows = []
     for name, (train_matrix, eval_matrix) in prepared.variants.items():
-        scores = _scores(train_matrix, eval_matrix, prepared.correct[0], seed=seed, C=C)
+        scores = _scores(
+            train_matrix, eval_matrix, prepared.correct[0], seed=seed,
+            C=_c_for(prepared, name, C),
+        )
         rows.append({"variant": name, "seed": seed, **risk_report(scores, test_correct)})
     return rows
 
@@ -282,7 +367,8 @@ def run_loo(
 
     rows: list[dict[str, Any]] = []
     for name, (val_matrix, test_matrix) in prepared.variants.items():
-        indist = _scores(val_matrix, test_matrix, val_correct, seed=seed, C=C)
+        c = _c_for(prepared, name, C)
+        indist = _scores(val_matrix, test_matrix, val_correct, seed=seed, C=c)
         for question in prepared.questions:
             train_rows = val_groups != question
             test_rows = test_groups == question
@@ -291,7 +377,7 @@ def run_loo(
                 test_matrix[test_rows],
                 val_correct[train_rows],
                 seed=seed,
-                C=C,
+                C=c,
             )
             subset_correct = test_correct[test_rows]
             rows.append(
@@ -430,6 +516,12 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
                         help="leave-one-question-out: обучать риск-модель без "
                              "одного вопроса и замерять на нём (несмещённая "
                              "оценка переноса на новый вопрос)")
+    parser.add_argument("--state", action="store_true",
+                        help="добавить варианты с состоянием энкодера: "
+                             "state[C] и prod+state[C]")
+    parser.add_argument("--state-C", type=float, nargs="+", default=None,
+                        help="сила L2 для вариантов с состоянием (по умолчанию "
+                             "0.05; можно задать несколько значений)")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -448,7 +540,10 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             specs, train, encoder, train_steps=args.train_steps, lr=args.lr,
             seed=seed,
         )
-        prepared = prepare(heads, encoder, specs, val, test, scale=args.scale)
+        prepared = prepare(
+            heads, encoder, specs, val, test, scale=args.scale,
+            with_state=args.state, state_cs=args.state_C,
+        )
         for row in run_ab(prepared, seed=seed, C=args.C):
             rows_by_variant.setdefault(row["variant"], []).append(row)
         if args.loo:
@@ -473,6 +568,7 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "scaled": args.scale,
             "feature_names": list(FEATURE_NAMES),
             "extra_features": list(EXTRA_FEATURE_NAMES),
+            "state_cs": args.state_C if args.state else None,
             "per_seed": rows_by_variant,
             "aggregate": aggregated,
             "loo": aggregate_loo(loo_rows) if args.loo else None,

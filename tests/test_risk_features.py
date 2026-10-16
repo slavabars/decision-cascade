@@ -14,6 +14,7 @@ from eval.risk.features import (
     head_features,
     main,
     mean_pairwise_cosine,
+    with_state_variants,
 )
 from src.risk import FEATURE_NAMES, decision_features
 from src.sampler.questions import NoulSpec
@@ -54,7 +55,7 @@ def test_feature_variants_cover_expected_sets():
     extra = {f"+{name}" for name in EXTRA_FEATURE_NAMES}
     assert extra == {"+log_odds_gap", "+n_classes", "+noul_logit"}
     assert set(variants) == {
-        "confidence", "base(3)", "production", "+option_similarity",
+        "confidence", "base(3)", "random", "production", "+option_similarity",
     } | extra
 
 
@@ -108,6 +109,7 @@ def test_cli_runs_offline_on_support_specs(tmp_path, capsys):
     assert capsys.readouterr().out  # сводная таблица печатается
     variants = {row["variant"] for row in rows}
     assert {"confidence", "base(3)", "production", "+option_similarity"} <= variants
+    assert "random" in variants
     for row in rows:
         assert row["n_seeds"] == 1
         assert 0.0 <= row["aurc"]
@@ -155,3 +157,36 @@ def test_cli_loo_writes_per_question_metrics(tmp_path):
         assert 0.0 <= row["loo_aurc"] <= 1.0
         assert 0.0 <= row["loo_acc_at_0.7"] <= 1.0
     assert {entry["variant"] for entry in payload["loo"]} == variants
+
+
+def test_with_state_variants_shapes_and_standardization():
+    features = np.zeros((4, 6))
+    variants = {"production": (features, features)}
+    states = tuple(np.arange(12, dtype=float).reshape(4, 3) for _ in range(2))
+
+    out = with_state_variants(variants, states, [0.05, 1.0])
+
+    assert set(out) == {
+        "production", "state[0.05]", "prod+state[0.05]", "state[1]", "prod+state[1]"
+    }
+    assert out["production"][0] is features
+    assert out["state[0.05]"][0].shape == (4, 3)
+    assert out["prod+state[0.05]"][0].shape == (4, 9)
+    # состояние стандартизовано по статистике валидации, значит по нулю
+    assert out["state[1]"][0].mean(axis=0) == pytest.approx(np.zeros(3))
+
+
+def test_cli_state_adds_state_variants(tmp_path):
+    main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "120", "--train-steps", "30", "--seeds", "0",
+        "--state", "--state-C", "0.05", "1.0", "--out-dir", str(tmp_path),
+    ])
+    payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+
+    assert payload["state_cs"] == [0.05, 1.0]
+    variants = set(payload["per_seed"])
+    assert {"state[0.05]", "prod+state[0.05]", "state[1]", "prod+state[1]"} <= variants
+    for name in ("state[0.05]", "prod+state[1]"):
+        for row in payload["per_seed"][name]:
+            assert 0.0 <= row["aurc"] <= 1.0
