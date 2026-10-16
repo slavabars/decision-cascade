@@ -110,3 +110,18 @@ def build_prompt(state: str, spec: QuestionSpec) -> str:
             rendered = ", ".join(spec.levels)
         parts.append(f"Scale: {rendered}")
     return "\n".join(parts)
+
+
+def build_option_prompt(spec: ChoiceSpec, option: str) -> str:
+    """Собирает текст варианта выбора — **без состояния**.
+
+    Используется для эмбеддингов вариантов в option-scoring голове: вектор
+    варианта не должен зависеть от состояния, иначе голова не сможет оценивать
+    *новые* наборы вариантов без переобучения.
+    """
+    if option not in spec.options:
+        raise ValueError(f"option {option!r} not in {list(spec.options)}")
+    parts = [f"Question: {spec.instructions}", f"Option: {option}"]
+    if spec.criteria and spec.criteria.get(option):
+        parts.append(f"Means: {spec.criteria[option]}")
+    return "\n".join(parts)

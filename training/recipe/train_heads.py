@@ -86,6 +86,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-steps", type=int, default=200)
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument(
+        "--choice-head",
+        choices=["linear", "option_scoring"],
+        default="linear",
+        help="голова выбора: отдельный вес на вариант или общий скорер по эмбеддингам",
+    )
+    parser.add_argument(
         "--rlcd-steps",
         type=int,
         default=0,
@@ -161,6 +167,7 @@ def main(argv: list[str] | None = None) -> dict:
         seed=args.seed,
         rlcd_steps=args.rlcd_steps,
         rlcd_gate_examples=splits["val"] or None,
+        choice_head=args.choice_head,
     )
     metrics = {"train": train_report}
     for name in ("val", "test"):

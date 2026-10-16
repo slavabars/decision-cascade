@@ -16,7 +16,11 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from src.decision_head.heads import DecisionHeads
+from src.decision_head.heads import (
+    CHOICE_HEADS,
+    DecisionHeads,
+    build_option_embeddings,
+)
 from src.encoder.base import StateEncoder
 from src.encoder.vision import VisionEncoder
 from src.errors import UntrainedDecisionError
@@ -68,6 +72,7 @@ class DecisionService:
         cache_size: int = 256,
         vision_encoder: VisionEncoder | None = None,
         untrained_policy: str = "allow",
+        choice_head: str = "linear",
     ):
         self.encoder = encoder or HashStateEncoder(dim)
         self.dim = dim
@@ -82,6 +87,12 @@ class DecisionService:
                 f"got {untrained_policy!r}"
             )
         self.untrained_policy = policy
+        mode = str(choice_head).strip().lower()
+        if mode not in CHOICE_HEADS:
+            raise ValueError(
+                f"choice_head must be one of {CHOICE_HEADS}, got {choice_head!r}"
+            )
+        self.choice_head = mode
         self._heads_cache: dict[str, DecisionHeads] = {}
         self._trained: dict[str, bool] = {}
         self._feature_cache: OrderedDict[str, Tensor] = OrderedDict()
@@ -115,7 +126,18 @@ class DecisionService:
         with self._lock:
             heads = self._heads_cache.get(key)
             if heads is None:
-                heads = DecisionHeads(dim, questions, seed=self.seed)
+                option_embeddings = None
+                if self.choice_head == "option_scoring":
+                    option_embeddings = build_option_embeddings(
+                        questions, self._encode_prompts
+                    )
+                heads = DecisionHeads(
+                    dim,
+                    questions,
+                    seed=self.seed,
+                    choice_head=self.choice_head,
+                    option_embeddings=option_embeddings,
+                )
                 trained = self._load_checkpoint_into(heads, dim)
                 self._heads_cache[key] = heads
                 self._trained[key] = trained
@@ -152,6 +174,7 @@ class DecisionService:
             "encoder": type(self.encoder).__name__,
             "dim": self.dim,
             "untrained_policy": self.untrained_policy,
+            "choice_head": self.choice_head,
             "checkpoint_dir": (
                 str(self.checkpoint_dir) if self.checkpoint_dir else None
             ),
@@ -204,6 +227,16 @@ class DecisionService:
                 "checkpoint dim=%s does not match features dim=%s; ignoring %s",
                 payload.get("dim"),
                 dim,
+                path,
+            )
+            return False
+        checkpoint_choice_head = str(payload.get("choice_head", "linear"))
+        if checkpoint_choice_head != heads.choice_head:
+            logger.warning(
+                "checkpoint choice_head=%s does not match service choice_head=%s; "
+                "ignoring %s",
+                checkpoint_choice_head,
+                heads.choice_head,
                 path,
             )
             return False

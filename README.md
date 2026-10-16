@@ -180,6 +180,7 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_DEVICE` | устройство энкодера: `auto`, `cpu`, `cuda`, `cuda:N`, `mps` | `auto` |
 | `DECISION_DTYPE` | тип весов энкодера: `float32`, `float16`, `bfloat16` | `float32` |
 | `DECISION_CHECKPOINT_DIR` | каталог чекпоинтов голов | `checkpoints` |
+| `DECISION_CHOICE_HEAD` | голова выбора: `linear` или `option_scoring` (общий скорер по эмбеддингам вариантов) | `linear` |
 | `DECISION_UNTRAINED` | поведение без обученных голов: `allow`, `refuse`, `fallback`, `auto` | `auto` |
 | `DECISION_BACKEND` | исполнитель решений: `local`, `http` или `cascade` | `local` |
 | `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
@@ -317,6 +318,25 @@ DECISION_CASCADE_FALLBACK_URL=http://127.0.0.1:30000 \
 # обучить оценщик риска и сравнить каскады на публичном наборе
 python -m eval.risk.run --specs routerbench --encoder openai-community/gpt2 \
     --dim 768 --train-steps 500 --limit 4000 --out-dir data/risk_routerbench
+```
+
+**Голова выбора по эмбеддингам вариантов.** Обычная голова выбора — линейный слой
+с отдельным весом на каждый вариант: набор вариантов зашит на обучении. Режим
+`DECISION_CHOICE_HEAD=option_scoring` включает голову, которая оценивает вариант
+общим скорером по его текстовому эмбеддингу — число параметров не зависит от
+числа вариантов, а набор вариантов можно подменить без переобучения:
+
+```bash
+DECISION_CHOICE_HEAD=option_scoring uvicorn api.server.main:app --port 8000
+```
+
+Перенос работает на вариантах, семантически близких к обученным, и не работает на
+произвольных новых словах или когда рядом есть знакомые варианты (они
+«перебивают» новые). Честные числа и границы — в `docs/option-scoring.md`:
+
+```bash
+# замер переноса вариантов (обучение на 3, подмена набора на инференсе)
+python -m eval.option_transfer.run --encoder openai-community/gpt2 --dim 768 --seeds 0 1 2
 ```
 
 Указывать размерность необязательно: головы строятся по фактической размерности
@@ -891,14 +911,15 @@ training/       — SFT (sft/), RLCD (rlcd/) и рецепт обучения г
 eval/           — калибровка (calibration/, вкл. selective-метрики), latency
                   (latency/), датасеты (datasets/, вкл. публичные AG News и
                   RouterBench), офлайн-бенчмарк (benchmark/), отчёт
-                  untrained-vs-trained (report/), сравнение каскадов (risk/) и
+                  untrained-vs-trained (report/), сравнение каскадов (risk/),
+                  перенос вариантов выбора (option_transfer/) и
                   конкурентов (competitors/)
 deploy/         — Ubuntu/CentOS + systemd
 docs/           — методика бенчмарков (competitor-benchmark.md, routerbench.md,
-                  risk-aware-cascade.md)
+                  risk-aware-cascade.md, option-scoring.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
                   SystemOne, каскады, vision, интеграции, эксплуатация)
-tests/          — pytest-набор (411 тестов + opt-in GPU/модель)
+tests/          — pytest-набор (419 тестов + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh: uv/pyenv/venv/gh)
 README.md       — этот файл

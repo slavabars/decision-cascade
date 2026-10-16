@@ -39,6 +39,7 @@ OFFLINE_CASES = [
     ("examples/integrations/discord_bot.py", []),
     ("examples/integrations/webhook_fastapi.py", []),
     ("examples/integrations/slack_app.py", []),
+    ("examples/ops/option_transfer.py", ["--train-steps", "300", "--n-per-label", "10"]),
     ("examples/ops/local_heads.py", ["--dir", "{tmp}/heads"]),
     ("examples/ops/device_select.py", ["--n", "10"]),
 ]

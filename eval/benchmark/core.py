@@ -18,7 +18,7 @@ from eval.calibration.metrics import (
     multiclass_brier_score,
     top_label_ece,
 )
-from src.decision_head.heads import DecisionHeads
+from src.decision_head.heads import DecisionHeads, build_option_embeddings
 from src.sampler.questions import (
     ChoiceSpec,
     NoulSpec,
@@ -134,17 +134,30 @@ def train_benchmark(
     seed: int = 0,
     rlcd_steps: int = 0,
     rlcd_gate_examples: list[dict[str, Any]] | None = None,
+    choice_head: str = "linear",
 ) -> tuple[DecisionHeads, dict[str, Any]]:
     """Обучает головы на ``examples`` и возвращает их вместе с отчётом на них же.
 
     ``rlcd_gate_examples`` — отложенный набор для гейта «не навреди» RLCD: если
     задан, калибровка принимается только когда она улучшает метрику *на нём*, а
     не на обучающих признаках (защита от переобучения калибратора).
+
+    ``choice_head='option_scoring'`` строит головы выбора, оценивающие варианты по
+    их текстовым эмбеддингам — они умеют работать с *новыми* наборами вариантов.
     """
     torch.manual_seed(seed)
     per_question = encode_examples(specs, examples, encoder)
     dim = next(iter(per_question.values())).shape[-1]
-    heads = DecisionHeads(dim, specs, seed=seed)
+    option_embeddings = None
+    if choice_head == "option_scoring":
+        option_embeddings = build_option_embeddings(specs, encoder.encode)
+    heads = DecisionHeads(
+        dim,
+        specs,
+        seed=seed,
+        choice_head=choice_head,
+        option_embeddings=option_embeddings,
+    )
 
     target_map = {
         name: _build_targets(spec, [ex["labels"][name] for ex in examples])

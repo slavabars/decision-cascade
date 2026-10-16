@@ -396,6 +396,22 @@ In-process работа без HTTP плюс сохранение и загру�
 
 Флаги: `--dir` (`data/examples/heads`).
 
+### `ops/option_transfer.py` — сервер: нет
+
+Голова выбора option-scoring: оценка вариантов общим скорером по их текстовым
+эмбеддингам, поэтому набор вариантов подменяется **без переобучения**. Обучает
+голову на трёх вариантах, затем подменяет набор на два невиданных теми же весами и
+печатает обе точности. Для офлайн-прогона достаточно `--encoder hash` (по
+умолчанию), семантический эффект — на реальной модели.
+
+```bash
+.venv/bin/python examples/ops/option_transfer.py
+.venv/bin/python examples/ops/option_transfer.py --encoder openai-community/gpt2 --dim 768
+```
+
+Флаги: `--encoder` (`hash` / model_id), `--dim`, `--train-steps`, `--lr`,
+`--n-per-label`. Методика и границы переноса — в `docs/option-scoring.md`.
+
 ### `ops/weight_pack.py` — сервер: нет
 
 Запуск с обученным паком весов: реальный трансформер-энкодер + обученные

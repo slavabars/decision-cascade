@@ -75,8 +75,12 @@ def main(argv: list[str] | None = None) -> dict:
 
     train_features = encode_examples(specs, train, encoder)
     if args.checkpoint_dir is not None:
+        from src.decision_head.heads import build_option_embeddings
+
         heads = DecisionHeads.load_checkpoint(
-            Path(args.checkpoint_dir) / "heads.pt", seed=args.seed
+            Path(args.checkpoint_dir) / "heads.pt",
+            seed=args.seed,
+            option_embeddings=build_option_embeddings(specs, encoder.encode),
         )
     else:
         dim = next(iter(train_features.values())).shape[-1]

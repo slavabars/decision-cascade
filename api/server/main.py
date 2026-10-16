@@ -113,6 +113,7 @@ def create_service() -> DecisionService:
     """Сервис по окружению: DECISION_MODEL_ID включает реальный state-энкодер."""
     checkpoint_dir = os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
     untrained_policy = resolve_untrained_policy()
+    choice_head = os.environ.get("DECISION_CHOICE_HEAD", "linear")
     vision_encoder = create_vision_encoder()
     model_id = os.environ.get("DECISION_MODEL_ID")
     if not model_id:
@@ -120,6 +121,7 @@ def create_service() -> DecisionService:
             checkpoint_dir=checkpoint_dir,
             vision_encoder=vision_encoder,
             untrained_policy=untrained_policy,
+            choice_head=choice_head,
         )
     from src.encoder.factory import create_state_encoder
 
@@ -156,6 +158,7 @@ def create_service() -> DecisionService:
         checkpoint_dir=checkpoint_dir,
         vision_encoder=vision_encoder,
         untrained_policy=untrained_policy,
+        choice_head=choice_head,
     )
 
 

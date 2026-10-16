@@ -191,6 +191,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--train-steps", type=int, default=300)
     parser.add_argument("--rlcd-steps", type=int, default=0)
     parser.add_argument("--lr", type=float, default=0.1)
+    parser.add_argument(
+        "--choice-head",
+        choices=["linear", "option_scoring"],
+        default="linear",
+        help="голова выбора: отдельный вес на вариант или общий скорер по эмбеддингам",
+    )
     parser.add_argument("--limit", type=int, default=4000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -211,7 +217,8 @@ def main(argv: list[str] | None = None) -> None:
 
     encoder = _encoder(args.encoder, args.dim, args.device, args.dtype)
     untrained_heads, _ = train_benchmark(
-        specs, train, encoder, train_steps=0, seed=args.seed
+        specs, train, encoder, train_steps=0, seed=args.seed,
+        choice_head=args.choice_head,
     )
     untrained_test = evaluate_benchmark(specs, test, encoder, untrained_heads)
     heads, _ = train_benchmark(
@@ -222,6 +229,7 @@ def main(argv: list[str] | None = None) -> None:
         lr=args.lr,
         seed=args.seed,
         rlcd_steps=args.rlcd_steps,
+        choice_head=args.choice_head,
     )
     trained_test = evaluate_benchmark(specs, test, encoder, heads)
 
@@ -234,6 +242,7 @@ def main(argv: list[str] | None = None) -> None:
         "feature_dim": args.dim,
         "train_steps": args.train_steps,
         "rlcd_steps": args.rlcd_steps,
+        "choice_head": args.choice_head,
         "n_train": len(train),
         "n_test": len(test),
         "questions": summary,
