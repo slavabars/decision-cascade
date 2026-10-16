@@ -1,10 +1,12 @@
 """Оценка вероятности ошибки решения — обучение отказу (selective prediction).
 
 Каскад может эскалировать не по «сырой» уверенности, а по оценке вероятности
-ошибки локального решения. Модель — логистическая регрессия на признаках решения
-(уверенность, нормированная энтропия, отрыв лучшего класса); обучается на
-отложенном наборе (``training.recipe.risk``), а при обслуживании считается на
-numpy — то есть в пути инференса нет тяжёлых зависимостей.
+ошибки локального решения. Модель — логистическая регрессия на признаках
+решения (уверенность, нормированная энтропия, отрыв лучшего класса, разрыв
+логитов двух лучших исходов, число исходов и знаковый логит `noul`;
+подробности — в ``decision_features``); обучается на отложенном наборе
+(``training.recipe.risk``), а при обслуживании считается на numpy — то есть в
+пути инференса нет тяжёлых зависимостей.
 """
 from __future__ import annotations
 
@@ -18,7 +20,20 @@ import numpy as np
 
 from src.schemas import DecisionResult
 
-FEATURE_NAMES = ("confidence", "entropy", "margin")
+FEATURE_NAMES = (
+    "confidence",
+    "entropy",
+    "margin",
+    "log_odds_gap",
+    "n_classes",
+    "noul_logit",
+)
+
+#: Состав признаков моделей, обученных до расширения (файлы ``risk.json`` с
+#: тремя весами). Такие модели продолжают работать в прежней семантике:
+#: ``predict_error`` берёт по именам только те признаки, на которых модель
+#: обучена.
+LEGACY_FEATURE_NAMES = ("confidence", "entropy", "margin")
 
 
 def decision_distribution(decision: DecisionResult) -> np.ndarray:
@@ -36,7 +51,23 @@ def decision_distribution(decision: DecisionResult) -> np.ndarray:
 
 
 def decision_features(decision: DecisionResult) -> np.ndarray:
-    """Признаки решения для оценщика риска: ``[confidence, entropy, margin]``."""
+    """Признаки решения для оценщика риска (порядок — ``FEATURE_NAMES``).
+
+    Первые три выведены из нормированного распределения; последние три добавлены
+    по замеру ``eval/risk/features.py`` (AURC −3…−31% против трёх признаков,
+    см. `docs/risk-aware-cascade.md`):
+
+    - ``log_odds_gap`` — `ln(p_1 / p_2)` двух лучших исходов. Для `k >= 3` это
+      **разрыв сырых логитов до softmax** (свойство softmax: `logit_i - logit_j =
+      ln(p_i / p_j)`), то есть «сила улики», несводимая к нормированному
+      распределению; для `k = 2` детерминированно вытекает из уверенности и
+      вклада не даёт.
+    - ``n_classes`` — число исходов решения (для `noul` — 2).
+    - ``noul_logit`` — знаковый логит `noul`: первые три признака симметричны
+      относительно `p <-> 1-p`, поэтому знак теряется.
+
+    Для `noul` распределение — это `[p, 1-p]`.
+    """
     dist = decision_distribution(decision)
     order = np.sort(dist)[::-1]
     confidence = float(order[0])
@@ -45,10 +76,22 @@ def decision_features(decision: DecisionResult) -> np.ndarray:
             -(dist * np.log(np.clip(dist, 1e-12, 1.0))).sum() / math.log(dist.size)
         )
         margin = float(order[0] - order[1])
+        log_odds_gap = float(
+            np.log(np.clip(order[0], 1e-12, None))
+            - np.log(np.clip(order[1], 1e-12, None))
+        )
     else:
         entropy = 0.0
         margin = 1.0
-    return np.asarray([confidence, entropy, margin], dtype=float)
+        log_odds_gap = 0.0
+    noul_logit = 0.0
+    if decision.type == "noul":
+        p = float(np.clip(decision.noul, 1e-12, 1.0 - 1e-12))
+        noul_logit = float(np.log(p / (1.0 - p)))
+    return np.asarray(
+        [confidence, entropy, margin, log_odds_gap, float(dist.size), noul_logit],
+        dtype=float,
+    )
 
 
 def features_matrix(decisions: Iterable[DecisionResult]) -> np.ndarray:
@@ -64,7 +107,12 @@ def _sigmoid(z: float) -> float:
 
 @dataclass
 class ErrorRiskModel:
-    """Логистический оценщик ``P(ошибка)`` по признакам решения."""
+    """Логистический оценщик ``P(ошибка)`` по признакам решения.
+
+    ``feature_names`` — имена признаков в том порядке, в каком они идут в
+    ``weights``; все должны входить в ``FEATURE_NAMES``. Модели старого формата
+    (три признака, ``LEGACY_FEATURE_NAMES``) загружаются и работают как прежде.
+    """
 
     weights: np.ndarray
     bias: float
@@ -77,10 +125,21 @@ class ErrorRiskModel:
                 f"weights size {self.weights.size} != "
                 f"feature_names {len(self.feature_names)}"
             )
+        unknown = [name for name in self.feature_names if name not in FEATURE_NAMES]
+        if unknown:
+            raise ValueError(
+                f"unknown feature_names {unknown}; known: {list(FEATURE_NAMES)}"
+            )
+
+    def vector(self, decision: DecisionResult) -> np.ndarray:
+        """Вектор признаков решения в порядке ``self.feature_names``."""
+        features = dict(zip(FEATURE_NAMES, decision_features(decision)))
+        return np.asarray([features[name] for name in self.feature_names],
+                          dtype=float)
 
     def predict_error(self, decision: DecisionResult) -> float:
         """Вероятность того, что решение неверно (0..1)."""
-        z = float(np.dot(self.weights, decision_features(decision)) + self.bias)
+        z = float(np.dot(self.weights, self.vector(decision)) + self.bias)
         return _sigmoid(z)
 
     def should_escalate(self, decision: DecisionResult, risk_budget: float) -> bool:

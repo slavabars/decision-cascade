@@ -5,7 +5,7 @@ import pytest
 
 from src.backends.base import BackendResult, Capabilities
 from src.backends.cascade import RiskAwareCascadeBackend
-from src.risk import ErrorRiskModel
+from src.risk import LEGACY_FEATURE_NAMES, ErrorRiskModel
 from src.sampler.questions import NoulSpec
 from src.schemas import NoulResult
 
@@ -35,7 +35,11 @@ def _questions(names):
 
 def _risk_model():
     # z = -20*confidence + 14: уверенно -> P(ошибка) ~0, у границы 0.5 -> ~0.95
-    return ErrorRiskModel(weights=np_error_weights(), bias=14.0)
+    return ErrorRiskModel(
+        weights=np_error_weights(),
+        bias=14.0,
+        feature_names=LEGACY_FEATURE_NAMES,
+    )
 
 
 def np_error_weights():

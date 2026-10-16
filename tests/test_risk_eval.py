@@ -12,7 +12,7 @@ from eval.risk.core import (
     selective_accuracy,
     threshold_escalation,
 )
-from src.risk import ErrorRiskModel
+from src.risk import LEGACY_FEATURE_NAMES, ErrorRiskModel
 from src.sampler.questions import ChoiceSpec, NoulSpec, ScoreSpec
 from src.schemas import ChoiceResult, NoulResult, ScoreResult
 
@@ -56,7 +56,11 @@ def test_threshold_escalation_marks_low_confidence():
 
 
 def test_risk_escalation_uses_model():
-    model = ErrorRiskModel(weights=np.array([-20.0, 0.0, 0.0]), bias=14.0)
+    model = ErrorRiskModel(
+        weights=np.array([-20.0, 0.0, 0.0]),
+        bias=14.0,
+        feature_names=LEGACY_FEATURE_NAMES,
+    )
     decisions = [
         NoulResult(noul=0.9, confidence=0.9),
         NoulResult(noul=0.55, confidence=0.3),
