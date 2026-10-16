@@ -189,6 +189,8 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_CASCADE_FALLBACK_MODEL` | имя fallback-модели | `remote` |
 | `DECISION_CASCADE_FALLBACK_MODALITIES` | модальности fallback | `text` |
 | `DECISION_CASCADE_THRESHOLD` | порог уверенности для эскалации (0–1) | `0.6` |
+| `DECISION_CASCADE_RISK_BUDGET` | бюджет ошибок для risk-aware каскада (0–1); включает режим | — (порог) |
+| `DECISION_RISK_MODEL_PATH` | файл обученного оценщика `P(ошибка)` | `<checkpoint>/risk.json` |
 | `DECISION_VISION_MODEL_ID` | CLIP/SigLIP для локальных `images` | — (без vision) |
 | `DECISION_VISION_DIM` | размерность признаков vision-энкодера (1–8192) | `512` |
 | `DECISION_MEDIA_ROOT` | allow-list каталог для чтения `images`/`videos` с диска | — (любой путь) |
@@ -291,6 +293,31 @@ DECISION_CASCADE_THRESHOLD=0.6 \
 В `usage` возвращается `escalated` — число эскалированных вопросов, и `fallback`
 с расходом внешнего бэкенда. Модальности каскада — объединение модальностей
 primary и fallback.
+
+**Risk-aware эскалация (бюджет ошибок).** Порог на «сырой» уверенности не равен
+вероятности ошибки: `confidence = 0.6` не значит «60% верно». Поэтому каскад
+умеет эскалировать по оценке `P(ошибка)` локального решения — тогда вы задаёте
+**бюджет ошибок**, который готовы принять локально, а не абстрактный порог:
+
+```bash
+DECISION_BACKEND=cascade \
+DECISION_CASCADE_RISK_BUDGET=0.05 \
+DECISION_RISK_MODEL_PATH=checkpoints/risk.json \
+DECISION_CASCADE_FALLBACK_URL=http://127.0.0.1:30000 \
+  uvicorn api.server.main:app --port 8000
+```
+
+Оценщик `P(ошибка)` — логистическая регрессия на признаках решения
+(уверенность, энтропия, отрыв лучшего класса); обучается на отложенном наборе и
+калибруется честно. Если модель не найдена, сервер падает с понятной ошибкой, а
+не молча деградирует. Бюджет виден в `GET /info`; причина эскалации — `usage.reason = "risk"`.
+Методика и честные числа — в `docs/risk-aware-cascade.md`:
+
+```bash
+# обучить оценщик риска и сравнить каскады на публичном наборе
+python -m eval.risk.run --specs routerbench --encoder openai-community/gpt2 \
+    --dim 768 --train-steps 500 --limit 4000 --out-dir data/risk_routerbench
+```
 
 Указывать размерность необязательно: головы строятся по фактической размерности
 выхода энкодера (`features.shape[-1]`), а если она отличается от 768 — вход
@@ -857,19 +884,21 @@ systemctl status decision-api@api.service
 ## Структура репозитория
 
 ```
-src/            — модель: encoder (+device.py), decision heads, sampler, бэкенды
-                  (backends/), схемы (schemas.py)
+src/            — модель: encoder (+device.py), decision heads, sampler, оценка
+                  риска (risk.py), бэкенды (backends/), схемы (schemas.py)
 api/            — FastAPI-сервер (server/) и Python SDK (sdk/: client.py, agent.py)
 training/       — SFT (sft/), RLCD (rlcd/) и рецепт обучения голов (recipe/)
-eval/           — калибровка (calibration/), latency (latency/), датасеты
-                  (datasets/, вкл. публичные AG News и RouterBench),
-                  офлайн-бенчмарк (benchmark/), отчёт untrained-vs-trained
-                  (report/) и сравнение с конкурентами (competitors/)
+eval/           — калибровка (calibration/, вкл. selective-метрики), latency
+                  (latency/), датасеты (datasets/, вкл. публичные AG News и
+                  RouterBench), офлайн-бенчмарк (benchmark/), отчёт
+                  untrained-vs-trained (report/), сравнение каскадов (risk/) и
+                  конкурентов (competitors/)
 deploy/         — Ubuntu/CentOS + systemd
-docs/           — методика бенчмарков (competitor-benchmark.md, routerbench.md)
+docs/           — методика бенчмарков (competitor-benchmark.md, routerbench.md,
+                  risk-aware-cascade.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
                   SystemOne, каскады, vision, интеграции, эксплуатация)
-tests/          — pytest-набор (347 тестов + opt-in GPU/модель)
+tests/          — pytest-набор (411 тестов + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh: uv/pyenv/venv/gh)
 README.md       — этот файл

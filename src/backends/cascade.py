@@ -72,6 +72,18 @@ class CascadeBackend:
         engine = getattr(self.primary, "engine", None)
         return getattr(engine, "untrained_policy", None) == "fallback"
 
+    def _uncertain(self, decision) -> bool:
+        """Эскалировать ли отдельное решение. В базовом каскаде — порог уверенности."""
+        return decision.confidence < self.threshold
+
+    def _uncertain_names(self, decisions: dict) -> list[str]:
+        return [name for name, d in decisions.items() if self._uncertain(d)]
+
+    @property
+    def escalation_reason(self) -> str | None:
+        """Причина эскалации для ``usage`` (у базового каскада — не фиксируется)."""
+        return None
+
     def decide(
         self,
         state: str,
@@ -111,11 +123,7 @@ class CascadeBackend:
                 {}, result.usage, len(questions), reason="untrained"
             )
             return BackendResult(decisions=dict(result.decisions), usage=usage)
-        uncertain = [
-            name
-            for name, decision in primary_result.decisions.items()
-            if decision.confidence < self.threshold
-        ]
+        uncertain = self._uncertain_names(primary_result.decisions)
         if not uncertain:
             usage = dict(primary_result.usage)
             usage["escalated"] = 0
@@ -130,7 +138,10 @@ class CascadeBackend:
         merged = dict(primary_result.decisions)
         merged.update(fallback_result.decisions)
         usage = self._merge_usage(
-            primary_result.usage, fallback_result.usage, len(uncertain)
+            primary_result.usage,
+            fallback_result.usage,
+            len(uncertain),
+            reason=self.escalation_reason,
         )
         return BackendResult(decisions=merged, usage=usage)
 
@@ -197,11 +208,7 @@ class CascadeBackend:
             ]
         results: list[BackendResult] = []
         for state, primary_result in zip(states, primary_results):
-            uncertain = [
-                name
-                for name, decision in primary_result.decisions.items()
-                if decision.confidence < self.threshold
-            ]
+            uncertain = self._uncertain_names(primary_result.decisions)
             if not uncertain:
                 usage = dict(primary_result.usage)
                 usage["escalated"] = 0
@@ -222,6 +229,7 @@ class CascadeBackend:
                         primary_result.usage,
                         fallback_result.usage,
                         len(uncertain),
+                        reason=self.escalation_reason,
                     ),
                 )
             )
@@ -253,3 +261,35 @@ class CascadeBackend:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+class RiskAwareCascadeBackend(CascadeBackend):
+    """Каскад, эскалирующий по оценке вероятности ошибки, а не по уверенности.
+
+    ``ErrorRiskModel`` предсказывает ``P(ошибка)`` по признакам решения
+    (уверенность, энтропия, отрыв), и решение уходит во внешнюю модель, когда
+    оценка превышает ``risk_budget``. Бюджет задаётся в терминах *доли ошибок*,
+    которые мы готовы принять локально, — в отличие от порога на сыром
+    confidence, который не равен вероятности ошибки.
+    """
+
+    def __init__(
+        self,
+        primary: Backend,
+        fallback: Backend,
+        risk_model,
+        risk_budget: float = 0.05,
+    ):
+        if not 0.0 <= risk_budget <= 1.0:
+            raise ValueError(f"risk_budget must be in [0.0, 1.0], got {risk_budget}")
+        super().__init__(primary, fallback, threshold=0.0)
+        self.risk_model = risk_model
+        self.risk_budget = risk_budget
+        self.name = f"risk-cascade[{primary.name}->{fallback.name}]"
+
+    @property
+    def escalation_reason(self) -> str | None:
+        return "risk"
+
+    def _uncertain(self, decision) -> bool:
+        return bool(self.risk_model.should_escalate(decision, self.risk_budget))

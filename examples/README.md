@@ -159,6 +159,19 @@ bash examples/protocol/gateway.sh
 Флаги: `--threshold` (порог уверенности), `--seed`. В продакшене fallback —
 это `HttpSystemOneBackend` (см. `protocol/gateway.sh`).
 
+### `cascade/risk_aware.py` — сервер: нет
+
+Risk-aware каскад `RiskAwareCascadeBackend`: эскалация не по порогу уверенности, а
+по оценке `P(ошибка)` относительно **бюджета ошибок**. Оценщик риска обучается
+прямо в примере на синтетическом отложенном наборе (полностью офлайн).
+
+```bash
+.venv/bin/python examples/cascade/risk_aware.py --budget 0.3
+```
+
+Флаги: `--budget` (доля допустимых локальных ошибок), `--threshold` (для
+сравнения). Методика и честные числа — в `docs/risk-aware-cascade.md`.
+
 ### `cascade/client_fallback.py` — сервер: да (два)
 
 Клиентский каскад: запрашивает primary, считает минимальную уверенность по

@@ -21,6 +21,7 @@ OFFLINE_CASES = [
     ("examples/batch/inprocess_batch.py", ["--n", "3"]),
     ("examples/batch/csv_triage.py", ["--n", "3", "--output", "{tmp}/triage.csv"]),
     ("examples/cascade/hash_to_llm.py", []),
+    ("examples/cascade/risk_aware.py", ["--budget", "0.3"]),
     ("examples/vision/vision_offline.py", []),
     ("examples/vision/make_sample_images.py", ["--n", "2", "--out", "{tmp}/img"]),
     ("examples/vision/image_single.py", ["--image", "{tmp}/img/img_00000.png"]),

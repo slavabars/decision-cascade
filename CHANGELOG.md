@@ -14,6 +14,14 @@
   эскалирует каскад во внешнюю модель.
 - Поле `trained` в ответах `POST /decisions` и `POST /decisions/batch` и новый
   эндпоинт `GET /info` (бэкенд, модальности, устройство, статус голов).
+- Risk-aware каскад: эскалация по оценке `P(ошибка)` (`src/risk.py`) с бюджетом
+  ошибок `DECISION_CASCADE_RISK_BUDGET` вместо порога на сырой уверенности
+  (`DECISION_RISK_MODEL_PATH`, по умолчанию `<checkpoint>/risk.json`); причина
+  эскалации — `usage.reason = "risk"`.
+- Selective-метрики `eval/calibration/selective.py` (risk–coverage, AURC/eAURC,
+  покрытие при бюджете риска) и честное сравнение `eval/risk/run.py`
+  (локально / порог / бюджет) с обучением оценщика риска
+  (`training/recipe/risk.py`). Методика — в `docs/risk-aware-cascade.md`.
 
 ## [0.4.0] — 2026-10-14
 

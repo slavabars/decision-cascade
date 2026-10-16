@@ -177,13 +177,19 @@ def create_backend(service: DecisionService | None = None) -> Backend:
 
 
 def create_cascade_backend(service: DecisionService | None = None) -> CascadeBackend:
-    """Локальные головы как primary, внешний SystemOne как fallback."""
+    """Локальные головы как primary, внешний SystemOne как fallback.
+
+    По умолчанию эскалация — по порогу уверенности (``DECISION_CASCADE_THRESHOLD``).
+    Если задан ``DECISION_CASCADE_RISK_BUDGET``, используется risk-aware каскад:
+    обученный оценщик ``P(ошибка)`` (файл ``DECISION_RISK_MODEL_PATH``, по
+    умолчанию ``<DECISION_CHECKPOINT_DIR>/risk.json``) и бюджет ошибок вместо
+    порога на сыром confidence.
+    """
     url = os.environ.get("DECISION_CASCADE_FALLBACK_URL")
     if not url:
         raise RuntimeError(
             "DECISION_BACKEND=cascade requires DECISION_CASCADE_FALLBACK_URL"
         )
-    threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
     primary = LocalHeadsBackend(service or create_service())
     fallback = HttpSystemOneBackend(
         url,
@@ -192,6 +198,28 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
             os.environ.get("DECISION_CASCADE_FALLBACK_MODALITIES", "text")
         ),
     )
+    risk_budget = os.environ.get("DECISION_CASCADE_RISK_BUDGET")
+    if risk_budget is not None:
+        from src.backends.cascade import RiskAwareCascadeBackend
+        from src.risk import ErrorRiskModel
+
+        model_path = os.environ.get("DECISION_RISK_MODEL_PATH") or str(
+            Path(os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR))
+            / "risk.json"
+        )
+        if not Path(model_path).exists():
+            raise RuntimeError(
+                "DECISION_CASCADE_RISK_BUDGET requires a fitted risk model at "
+                f"{model_path} (set DECISION_RISK_MODEL_PATH or train it via "
+                "python -m eval.risk.run)"
+            )
+        return RiskAwareCascadeBackend(
+            primary,
+            fallback,
+            ErrorRiskModel.load(model_path),
+            risk_budget=float(risk_budget),
+        )
+    threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
     return CascadeBackend(primary, fallback, threshold=threshold)
 
 
@@ -309,10 +337,14 @@ def _engine_info(backend: Backend) -> dict[str, Any] | None:
     primary = getattr(backend, "primary", None)
     fallback = getattr(backend, "fallback", None)
     if primary is not None or fallback is not None:
-        return {
+        info: dict[str, Any] = {
             "primary": _engine_info(primary) if primary is not None else None,
             "fallback": _engine_info(fallback) if fallback is not None else None,
         }
+        risk_budget = getattr(backend, "risk_budget", None)
+        if risk_budget is not None:
+            info["risk_budget"] = risk_budget
+        return info
     return None
 
 
