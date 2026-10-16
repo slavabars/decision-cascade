@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-16
+
 ### Added
 
 - Политика обслуживания необученных голов `DECISION_UNTRAINED`
@@ -21,7 +23,8 @@
 - Selective-метрики `eval/calibration/selective.py` (risk–coverage, AURC/eAURC,
   покрытие при бюджете риска) и честное сравнение `eval/risk/run.py`
   (локально / порог / бюджет) с обучением оценщика риска
-  (`training/recipe/risk.py`). Методика — в `docs/risk-aware-cascade.md`.
+  (`training/recipe/risk.py`). Методика и честные числа — в
+  `docs/risk-aware-cascade.md`.
 
 ## [0.4.0] — 2026-10-14
 
