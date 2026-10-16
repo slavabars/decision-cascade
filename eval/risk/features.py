@@ -9,6 +9,12 @@
 - `base(3)` — три базовых признака: прежняя модель (до расширения);
 - `random` — случайный балл («без навыка»): его AURC ≈ базовая частота ошибок,
   то есть граница «хуже случайного»;
+
+С `--question` добавляются варианты с **явным свободным членом на вопрос**
+(one-hot): `prod+question` — шесть признаков плюс по смещению на вопрос,
+`no_n_classes+question` — то же без признака `n_classes`. Так проверяется, можно
+ли заменить суррогат «номера вопроса» (`n_classes` «узнаёт» вопрос по числу
+исходов) на явный свободный член.
 - `+log_odds_gap`, `+n_classes`, `+noul_logit` — base плюс **один** новый
   признак (видно, кто тянет выигрыш);
 - `production` — все признаки из `FEATURE_NAMES`, то есть ровно то, что
@@ -158,8 +164,9 @@ def feature_variants(
     test_decisions: dict[str, list[DecisionResult]],
     val_matrix: np.ndarray,
     test_matrix: np.ndarray,
-    *,
+    *_,
     scale: bool = False,
+    question: bool = False,
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """Матрицы признаков по вариантам состава (train — валидация, test — тест)."""
     columns = list(range(BASE_WIDTH))
@@ -195,11 +202,48 @@ def feature_variants(
         np.hstack([val_matrix, head_val]),
         np.hstack([test_matrix, head_test]),
     )
+    if question:
+        val_question = question_onehot(specs, val_decisions)
+        test_question = question_onehot(specs, test_decisions)
+        variants["prod+question"] = (
+            np.hstack([val_matrix, val_question]),
+            np.hstack([test_matrix, test_question]),
+        )
+        without_n_classes = [
+            column
+            for column in range(len(FEATURE_NAMES))
+            if FEATURE_NAMES[column] != "n_classes"
+        ]
+        variants["no_n_classes+question"] = (
+            np.hstack([val_matrix[:, without_n_classes], val_question]),
+            np.hstack([test_matrix[:, without_n_classes], test_question]),
+        )
     return variants
 
 
 def _flat(decisions: dict[str, list[DecisionResult]]) -> list[DecisionResult]:
     return [decision for group in decisions.values() for decision in group]
+
+
+def question_onehot(
+    specs: dict[str, QuestionSpec],
+    decisions: dict[str, list[DecisionResult]],
+) -> np.ndarray:
+    """One-hot вопроса — явный свободный член на вопрос.
+
+    Строки идут question-major (как у `_groups`). На отложенном вопросе
+    (``--loo``) его колонка в обучении целиком нулевая, поэтому модель работает
+    без свободного члена под этот вопрос — в отличие от ``n_classes``, который
+    «узнаёт» вопрос по числу исходов и тащит на него чужой коэффициент.
+    """
+    index = {name: position for position, name in enumerate(specs)}
+    matrix = np.zeros((sum(len(group) for group in decisions.values()), len(specs)))
+    row = 0
+    for name, group in decisions.items():
+        for _decision in group:
+            matrix[row, index[name]] = 1.0
+            row += 1
+    return matrix
 
 
 def _c_label(c: float) -> str:
@@ -260,11 +304,13 @@ def prepare(
     scale: bool = False,
     with_state: bool = False,
     state_cs: list[float] | None = None,
+    with_question: bool = False,
 ) -> _Prepared:
     """Один раз считает решения, признаки и корректность для A/B и LOO.
 
     ``with_state`` добавляет варианты с состоянием энкодера (см.
-    `with_state_variants`), ``state_cs`` — их силы L2.
+    `with_state_variants`), ``state_cs`` — их силы L2, ``with_question`` —
+    варианты с явным свободным членом на вопрос (см. `question_onehot`).
     """
     val_features = encode_examples(specs, val, encoder)
     val_decisions = decisions_for_examples(heads, val_features, len(val))
@@ -278,7 +324,7 @@ def prepare(
     )
     variants = feature_variants(
         heads, specs, val_decisions, test_decisions, val_matrix, test_matrix,
-        scale=scale,
+        scale=scale, question=with_question,
     )
     cs: dict[str, float] = {}
     if with_state:
@@ -418,13 +464,13 @@ def aggregate(
 
 def print_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
     print(f"\nmean ± std over {n_seeds} seeds (lower AURC/eAURC is better):")
-    print(f"{'variant':>20} {'AURC':>16} {'eAURC':>16} {'acc@0.7':>16}")
+    print(f"{'variant':>24} {'AURC':>16} {'eAURC':>16} {'acc@0.7':>16}")
     for entry in aggregated:
         cells = [
             f"{entry[c]:.4f}±{entry[f'{c}_std']:.4f}"
             for c in ("aurc", "eaurc", "acc_at_0.7_coverage")
         ]
-        print(f"{entry['variant']:>20} " + " ".join(f"{c:>16}" for c in cells))
+        print(f"{entry['variant']:>24} " + " ".join(f"{c:>16}" for c in cells))
 
 
 LOO_COLUMNS = ("loo_aurc", "loo_acc_at_0.7", "indist_aurc", "indist_acc_at_0.7")
@@ -461,12 +507,12 @@ def print_loo_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
         f"{n_seeds} seeds:"
     )
     print(
-        f"{'variant':>20} {'LOO AURC':>16} {'in-dist AURC':>13} "
+        f"{'variant':>24} {'LOO AURC':>16} {'in-dist AURC':>13} "
         f"{'разрыв':>9} {'LOO acc@0.7':>12}"
     )
     for entry in aggregated:
         print(
-            f"{entry['variant']:>20} "
+            f"{entry['variant']:>24} "
             f"{entry['loo_aurc']:.4f}±{entry['loo_aurc_std']:.4f} "
             f"{entry['indist_aurc']:>13.4f} "
             f"{entry['indist_aurc'] - entry['loo_aurc']:>9.4f} "
@@ -522,6 +568,9 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     parser.add_argument("--state-C", type=float, nargs="+", default=None,
                         help="сила L2 для вариантов с состоянием (по умолчанию "
                              "0.05; можно задать несколько значений)")
+    parser.add_argument("--question", action="store_true",
+                        help="добавить варианты с явным свободным членом на "
+                             "вопрос: prod+question и no_n_classes+question")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -543,6 +592,7 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
         prepared = prepare(
             heads, encoder, specs, val, test, scale=args.scale,
             with_state=args.state, state_cs=args.state_C,
+            with_question=args.question,
         )
         for row in run_ab(prepared, seed=seed, C=args.C):
             rows_by_variant.setdefault(row["variant"], []).append(row)

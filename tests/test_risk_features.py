@@ -14,6 +14,7 @@ from eval.risk.features import (
     head_features,
     main,
     mean_pairwise_cosine,
+    question_onehot,
     with_state_variants,
 )
 from src.risk import FEATURE_NAMES, decision_features
@@ -98,6 +99,45 @@ def test_head_features_repeat_per_question():
     matrix = head_features(_stub_heads(SPECS), SPECS, decisions)
     assert matrix.shape == (5, 1)  # 3 + 2 строки, порядок как в flatten
     assert (matrix == 0.0).all()
+
+
+def test_question_onehot_rows_follow_question_major_order():
+    decisions = {"q1": [_noul(0.9)] * 3, "q2": [_noul(0.8)] * 2}
+    onehot = question_onehot(SPECS, decisions)
+    assert onehot.shape == (5, 2)
+    np.testing.assert_allclose(onehot, [[1, 0], [1, 0], [1, 0], [0, 1], [0, 1]])
+
+
+def test_question_variants_add_one_hot_intercept():
+    matrix = _matrix(DECISIONS)
+    variants = feature_variants(
+        _stub_heads(SPECS), SPECS, DECISIONS, DECISIONS, matrix, matrix,
+        question=True,
+    )
+    assert variants["prod+question"][0].shape == (3, len(FEATURE_NAMES) + 2)
+    # n_classes (колонка 4) выброшен, вместо него — по смещению на вопрос
+    assert variants["no_n_classes+question"][0].shape == (3, len(FEATURE_NAMES) - 1 + 2)
+    np.testing.assert_allclose(
+        variants["prod+question"][0][:, : len(FEATURE_NAMES)], matrix
+    )
+    assert "prod+question" not in feature_variants(
+        _stub_heads(SPECS), SPECS, DECISIONS, DECISIONS, matrix, matrix
+    )
+
+
+def test_cli_question_adds_intercept_variants(tmp_path):
+    main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "120", "--train-steps", "30", "--seeds", "0",
+        "--question", "--loo", "--out-dir", str(tmp_path),
+    ])
+    payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+
+    variants = set(payload["per_seed"])
+    assert {"prod+question", "no_n_classes+question"} <= variants
+    assert {"prod+question", "no_n_classes+question"} <= {
+        row["variant"] for row in payload["loo"]
+    }
 
 
 def test_cli_runs_offline_on_support_specs(tmp_path, capsys):
