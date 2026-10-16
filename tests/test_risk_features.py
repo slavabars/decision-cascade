@@ -1,4 +1,5 @@
 """Тесты A/B-замера состава признаков риск-модели (`eval/risk/features.py`)."""
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,6 +9,7 @@ import torch
 from eval.risk.features import (
     BASE_WIDTH,
     EXTRA_FEATURE_NAMES,
+    aggregate_loo,
     feature_variants,
     head_features,
     main,
@@ -111,3 +113,45 @@ def test_cli_runs_offline_on_support_specs(tmp_path, capsys):
         assert 0.0 <= row["aurc"]
         assert 0.0 <= row["acc_at_0.7_coverage"] <= 1.0
     assert (tmp_path / "features.json").exists()
+
+
+def test_aggregate_loo_macro_averages_over_questions():
+    def row(question, loo, indist):
+        return {
+            "variant": "v", "question": question, "seed": 0,
+            "loo_aurc": loo, "loo_acc_at_0.7": 0.5,
+            "indist_aurc": indist, "indist_acc_at_0.7": 0.6,
+        }
+
+    aggregated = aggregate_loo([row("q1", 0.2, 0.1), row("q2", 0.4, 0.3)])
+    assert len(aggregated) == 1
+    entry = aggregated[0]
+    assert entry["variant"] == "v"
+    assert entry["n_seeds"] == 1
+    # макро-среднее по вопросам, а не по строкам
+    assert entry["loo_aurc"] == pytest.approx(0.3)
+    assert entry["indist_aurc"] == pytest.approx(0.2)
+
+
+def test_cli_loo_writes_per_question_metrics(tmp_path):
+    main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "200", "--train-steps", "30", "--seeds", "0", "--loo",
+        "--out-dir", str(tmp_path),
+    ])
+    payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+
+    rows = payload["loo_per_question"]
+    questions = sorted({row["question"] for row in rows})
+    variants = {row["variant"] for row in rows}
+    assert len(questions) >= 2
+    assert {"confidence", "base(3)", "production"} <= variants
+    # на каждый вариант — ровно по строке на вопрос (1 seed)
+    for variant in variants:
+        assert sum(row["variant"] == variant for row in rows) == len(questions)
+    for row in rows:
+        # обучение идёт на всех вопросах, кроме отложенного
+        assert row["n_val"] > 0 and row["n_test"] > 0
+        assert 0.0 <= row["loo_aurc"] <= 1.0
+        assert 0.0 <= row["loo_acc_at_0.7"] <= 1.0
+    assert {entry["variant"] for entry in payload["loo"]} == variants

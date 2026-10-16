@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -183,18 +184,35 @@ def _flat(decisions: dict[str, list[DecisionResult]]) -> list[DecisionResult]:
     return [decision for group in decisions.values() for decision in group]
 
 
-def run_ab(
+def _groups(specs: dict[str, QuestionSpec], decisions) -> list[str]:
+    """Имя вопроса по каждой строке — в том же порядке, что у `flatten`."""
+    return [name for name in specs for _ in decisions[name]]
+
+
+@dataclass
+class _Prepared:
+    """Матрицы признаков и корректность по строкам, посчитанные один раз."""
+
+    #: вариант состава признаков -> (матрица валидации, матрица теста)
+    variants: dict[str, tuple[np.ndarray, np.ndarray]]
+    #: (корректность валидации, корректность теста)
+    correct: tuple[np.ndarray, np.ndarray]
+    #: (имя вопроса по строкам валидации, имя вопроса по строкам теста)
+    groups: tuple[list[str], list[str]]
+    #: порядок вопросов
+    questions: list[str]
+
+
+def prepare(
     heads,
     encoder: TextEncoder,
     specs: dict[str, QuestionSpec],
     val: list[dict[str, Any]],
     test: list[dict[str, Any]],
     *,
-    seed: int = 0,
-    C: float = 1.0,
     scale: bool = False,
-) -> list[dict[str, float]]:
-    """Подгоняет риск-модели на ``val`` и считает метрики на ``test``."""
+) -> _Prepared:
+    """Один раз считает решения, признаки и корректность для A/B и LOO."""
     val_features = encode_examples(specs, val, encoder)
     val_decisions = decisions_for_examples(heads, val_features, len(val))
     val_flat, val_correct = flatten(specs, val_decisions, val)
@@ -205,18 +223,92 @@ def run_ab(
     val_matrix, test_matrix = _scaled(
         features_matrix(val_flat), features_matrix(test_flat), scale
     )
-    variants = feature_variants(
-        heads, specs, val_decisions, test_decisions, val_matrix, test_matrix,
-        scale=scale,
+    return _Prepared(
+        variants=feature_variants(
+            heads, specs, val_decisions, test_decisions, val_matrix, test_matrix,
+            scale=scale,
+        ),
+        correct=(val_correct, test_correct),
+        groups=(_groups(specs, val_decisions), _groups(specs, test_decisions)),
+        questions=list(specs),
     )
 
+
+def _scores(
+    train_matrix: np.ndarray,
+    eval_matrix: np.ndarray,
+    correct: np.ndarray,
+    *,
+    seed: int,
+    C: float,
+) -> np.ndarray:
+    """Балл «быть правильным» на ``eval_matrix``; модель учится на ``train_matrix``."""
+    weights, bias = _fit_logistic(train_matrix, correct, seed=seed, C=C)
+    # модель предсказывает P(ошибка); ранжировщику нужен балл «чем больше, тем
+    # лучше» — как в ``eval.risk.run``
+    error = 1.0 / (1.0 + np.exp(-(eval_matrix @ weights + bias)))
+    return 1.0 - error
+
+
+def run_ab(
+    prepared: _Prepared, *, seed: int = 0, C: float = 1.0
+) -> list[dict[str, float]]:
+    """Подгоняет риск-модели на валидации и считает метрики на тесте."""
+    _, test_correct = prepared.correct
     rows = []
-    for name, (train_matrix, eval_matrix) in variants.items():
-        weights, bias = _fit_logistic(train_matrix, val_correct, seed=seed, C=C)
-        # модель предсказывает P(ошибка); ранжировщику нужен балл «чем больше,
-        # тем лучше» — как в ``eval.risk.run``
-        error = 1.0 / (1.0 + np.exp(-(eval_matrix @ weights + bias)))
-        rows.append({"variant": name, **risk_report(1.0 - error, test_correct)})
+    for name, (train_matrix, eval_matrix) in prepared.variants.items():
+        scores = _scores(train_matrix, eval_matrix, prepared.correct[0], seed=seed, C=C)
+        rows.append({"variant": name, "seed": seed, **risk_report(scores, test_correct)})
+    return rows
+
+
+def run_loo(
+    prepared: _Prepared, *, seed: int = 0, C: float = 1.0
+) -> list[dict[str, Any]]:
+    """Leave-one-question-out: обучать без одного вопроса, замерять на нём.
+
+    В обычном A/B валидация и тест делят один и тот же набор вопросов, поэтому
+    признак-константа вопроса (``n_classes``) работает как «я знаю, какой это
+    вопрос»: модель просто подбирает точку срабатывания под вопрос. Здесь
+    риск-модель обучается на всех вопросах, **кроме одного**, и оценивается на
+    отложенном. Это несмещённая оценка того, что переносится на новый вопрос.
+
+    Рядом считается ``indist`` — на том же подмножестве, но у модели, обученной
+    на всех вопросах. Разрыв ``indist - loo`` и есть вклад «знания вопроса».
+    """
+    val_correct, test_correct = prepared.correct
+    val_groups = np.asarray(prepared.groups[0])
+    test_groups = np.asarray(prepared.groups[1])
+
+    rows: list[dict[str, Any]] = []
+    for name, (val_matrix, test_matrix) in prepared.variants.items():
+        indist = _scores(val_matrix, test_matrix, val_correct, seed=seed, C=C)
+        for question in prepared.questions:
+            train_rows = val_groups != question
+            test_rows = test_groups == question
+            loo = _scores(
+                val_matrix[train_rows],
+                test_matrix[test_rows],
+                val_correct[train_rows],
+                seed=seed,
+                C=C,
+            )
+            subset_correct = test_correct[test_rows]
+            rows.append(
+                {
+                    "variant": name,
+                    "question": question,
+                    "seed": seed,
+                    "n_val": int(train_rows.sum()),
+                    "n_test": int(test_rows.sum()),
+                    "loo_aurc": aurc(loo, subset_correct),
+                    "loo_acc_at_0.7": 1.0
+                    - risk_at_coverage(loo, subset_correct, 0.7),
+                    "indist_aurc": aurc(indist[test_rows], subset_correct),
+                    "indist_acc_at_0.7": 1.0
+                    - risk_at_coverage(indist[test_rows], subset_correct, 0.7),
+                }
+            )
     return rows
 
 
@@ -249,6 +341,75 @@ def print_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
         print(f"{entry['variant']:>20} " + " ".join(f"{c:>16}" for c in cells))
 
 
+LOO_COLUMNS = ("loo_aurc", "loo_acc_at_0.7", "indist_aurc", "indist_acc_at_0.7")
+
+
+def aggregate_loo(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Макро-среднее по вопросам, затем среднее и разброс по seed'ам."""
+    per_seed: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for row in rows:
+        per_seed.setdefault((row["variant"], row["seed"]), []).append(row)
+
+    by_variant: dict[str, list[dict[str, float]]] = {}
+    for (variant, _seed), group in per_seed.items():
+        by_variant.setdefault(variant, []).append(
+            {column: float(np.mean([row[column] for row in group]))
+             for column in LOO_COLUMNS}
+        )
+
+    aggregated = []
+    for variant, seeds in by_variant.items():
+        entry: dict[str, Any] = {"variant": variant, "n_seeds": len(seeds)}
+        for column in LOO_COLUMNS:
+            values = [seed[column] for seed in seeds]
+            entry[column] = float(np.mean(values))
+            entry[f"{column}_std"] = float(np.std(values))
+        aggregated.append(entry)
+    return aggregated
+
+
+def print_loo_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
+    """Сводка LOO: перенос против «знания вопроса»."""
+    print(
+        f"\nleave-one-question-out, макро-среднее по вопросам ± std over "
+        f"{n_seeds} seeds:"
+    )
+    print(
+        f"{'variant':>20} {'LOO AURC':>16} {'in-dist AURC':>13} "
+        f"{'разрыв':>9} {'LOO acc@0.7':>12}"
+    )
+    for entry in aggregated:
+        print(
+            f"{entry['variant']:>20} "
+            f"{entry['loo_aurc']:.4f}±{entry['loo_aurc_std']:.4f} "
+            f"{entry['indist_aurc']:>13.4f} "
+            f"{entry['indist_aurc'] - entry['loo_aurc']:>9.4f} "
+            f"{entry['loo_acc_at_0.7']:>12.4f}"
+        )
+
+
+def print_loo_per_question(
+    rows: list[dict[str, Any]],
+    variant: str = PRODUCTION_VARIANT,
+    seed: int = 0,
+) -> None:
+    """По вопросам (один seed): видно, какой вопрос «переносится», а какой нет."""
+    selected = [
+        row for row in rows
+        if row["variant"] == variant and row["seed"] == seed
+    ]
+    if not selected:
+        return
+    print(f"\nper-question LOO (variant={variant}, seed={seed}):")
+    print(f"{'question':>16} {'n_val':>7} {'n_test':>7} {'LOO AURC':>10} "
+          f"{'in-dist':>9}")
+    for row in selected:
+        print(
+            f"{row['question']:>16} {row['n_val']:>7} {row['n_test']:>7} "
+            f"{row['loo_aurc']:>10.4f} {row['indist_aurc']:>9.4f}"
+        )
+
+
 def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     parser = argparse.ArgumentParser(description="A/B risk feature set")
     parser.add_argument("--specs", choices=["support", "public", "routerbench"],
@@ -265,11 +426,16 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     parser.add_argument("--scale", action="store_true",
                         help="стандартизировать признаки по валидации "
                              "(проверка чувствительности к масштабу)")
+    parser.add_argument("--loo", action="store_true",
+                        help="leave-one-question-out: обучать риск-модель без "
+                             "одного вопроса и замерять на нём (несмещённая "
+                             "оценка переноса на новый вопрос)")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
     specs = _specs(args.specs)
     rows_by_variant: dict[str, list[dict[str, float]]] = {}
+    loo_rows: list[dict[str, Any]] = []
     for seed in args.seeds:
         splits = _load_splits(SimpleNamespace(
             specs=args.specs, dataset=None, limit=args.limit, seed=seed,
@@ -282,15 +448,22 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             specs, train, encoder, train_steps=args.train_steps, lr=args.lr,
             seed=seed,
         )
-        for row in run_ab(heads, encoder, specs, val, test, seed=seed, C=args.C,
-                          scale=args.scale):
+        prepared = prepare(heads, encoder, specs, val, test, scale=args.scale)
+        for row in run_ab(prepared, seed=seed, C=args.C):
             rows_by_variant.setdefault(row["variant"], []).append(row)
+        if args.loo:
+            loo_rows.extend(run_loo(prepared, seed=seed, C=args.C))
         if seed == args.seeds[0]:
             print(f"specs={args.specs} encoder={args.encoder} "
                   f"train={len(train)} val={len(val)} test={len(test)}")
 
     aggregated = aggregate(rows_by_variant)
     print_report(aggregated, len(args.seeds))
+    loo_aggregated = aggregate_loo(loo_rows) if args.loo else []
+    if args.loo:
+        print_loo_report(loo_aggregated, len(args.seeds))
+        print_loo_per_question(loo_rows)
+
     if args.out_dir is not None:
         args.out_dir.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -302,6 +475,8 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "extra_features": list(EXTRA_FEATURE_NAMES),
             "per_seed": rows_by_variant,
             "aggregate": aggregated,
+            "loo": aggregate_loo(loo_rows) if args.loo else None,
+            "loo_per_question": loo_rows,
         }
         (args.out_dir / "features.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
