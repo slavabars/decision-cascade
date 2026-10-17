@@ -33,6 +33,25 @@
 состояния», а не production-путь: в сервисе оценщик риска пока видит только
 `DecisionResult`.
 
+С `--qmean` (Шаг 5) добавляются варианты со **средним пулированным вектором
+вопроса**: `qmean[C]` — только он, `prod+qmean[C]` — шесть признаков плюс он.
+Вектор усредняется по **валидации** вопроса и нормируется (в тест не подглядываем:
+в сервисе так же усредняются промпты нового вопроса без меток), поэтому внутри
+вопроса он константа — тот же класс признака, что `n_classes`/one-hot, но
+необучаемый и «мягкий». Это проверка гипотезы «жёсткий `n_classes` — суррогат,
+который можно заменить/дополнить мягким prior'ом вопроса».
+
+С `--ablate` (Шаг 5) добавляются варианты `production` **минус один** новый
+признак (`no_n_classes`, `no_log_odds_gap`, `no_noul_logit`). Нужны, чтобы
+отделить вклад признака от вклада остальных: замер Шага 3 показал, что именно
+`noul_logit` значимо хуже `confidence` на новом вопросе, и абляция проверяет это
+напрямую (а не через «`+` к базовым»).
+
+С `--C-grid` (Шаг 5а) сетка по силе L2: варианты `production[C]` делят с `production`
+ту же матрицу признаков, отличаясь только регуляризацией. Сетка по `C` — один
+прогон, а не прогон на значение, потому что кодирование и обучение голов
+общие; это измерение того, не «чинит» ли перенос обычная регуляризация.
+
 С `--shots` считается **кривая дообучения на новом вопросе**: риск-модель учится
 на валидации остальных вопросов плюс `n` случайных строк валидации самого вопроса,
 а оценивается на его тесте. `n = 0` — это перенос без своих данных (`--loo`), `n` =
@@ -205,6 +224,7 @@ def feature_variants(
     *_,
     scale: bool = False,
     question: bool = False,
+    ablate: bool = False,
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """Матрицы признаков по вариантам состава (train — валидация, test — тест)."""
     columns = list(range(BASE_WIDTH))
@@ -231,6 +251,13 @@ def feature_variants(
             test_matrix[:, selected],
         )
     variants[PRODUCTION_VARIANT] = (val_matrix, test_matrix)
+    if ablate:
+        # «production минус один новый признак»: нужен, чтобы отделить вклад
+        # каждого признака от вклада остальных (Шаг 5, абляция `noul_logit`).
+        for offset in range(BASE_WIDTH, len(FEATURE_NAMES)):
+            name = FEATURE_NAMES[offset]
+            kept = [column for column in range(len(FEATURE_NAMES)) if column != offset]
+            variants[f"no_{name}"] = (val_matrix[:, kept], test_matrix[:, kept])
     head_val, head_test = _scaled(
         head_features(heads, specs, val_decisions),
         head_features(heads, specs, test_decisions),
@@ -311,6 +338,60 @@ def with_state_variants(
     return out
 
 
+def _qmean_vectors(val_features: dict[str, Any]) -> dict[str, np.ndarray]:
+    """Нормированный средний пулированный вектор вопроса.
+
+    Среднее берётся по **валидации** вопроса, поэтому в тест не подглядываем: в
+    сервисе ровно так же усредняются промпты нового вопроса, метки которого
+    неизвестны. Вектор — константа вопроса, то есть тот же класс, что
+    ``n_classes``/one-hot, но необучаемый и «мягкий».
+    """
+    vectors: dict[str, np.ndarray] = {}
+    for question, states in val_features.items():
+        mean = states.mean(dim=0)
+        norm = float(mean.norm().clamp(min=1e-12))
+        vectors[question] = (mean / norm).detach().cpu().numpy().astype(float)
+    return vectors
+
+
+def qmean_matrix(
+    vectors: dict[str, np.ndarray],
+    features: dict[str, Any],
+    specs: dict[str, QuestionSpec],
+) -> np.ndarray:
+    """Развернуть векторы вопросов по строкам (question-major, как `flatten`)."""
+    return np.concatenate(
+        [
+            np.tile(vectors[question], (features[question].shape[0], 1))
+            for question in specs
+        ]
+    )
+
+
+def with_qmean_variants(
+    variants: dict[str, tuple[np.ndarray, np.ndarray]],
+    qmeans: tuple[np.ndarray, np.ndarray],
+    cs: list[float],
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Добавляет варианты со средним вектором вопроса: ``qmean[C]`` и ``prod+qmean[C]``.
+
+    Колонки **не** стандартизуются по строкам: вектор постоянен внутри вопроса,
+    и стандартизация обнулила бы его. Масштаб задаёт нормировка вектора, а силу
+    L2 подбирает ``--qmean-C`` (как у состояния энкодера).
+    """
+    qmean_val, qmean_test = qmeans
+    prod_val, prod_test = variants[PRODUCTION_VARIANT]
+    out = dict(variants)
+    for c in cs:
+        label = _c_label(c)
+        out[f"qmean{label}"] = (qmean_val, qmean_test)
+        out[f"prod+qmean{label}"] = (
+            np.hstack([prod_val, qmean_val]),
+            np.hstack([prod_test, qmean_test]),
+        )
+    return out
+
+
 def _groups(specs: dict[str, QuestionSpec], decisions) -> list[str]:
     """Имя вопроса по каждой строке — в том же порядке, что у `flatten`."""
     return [name for name in specs for _ in decisions[name]]
@@ -343,12 +424,21 @@ def prepare(
     with_state: bool = False,
     state_cs: list[float] | None = None,
     with_question: bool = False,
+    ablate: bool = False,
+    with_qmean: bool = False,
+    qmean_cs: list[float] | None = None,
+    c_grid: list[float] | None = None,
 ) -> _Prepared:
     """Один раз считает решения, признаки и корректность для A/B и LOO.
 
     ``with_state`` добавляет варианты с состоянием энкодера (см.
     `with_state_variants`), ``state_cs`` — их силы L2, ``with_question`` —
-    варианты с явным свободным членом на вопрос (см. `question_onehot`).
+    варианты с явным свободным членом на вопрос (см. `question_onehot`),
+    ``ablate`` — варианты ``production`` без одного нового признака, ``with_qmean``
+    — варианты со средним вектором вопроса (см. `with_qmean_variants`).
+    ``c_grid`` добавляет ``production[C]`` с той же матрицей признаков, но своей
+    силой L2: признаки считаются один раз, поэтому сетка по ``C`` не требует
+    повторного кодирования (см. Шаг 5а).
     """
     val_features = encode_examples(specs, val, encoder)
     val_decisions = decisions_for_examples(heads, val_features, len(val))
@@ -362,9 +452,16 @@ def prepare(
     )
     variants = feature_variants(
         heads, specs, val_decisions, test_decisions, val_matrix, test_matrix,
-        scale=scale, question=with_question,
+        scale=scale, question=with_question, ablate=ablate,
     )
     cs: dict[str, float] = {}
+    if c_grid:
+        # та же матрица признаков, своя L2: сетка по C без повторного кодирования
+        production = variants[PRODUCTION_VARIANT]
+        for c in c_grid:
+            label = _c_label(c)
+            variants[f"{PRODUCTION_VARIANT}{label}"] = production
+            cs[f"{PRODUCTION_VARIANT}{label}"] = c
     if with_state:
         state_cs = list(state_cs or [0.05])
         # порядок строк — question-major, как у ``flatten``
@@ -377,6 +474,18 @@ def prepare(
             label = _c_label(c)
             cs[f"state{label}"] = c
             cs[f"prod+state{label}"] = c
+    if with_qmean:
+        qmean_cs = list(qmean_cs or [0.05])
+        vectors = _qmean_vectors(val_features)
+        qmeans = (
+            qmean_matrix(vectors, val_features, specs),
+            qmean_matrix(vectors, test_features, specs),
+        )
+        variants = with_qmean_variants(variants, qmeans, qmean_cs)
+        for c in qmean_cs:
+            label = _c_label(c)
+            cs[f"qmean{label}"] = c
+            cs[f"prod+qmean{label}"] = c
     return _Prepared(
         variants=variants,
         correct=(val_correct, test_correct),
@@ -1015,6 +1124,10 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dtype", default="float32")
     parser.add_argument("--C", type=float, default=1.0)
+    parser.add_argument("--C-grid", type=float, nargs="+", default=None,
+                        help="сетка сил L2 для вариантов production[C]: "
+                             "признаки кодируются один раз, сетка по C не "
+                             "требует повторного кодирования")
     parser.add_argument("--scale", action="store_true",
                         help="стандартизировать признаки по валидации "
                              "(проверка чувствительности к масштабу)")
@@ -1031,6 +1144,14 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     parser.add_argument("--question", action="store_true",
                         help="добавить варианты с явным свободным членом на "
                              "вопрос: prod+question и no_n_classes+question")
+    parser.add_argument("--ablate", action="store_true",
+                        help="добавить варианты production минус один новый "
+                             "признак: no_n_classes, no_log_odds_gap, no_noul_logit")
+    parser.add_argument("--qmean", action="store_true",
+                        help="добавить варианты со средним пулированным вектором "
+                             "вопроса: qmean[C] и prod+qmean[C]")
+    parser.add_argument("--qmean-C", type=float, nargs="+", default=None,
+                        help="сила L2 для qmean-вариантов (по умолчанию 0.05)")
     parser.add_argument("--shots", type=int, nargs="+", default=None,
                         help="кривая дообучения на новом вопросе: сколько строк "
                              "валидации вопроса добавить в обучение (0 — перенос "
@@ -1061,7 +1182,9 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
         prepared = prepare(
             heads, encoder, specs, val, test, scale=args.scale,
             with_state=args.state, state_cs=args.state_C,
-            with_question=args.question,
+            with_question=args.question, ablate=args.ablate,
+            with_qmean=args.qmean, qmean_cs=args.qmean_C,
+            c_grid=args.C_grid,
         )
         for row in run_ab(prepared, seed=seed, C=args.C):
             rows_by_variant.setdefault(row["variant"], []).append(row)
@@ -1156,6 +1279,9 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "feature_names": list(FEATURE_NAMES),
             "extra_features": list(EXTRA_FEATURE_NAMES),
             "state_cs": args.state_C if args.state else None,
+            "qmean_cs": args.qmean_C if args.qmean else None,
+            "c_grid": args.C_grid or None,
+            "ablated": args.ablate,
             "per_seed": rows_by_variant,
             "aggregate": aggregated,
             "loo": aggregate_loo(loo_rows) if args.loo else None,

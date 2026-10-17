@@ -152,6 +152,102 @@ def test_cli_question_adds_intercept_variants(tmp_path):
     }
 
 
+def test_ablate_variants_drop_exactly_one_column():
+    matrix = _matrix(DECISIONS)
+    variants = feature_variants(
+        _stub_heads(SPECS), SPECS, DECISIONS, DECISIONS, matrix, matrix,
+        ablate=True,
+    )
+    kept = [name for name in FEATURE_NAMES if f"no_{name}" in variants]
+    assert kept == list(EXTRA_FEATURE_NAMES)  # базовые не аблейтим
+    for name in kept:
+        offset = FEATURE_NAMES.index(name)
+        columns = [i for i in range(len(FEATURE_NAMES)) if i != offset]
+        np.testing.assert_allclose(
+            variants[f"no_{name}"][0], matrix[:, columns]
+        )
+        assert variants[f"no_{name}"][0].shape == (3, len(FEATURE_NAMES) - 1)
+    # без флага абляции нет — поведение по умолчанию не меняется
+    assert "no_n_classes" not in feature_variants(
+        _stub_heads(SPECS), SPECS, DECISIONS, DECISIONS, matrix, matrix
+    )
+
+
+def test_qmean_vectors_are_normalised_question_means():
+    from eval.risk.features import _qmean_vectors, qmean_matrix
+
+    # две строки первого вопроса и одна второго; средние — (1,1)/(0,1)
+    val_features = {
+        "q1": torch.tensor([[3.0, 1.0], [1.0, 1.0]]),
+        "q2": torch.tensor([[0.0, 2.0]]),
+    }
+    vectors = _qmean_vectors(val_features)
+    assert float(np.linalg.norm(vectors["q1"])) == pytest.approx(1.0)
+    assert float(np.linalg.norm(vectors["q2"])) == pytest.approx(1.0)
+    np.testing.assert_allclose(vectors["q1"], np.array([2.0, 1.0]) / np.sqrt(5.0))
+    np.testing.assert_allclose(vectors["q2"], [0.0, 1.0])
+    # развёртка по строкам: константа внутри вопроса, порядок question-major
+    matrix = qmean_matrix(vectors, val_features, SPECS)
+    assert matrix.shape == (3, 2)
+    np.testing.assert_allclose(matrix[:2], [vectors["q1"], vectors["q1"]])
+    np.testing.assert_allclose(matrix[2], vectors["q2"])
+    assert not np.allclose(matrix[0], matrix[2])
+
+
+def test_qmean_variants_append_question_block():
+    from eval.risk.features import with_qmean_variants
+
+    matrix = _matrix(DECISIONS)
+    variants = {
+        "production": (matrix, matrix),
+        "base(3)": (matrix[:, :BASE_WIDTH], matrix[:, :BASE_WIDTH]),
+    }
+    qmeans = (np.ones((3, 4)), np.zeros((3, 4)))
+    out = with_qmean_variants(variants, qmeans, [0.05])
+    assert out["qmean[0.05]"][0].shape == (3, 4)
+    assert out["prod+qmean[0.05]"][0].shape == (3, len(FEATURE_NAMES) + 4)
+    np.testing.assert_allclose(out["prod+qmean[0.05]"][0][:, : len(FEATURE_NAMES)], matrix)
+    np.testing.assert_allclose(out["prod+qmean[0.05]"][0][:, len(FEATURE_NAMES):], 1.0)
+    assert "qmean[0.05]" not in variants  # исходный словарь не мутируем
+
+
+def test_cli_ablate_and_qmean_add_variants(tmp_path):
+    main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "120", "--train-steps", "30", "--seeds", "0",
+        "--ablate", "--qmean", "--qmean-C", "0.05", "--loo",
+        "--out-dir", str(tmp_path),
+    ])
+    payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+
+    variants = set(payload["per_seed"])
+    assert {"qmean[0.05]", "prod+qmean[0.05]"} <= variants
+    assert {"no_noul_logit", "no_n_classes", "no_log_odds_gap"} <= variants
+    variants_loo = {row["variant"] for row in payload["loo"]}
+    assert {"qmean[0.05]", "prod+qmean[0.05]", "no_noul_logit"} <= variants_loo
+    assert payload["qmean_cs"] == [0.05]
+    assert payload["ablated"] is True
+
+
+def test_cli_c_grid_shares_features_and_uses_own_C(tmp_path):
+    main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "120", "--train-steps", "30", "--seeds", "0",
+        "--C-grid", "1.0", "1e-4", "--loo",
+        "--out-dir", str(tmp_path),
+    ])
+    payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+
+    assert payload["c_grid"] == [1.0, 1e-4]
+    variants = set(payload["per_seed"])
+    assert {"production[1]", "production[0.0001]"} <= variants
+    loo = {row["variant"]: row["loo_aurc"] for row in payload["loo"]}
+    # та же матрица признаков и тот же C → тот же результат бит в бит
+    assert loo["production[1]"] == loo["production"]
+    # своя L2 меняет балл, значит и AURC отложенного вопроса
+    assert loo["production[0.0001]"] != loo["production"]
+
+
 def test_cli_runs_offline_on_support_specs(tmp_path, capsys):
     rows = main([
         "--specs", "support", "--encoder", "hash", "--dim", "16",
