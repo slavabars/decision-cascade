@@ -43,6 +43,29 @@ def test_rlcd_improves_calibration():
     assert after < 0.35
 
 
+def test_rlcd_improves_calibration_across_seeds():
+    """Регресс на вырожденный градиент: награда обязана зависеть от сэмпла.
+
+    Если награда считается по вероятности политики, а не по взятому действию,
+    то E[∇ log π] = 0 и «обучение» идёт только конечновыборочным шумом — на одном
+    seed это может случайно выглядеть как улучшение. Здесь сходимость проверяется
+    на нескольких seeds сразу (при вырожденном градиенте тест падает).
+    """
+    from training.rlcd.train import RLCDNoulTrainer
+
+    for seed in range(5):
+        torch.manual_seed(seed)
+        n = 160
+        features = torch.randn(n, 2)
+        outc = (features[:, 0] > 0).float()
+        trainer = RLCDNoulTrainer(dim=2, lr=0.2)
+        before = float((trainer.predict_probs(features) - outc).abs().mean())
+        trainer.train(features, outc, steps=300)
+        after = float((trainer.predict_probs(features) - outc).abs().mean())
+        assert after < before, f"seed {seed}: {before=} {after=}"
+        assert after < 0.35, f"seed {seed}: {after=}"
+
+
 def test_calibrate_noul_heads_copies_weights_into_heads():
     from src.decision_head.heads import DecisionHeads
     from src.sampler.questions import ChoiceSpec, NoulSpec

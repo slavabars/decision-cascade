@@ -1,16 +1,20 @@
 """RLCD: reinforcement learning for calibrated decisions.
 
 Прототип для Noul-головы: политика p = sigmoid(linear(features)). Внутри
-группы берутся G выборок Y ~ Bernoulli(p) (GRPO-стиль), reward =
--|p - o|, преимущества центрируются по среднему батча, policy-gradient
-обновление через лог-вероятность выборок.
+группы берутся G выборок Y ~ Bernoulli(p) (GRPO-стиль), reward считается по
+*взятому* действию: -|s - o|, преимущества нормализуются GRPO-стилем,
+policy-gradient обновление через лог-вероятность выборок.
+
+Награда обязана зависеть от сэмпла `s`, а не от вероятности политики: иначе
+`E_s[∇ log π(s)] = 0` и ожидаемый градиент строго нулевой — обучение идёт
+только конечновыборочным шумом.
 """
 from __future__ import annotations
 
 import torch
 from torch import Tensor, nn
 
-from training.rlcd.reward import reward_calibration
+from training.rlcd.reward import group_advantages, reward_calibration
 
 
 class RLCDNoulTrainer:
@@ -45,8 +49,8 @@ class RLCDNoulTrainer:
                 + (1 - s) * torch.log(1 - probs + 1e-9)
                 for s in samples
             ]
-            rewards = reward_calibration(probs, o)
-            advantages = rewards - rewards.mean()
+            rewards = reward_calibration(samples, o.unsqueeze(0))
+            advantages = group_advantages(rewards)
             loss = -torch.stack(log_probs).mul(advantages.detach()).mean()
             self.optimizer.zero_grad()
             loss.backward()
@@ -66,7 +70,7 @@ def calibrate_noul_heads(
     gate_features: dict[str, Tensor] | None = None,
     gate_targets: dict[str, Tensor] | None = None,
 ) -> dict[str, float]:
-    """RLCD-калибровка noul-голов: reward = -|p - o|, веса копируются в головы.
+    """RLCD-калибровка noul-голов: reward = -|s - o| (s — взятый сэмпл), веса копируются в головы.
 
     Для каждой noul-головы обучается отдельная политика на её (и только её)
     признаках. Калибровка применяется только если она *улучшает* среднюю
