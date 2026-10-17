@@ -189,7 +189,10 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     Если задан ``DECISION_CASCADE_RISK_BUDGET``, используется risk-aware каскад:
     обученный оценщик ``P(ошибка)`` (файл ``DECISION_RISK_MODEL_PATH``, по
     умолчанию ``<DECISION_CHECKPOINT_DIR>/risk.json``) и бюджет ошибок вместо
-    порога на сыром confidence.
+    порога на сыром confidence. Вердикт сертификата пересчитывается с допуском
+    ``DECISION_RISK_GATE_DELTA`` (> 0 ослабляет гейт, < 0 ужесточает), а
+    ``DECISION_RISK_FEW_SHOT_N`` (по умолчанию ``RISK_FEW_SHOT_MIN_N``, значение
+    < 2 отключает) задаёт порог few-shot переобучения под новый вопрос.
     """
     url = os.environ.get("DECISION_CASCADE_FALLBACK_URL")
     if not url:
@@ -208,7 +211,7 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     risk_budget = os.environ.get("DECISION_CASCADE_RISK_BUDGET")
     if risk_budget is not None:
         from src.backends.cascade import RiskAwareCascadeBackend
-        from src.risk import ErrorRiskModel
+        from src.risk import RISK_FEW_SHOT_MIN_N, ErrorRiskModel, gate_verdict
 
         model_path = os.environ.get("DECISION_RISK_MODEL_PATH") or str(
             Path(os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR))
@@ -221,20 +224,30 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
                 "python -m eval.risk.run)"
             )
         risk_model = ErrorRiskModel.load(model_path)
-        if risk_model.gate_rejected:
+        gate_delta = float(os.environ.get("DECISION_RISK_GATE_DELTA", "0.0"))
+        gate_accepted, gate_worse = gate_verdict(risk_model.gate, gate_delta)
+        if not gate_accepted:
             # hard gate отклонил риск-вариант: риск-каскад не применяем
             logger.warning(
                 "hard gate отклонил risk-модель (%s); риск-каскад заменён "
                 "порогом уверенности %.2f",
-                ", ".join(risk_model.gate.get("worse", [])) or "метрики не хуже",
+                ", ".join(gate_worse) or "метрики не хуже",
                 threshold,
             )
+        raw_few_shot = os.environ.get("DECISION_RISK_FEW_SHOT_N")
+        if raw_few_shot in (None, ""):
+            few_shot_n = RISK_FEW_SHOT_MIN_N
+        else:
+            few_shot_n = int(raw_few_shot)
         return RiskAwareCascadeBackend(
             primary,
             fallback,
             risk_model,
             risk_budget=float(risk_budget),
             fallback_threshold=threshold,
+            gate_delta=gate_delta,
+            # значение < 2 (в частности 0) отключает few-shot переобучение
+            few_shot_n=few_shot_n if few_shot_n >= 2 else None,
         )
     return CascadeBackend(primary, fallback, threshold=threshold)
 
@@ -364,6 +377,13 @@ def _engine_info(backend: Backend) -> dict[str, Any] | None:
             info["risk_gate"] = (
                 "rejected" if getattr(backend, "gate_rejected", False) else "ok"
             )
+            info["risk_gate_delta"] = getattr(backend, "gate_delta", 0.0)
+            few_shot_n = getattr(backend, "few_shot_n", None)
+            if few_shot_n is not None:
+                info["risk_few_shot_n"] = few_shot_n
+                info["risk_few_shot"] = getattr(
+                    backend, "few_shot_questions", []
+                )
         return info
     return None
 

@@ -44,6 +44,14 @@ LEGACY_FEATURE_NAMES = ("confidence", "entropy", "margin")
 #: ``confidence`` на новом вопросе.
 RISK_C_DEFAULT = 0.2
 
+#: Минимум размеченных примеров нового вопроса, при котором есть смысл
+#: переобучать риск-модель (few-shot, Шаг 6). Замер
+#: (``docs/risk-aware-cascade.md``, «Сколько примеров нового вопроса нужно»):
+#: десяток своих строк уже снимает основную часть потери переноса, а на
+#: RouterBench/gpt2 разница становится значимой к ``n ≈ 50``. Дефолт ``10`` —
+#: компромисс «дёшево и заметно»; порог настраивается ``DECISION_RISK_FEW_SHOT_N``.
+RISK_FEW_SHOT_MIN_N = 10
+
 
 def decision_distribution(decision: DecisionResult) -> np.ndarray:
     """Распределение вероятностей решения как вектор (noul -> [p, 1 - p])."""
@@ -114,6 +122,111 @@ def _sigmoid(z: float) -> float:
     return exp_z / (1.0 + exp_z)
 
 
+def _sigmoid_array(z: np.ndarray) -> np.ndarray:
+    out = np.empty_like(z, dtype=float)
+    positive = z >= 0.0
+    out[positive] = 1.0 / (1.0 + np.exp(-z[positive]))
+    exp_z = np.exp(z[~positive])
+    out[~positive] = exp_z / (1.0 + exp_z)
+    return out
+
+
+def _as_matrix(values: np.ndarray) -> np.ndarray:
+    matrix = np.asarray(values, dtype=float)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    if matrix.ndim != 2:
+        raise ValueError(f"features must be 1-D or 2-D, got ndim={matrix.ndim}")
+    return matrix
+
+
+def fit_logistic(
+    features: np.ndarray,
+    labels: np.ndarray,
+    *,
+    C: float = RISK_C_DEFAULT,
+    max_iter: int = 100,
+    tol: float = 1e-8,
+) -> tuple[np.ndarray, float]:
+    """L2-логистическая регрессия на чистом numpy (Ньютон/IRLS), без sklearn.
+
+    Нужна в пути обслуживания: few-shot переобучение риск-модели под новый
+    вопрос (Шаг 6) должно быть CPU-only и мгновенным, а тяжёлые зависимости в
+    инференсе нежелательны. Соглашение о ``C`` — как у
+    ``sklearn.linear_model.LogisticRegression``: минимизируется
+    ``0.5·||w||² + C·Σ logloss`` (свободный член не регуляризуется), то есть
+    меньше ``C`` — сильнее L2. Возвращает ``(weights, bias)``.
+
+    Если класс в выборке один (все верны/все ошибочны), возвращает нулевые веса
+    и базовую вероятность — как ``training.recipe.risk``.
+    """
+    matrix = _as_matrix(features)
+    target = np.asarray(labels, dtype=float).reshape(-1)
+    if matrix.shape[0] != target.shape[0]:
+        raise ValueError("features rows != labels length")
+    if C <= 0.0:
+        raise ValueError(f"C must be > 0, got {C}")
+    n_features = matrix.shape[1]
+    if matrix.shape[0] < 2 or len(np.unique(target)) < 2:
+        eps = 1e-6
+        p = float(np.clip(target.mean(), eps, 1.0 - eps))
+        return np.zeros(n_features), float(math.log(p / (1.0 - p)))
+
+    weights = np.zeros(n_features)
+    bias = 0.0
+    for _ in range(max_iter):
+        probability = _sigmoid_array(matrix @ weights + bias)
+        residual = probability - target
+        grad = np.concatenate([weights + C * (matrix.T @ residual), [C * residual.sum()]])
+        if float(np.max(np.abs(grad))) < tol:
+            break
+        # вес Ньютона p(1-p); нижняя граница — чтобы шаг не вырождался
+        scale = np.clip(probability * (1.0 - probability), 1e-12, None)
+        weighted = matrix * np.sqrt(scale)[:, None]
+        hessian = np.empty((n_features + 1, n_features + 1))
+        hessian[:n_features, :n_features] = (
+            np.eye(n_features) + C * (weighted.T @ weighted) + 1e-8 * np.eye(n_features)
+        )
+        hessian[:n_features, n_features] = C * (matrix.T @ scale)
+        hessian[n_features, :n_features] = hessian[:n_features, n_features]
+        hessian[n_features, n_features] = C * float(scale.sum()) + 1e-8
+        try:
+            step = np.linalg.solve(hessian, grad)
+        except np.linalg.LinAlgError:
+            break
+        weights = weights - step[:n_features]
+        bias -= float(step[n_features])
+    return weights, bias
+
+
+def gate_verdict(gate: dict[str, Any] | None, delta: float = 0.0) -> tuple[bool, list[str]]:
+    """Вердикт hard gate с допуском ``delta``.
+
+    Сертификат несёт точечный вердикт (``accepted``/``worse``), снятый при
+    обучении с проектными допусками, и — у сертификатов новых форматов —
+    по-метричные превышения ``excess`` (``eval.risk.core.gate_excess``:
+    насколько кандидат хуже baseline **сверх** допуска). ``excess`` позволяет
+    пересчитать вердикт под дополнительным допуском ``delta``: прод задаёт его
+    через ``DECISION_RISK_GATE_DELTA`` (``> 0`` ослабляет гейт, ``< 0``
+    ужесточает), не переобучая модель. Без ``excess`` возвращается записанный
+    вердикт, и ``delta`` не применяется.
+
+    ``gate`` = ``None`` означает, что замера не было: отказывать нечего —
+    ``(True, [])``.
+    """
+    if not gate:
+        return True, []
+    excess = gate.get("excess")
+    if excess is None:
+        return bool(gate.get("accepted", True)), list(gate.get("worse", []))
+    worse = [
+        f"{key}: превышение {float(value):.4g} > {float(delta):g}"
+        for key, value in excess.items()
+        if float(value) > float(delta)
+    ]
+    return len(worse) == 0, worse
+
+
 @dataclass
 class ErrorRiskModel:
     """Логистический оценщик ``P(ошибка)`` по признакам решения.
@@ -159,6 +272,55 @@ class ErrorRiskModel:
     def should_escalate(self, decision: DecisionResult, risk_budget: float) -> bool:
         return self.predict_error(decision) > risk_budget
 
+    def retrained_with(
+        self,
+        own_features: np.ndarray,
+        own_labels: np.ndarray,
+        *,
+        reference_features: np.ndarray | None = None,
+        reference_labels: np.ndarray | None = None,
+        C: float = RISK_C_DEFAULT,
+    ) -> ErrorRiskModel:
+        """Переобучить на ``{общие (reference) + свои (own)}`` — few-shot Шага 6.
+
+        ``own_labels``/``reference_labels`` — **корректность** решения (1/True =
+        верно), как в ``training.recipe.risk``. Замысел схемы: общие строки не
+        дают модели «забыть» общий сигнал, свои снимают перенос коэффициента с
+        других вопросов (``docs/risk-aware-cascade.md``, «Честный вывод»).
+
+        Состав признаков сохраняется (``self.feature_names``), сертификат гейта
+        — нет: это другая модель, её вердикт берётся отдельно (инференс-гейт
+        каскада остаётся жёстким).
+        """
+        matrices = [_as_matrix(own_features)]
+        targets = [np.asarray(own_labels, dtype=float).reshape(-1)]
+        if reference_features is not None or reference_labels is not None:
+            if reference_features is None or reference_labels is None:
+                raise ValueError("reference features and labels must go together")
+            matrices.append(_as_matrix(reference_features))
+            targets.append(np.asarray(reference_labels, dtype=float).reshape(-1))
+        features = np.vstack(matrices)
+        if features.shape[1] == len(FEATURE_NAMES):
+            # вход в порядке FEATURE_NAMES (обычно из ``features_matrix``):
+            # для модели старого формата оставляем только её признаки
+            columns = [FEATURE_NAMES.index(name) for name in self.feature_names]
+            features = features[:, columns]
+        elif features.shape[1] != len(self.feature_names):
+            raise ValueError(
+                f"features cols {features.shape[1]} не совпадают ни с "
+                f"FEATURE_NAMES ({len(FEATURE_NAMES)}), ни с feature_names "
+                f"модели ({len(self.feature_names)})"
+            )
+        errors = 1.0 - np.concatenate(targets)
+        weights, bias = fit_logistic(features, errors, C=C)
+        return ErrorRiskModel(
+            weights=weights, bias=bias, feature_names=self.feature_names
+        )
+
+    def gate_verdict(self, delta: float = 0.0) -> tuple[bool, list[str]]:
+        """Вердикт hard gate с допуском ``delta`` (см. ``gate_verdict`` модуля)."""
+        return gate_verdict(self.gate, delta)
+
     @property
     def gate_rejected(self) -> bool:
         """Известен ли отказ hard gate: замера не было — не отказ.
@@ -166,7 +328,7 @@ class ErrorRiskModel:
         Модель считается неприемлемой только при **явном** вердикте
         «не лучше baseline»: откатывать нечего, пока ничего не измеряли.
         """
-        return bool(self.gate) and not bool(self.gate.get("accepted", True))
+        return not gate_verdict(self.gate, 0.0)[0]
 
     def to_dict(self) -> dict:
         payload = {

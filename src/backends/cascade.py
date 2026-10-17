@@ -17,9 +17,26 @@ from src.backends.base import (
     requested_modalities,
 )
 from src.errors import UntrainedDecisionError
+from src.risk import gate_verdict
 from src.sampler.questions import QuestionSpec
 
 DEFAULT_THRESHOLD = 0.6
+
+
+def _gate_verdict(
+    gate: dict | None, delta: float, risk_model: Any
+) -> tuple[bool, list[str]]:
+    """Вердикт hard gate с допуском ``delta`` (см. ``src.risk.gate_verdict``).
+
+    Явно переданный ``gate`` имеет приоритет над сертификатом модели: тогда
+    считаем его напрямую. Если взят сертификат самой модели и она умеет
+    ``gate_verdict`` — делегируем ей (учитываются по-метричные ``excess``).
+    """
+    if gate is not None and gate is getattr(risk_model, "gate", None):
+        verdict = getattr(risk_model, "gate_verdict", None)
+        if callable(verdict):
+            return verdict(delta)
+    return gate_verdict(gate, delta)
 
 
 def _decide_many(
@@ -278,6 +295,17 @@ class RiskAwareCascadeBackend(CascadeBackend):
     ``usage`` становится ``risk_gate`` — так видно, что фолбэк применён.
     Отсутствие заключения означает, что замера не было, и режим работает
     как прежде.
+
+    **Few-shot (Шаг 6).** Для *нового* вопроса коэффициент, снятый с других
+    вопросов, переносится плохо, поэтому риск-модель на нём надо переобучать.
+    ``add_examples`` копит размеченные примеры вопроса и, набрав ``few_shot_n``,
+    переобучает логистическую регрессию по схеме {``reference`` + свои}
+    (numpy, CPU-only — см. ``src.risk.fit_logistic``); переобученная модель
+    сразу применяется к этому вопросу. Hard gate остаётся жёстким: он проверяется
+    на уровне каскада, и few-shot его не обходит — если сертификат отклонён,
+    работает ``confidence`` и для переобученного вопроса. Транспорт примеров (как
+    они попадают в сервис) — отдельное решение; пока это программный шов
+    (не потокобезопасен: накапливать примеры нужно из одного потока).
     """
 
     def __init__(
@@ -289,6 +317,9 @@ class RiskAwareCascadeBackend(CascadeBackend):
         *,
         gate: dict | None = None,
         fallback_threshold: float = DEFAULT_THRESHOLD,
+        gate_delta: float = 0.0,
+        few_shot_n: int | None = None,
+        reference: tuple[Any, Any] | None = None,
     ):
         if not 0.0 <= risk_budget <= 1.0:
             raise ValueError(f"risk_budget must be in [0.0, 1.0], got {risk_budget}")
@@ -296,13 +327,24 @@ class RiskAwareCascadeBackend(CascadeBackend):
             raise ValueError(
                 f"fallback_threshold must be in [0.0, 1.0], got {fallback_threshold}"
             )
+        if few_shot_n is not None and few_shot_n < 2:
+            raise ValueError(f"few_shot_n must be >= 2 or None, got {few_shot_n}")
         super().__init__(primary, fallback, threshold=0.0)
         self.risk_model = risk_model
         self.risk_budget = risk_budget
         gate = gate if gate is not None else getattr(risk_model, "gate", None)
         self.gate = gate
-        self.gate_rejected = bool(gate) and not bool(gate.get("accepted", True))
+        self.gate_delta = float(gate_delta)
+        self.gate_accepted, self.gate_worse = _gate_verdict(
+            gate, self.gate_delta, risk_model
+        )
+        self.gate_rejected = not self.gate_accepted
         self.fallback_threshold = fallback_threshold
+        # few-shot: порог, общие строки {reference} и накопленные свои примеры
+        self.few_shot_n = few_shot_n
+        self.reference = reference
+        self._examples: dict[str, list[tuple[Any, bool]]] = {}
+        self._few_shot_models: dict[str, Any] = {}
         self.name = f"risk-cascade[{primary.name}->{fallback.name}]"
 
     @property
@@ -311,8 +353,63 @@ class RiskAwareCascadeBackend(CascadeBackend):
             return "risk_gate"
         return "risk"
 
-    def _uncertain(self, decision) -> bool:
+    @property
+    def few_shot_questions(self) -> list[str]:
+        """Вопросы, для которых уже переобучена few-shot модель."""
+        return sorted(self._few_shot_models)
+
+    def add_examples(
+        self, question: str, decisions: list[Any], correct: list[Any]
+    ) -> Any | None:
+        """Накопить размеченные примеры вопроса; при ``few_shot_n`` — переобучить.
+
+        ``correct`` — факт корректности решения (1/True = верно), как в
+        ``training.recipe.risk``. Возвращает переобученную модель, если порог
+        достигнут (она сразу используется для этого вопроса), иначе ``None``.
+        Без ``reference`` переобучение идёт только на своих примерах; схема
+        ROADMAP — {others + own_N}.
+        """
+        if self.few_shot_n is None:
+            return None
+        decisions = list(decisions)
+        correct = list(correct)
+        if len(decisions) != len(correct):
+            raise ValueError("decisions and correct must have the same length")
+        bucket = self._examples.setdefault(question, [])
+        bucket.extend(zip(decisions, correct))
+        if len(bucket) < self.few_shot_n:
+            return None
+        from src.risk import features_matrix
+
+        own_features = features_matrix([decision for decision, _ in bucket])
+        own_labels = [1 if flag else 0 for _, flag in bucket]
+        reference_features = reference_labels = None
+        if self.reference is not None:
+            reference_features, reference_labels = self.reference
+        model = self.risk_model.retrained_with(
+            own_features,
+            own_labels,
+            reference_features=reference_features,
+            reference_labels=reference_labels,
+        )
+        self._few_shot_models[question] = model
+        return model
+
+    def _model_for(self, question: str) -> Any:
+        return self._few_shot_models.get(question, self.risk_model)
+
+    def _escalate(self, model: Any, decision: Any) -> bool:
         if self.gate_rejected:
             # решение худшего варианта отклонено: работает лучший baseline
             return decision.confidence < self.fallback_threshold
-        return bool(self.risk_model.should_escalate(decision, self.risk_budget))
+        return bool(model.should_escalate(decision, self.risk_budget))
+
+    def _uncertain(self, decision) -> bool:
+        return self._escalate(self.risk_model, decision)
+
+    def _uncertain_names(self, decisions: dict) -> list[str]:
+        return [
+            name
+            for name, decision in decisions.items()
+            if self._escalate(self._model_for(name), decision)
+        ]

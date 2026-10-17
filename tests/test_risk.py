@@ -180,3 +180,93 @@ def test_fit_single_class_returns_baseline():
     decisions = [_noul(p) for p in (0.9, 0.8, 0.7)]
     model = fit_error_risk_model(decisions, [True, True, True], seed=0)
     assert model.predict_error(_noul(0.9)) < 0.01
+
+
+def test_fit_logistic_matches_sklearn_convention():
+    """``C`` у numpy-решателя означает то же, что у LogisticRegression."""
+    from sklearn.linear_model import LogisticRegression
+
+    from src.risk import RISK_C_DEFAULT, fit_logistic
+
+    rng = np.random.default_rng(0)
+    features = rng.normal(size=(300, 6))
+    truth = rng.normal(size=6)
+    prob = 1.0 / (1.0 + np.exp(-(features @ truth + 0.3)))
+    errors = (rng.random(300) < prob).astype(float)
+
+    weights, bias = fit_logistic(features, errors, C=RISK_C_DEFAULT)
+    clf = LogisticRegression(C=RISK_C_DEFAULT, max_iter=5000).fit(features, errors)
+    got = 1.0 / (1.0 + np.exp(-(features @ weights + bias)))
+    want = clf.predict_proba(features)[:, 1]
+    assert np.max(np.abs(got - want)) < 1e-3
+
+
+def test_fit_logistic_single_class_is_constant():
+    from src.risk import fit_logistic
+
+    features = np.zeros((3, 6))
+    weights, bias = fit_logistic(features, np.zeros(3))
+    assert weights.tolist() == pytest.approx([0.0] * 6)
+    assert bias < 0.0  # малая вероятность ошибки — logit(end)
+
+
+def test_retrained_with_uses_reference_and_own():
+    from src.risk import fit_logistic
+
+    base = ErrorRiskModel(weights=np.zeros(6), bias=0.0)
+    own = np.array([[0.4, 0.0, 0.0, 0.0, 2.0, 0.0]])
+    reference = np.array([[0.9, 0.0, 0.0, 0.0, 2.0, 0.0],
+                          [0.1, 0.0, 0.0, 0.0, 2.0, 0.0]])
+    model = base.retrained_with(
+        own, [1], reference_features=reference, reference_labels=[1, 0]
+    )
+    expected = fit_logistic(
+        np.vstack([own, reference]), 1.0 - np.array([1.0, 1.0, 0.0])
+    )
+    assert model.weights.tolist() == pytest.approx(expected[0].tolist())
+    assert model.bias == pytest.approx(expected[1])
+    assert model.gate is None  # сертификат гейта — у базовой модели, не у переобученной
+
+
+def test_retrained_with_projects_full_features_onto_legacy_model():
+    legacy = ErrorRiskModel(
+        weights=np.array([-1.0, 0.0, 0.0]),
+        bias=0.0,
+        feature_names=LEGACY_FEATURE_NAMES,
+    )
+    own = np.array([[0.5, 0.1, 0.4, 0.0, 2.0, 0.0],
+                    [0.9, 0.0, 0.9, 0.0, 3.0, 1.0]])
+    model = legacy.retrained_with(own, [1, 0])
+    assert model.feature_names == LEGACY_FEATURE_NAMES
+    assert model.weights.shape == (len(LEGACY_FEATURE_NAMES),)
+
+
+def test_retrained_with_rejects_mismatched_widths():
+    base = ErrorRiskModel(weights=np.zeros(6), bias=0.0)
+    with pytest.raises(ValueError, match="не совпадают"):
+        base.retrained_with(np.zeros((2, 4)), [1, 0])
+
+
+def test_gate_verdict_delta_relaxes_excess():
+    from src.risk import gate_verdict
+
+    gate = {"accepted": False, "worse": ["aurc: ..."], "excess": {"aurc": 0.004}}
+    assert gate_verdict(gate, 0.0) == (False, ["aurc: превышение 0.004 > 0"])
+    assert gate_verdict(gate, 0.01)[0] is True
+    assert gate_verdict(gate, -0.001)[0] is False
+
+
+def test_gate_verdict_without_excess_uses_stored_verdict():
+    from src.risk import gate_verdict
+
+    gate = {"accepted": False, "worse": ["loo_aurc: 0.61 > 0.61±0.0005"]}
+    assert gate_verdict(gate, 10.0) == (False, ["loo_aurc: 0.61 > 0.61±0.0005"])
+    assert gate_verdict(None, 0.0) == (True, [])
+
+
+def test_gate_rejected_follows_excess():
+    model = ErrorRiskModel(weights=np.zeros(6), bias=0.0)
+    model.gate = {"accepted": True, "excess": {"aurc": 0.003}}
+    assert model.gate_rejected  # accepted=True противоречит excess, верим excess
+    model.gate = {"accepted": False, "excess": {"aurc": -0.003}}
+    assert not model.gate_rejected

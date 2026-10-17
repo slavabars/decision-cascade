@@ -7,12 +7,14 @@ import pytest
 from eval.risk.core import (
     GATE_AB_METRICS,
     GATE_LOO_METRICS,
+    GATE_RANKER_METRICS,
     GATE_SHOTS_METRICS,
     GateMetric,
     bootstrap_mean_ci,
     bootstrap_ranker_ci,
     cascade_summary,
     flatten,
+    gate_excess,
     gate_risk_vs_confidence,
     is_correct,
     labels_for,
@@ -203,6 +205,35 @@ def test_gate_respects_metric_direction():
     )
     assert not accepted
     assert worse[0].startswith("acc_at_0.7_coverage")
+
+
+def test_gate_excess_matches_verdict_and_signed_direction():
+    base = _gate_row()
+    # регрессия AURC на 0.01 при допуске 0.0005 -> положительное превышение
+    excess = gate_excess(
+        base, _gate_row(aurc=0.31), GATE_RANKER_METRICS, tol=0.0005
+    )
+    assert excess["aurc"] == pytest.approx(0.01 - 0.0005)
+    # покрытие (больше лучше) упало на 0.1 -> тоже положительное превышение
+    excess = gate_excess(
+        base,
+        _gate_row(coverage_at_5pct_risk=0.40),
+        GATE_RANKER_METRICS,
+        tol=0.0005,
+    )
+    assert excess["coverage_at_5pct_risk"] == pytest.approx(0.10 - 0.0005)
+    # отсутствие регрессии даёт неположительное превышение
+    excess = gate_excess(base, _gate_row(aurc=0.25), GATE_RANKER_METRICS, tol=0.0005)
+    assert excess["aurc"] < 0.0
+
+
+def test_gate_excess_is_consistent_with_gate_verdict():
+    base = _gate_row()
+    for candidate in (_gate_row(aurc=0.25), _gate_row(aurc=0.31),
+                      _gate_row(coverage_at_5pct_risk=0.40)):
+        accepted, _ = gate_risk_vs_confidence(base, candidate, GATE_RANKER_METRICS)
+        excess = gate_excess(base, candidate, GATE_RANKER_METRICS)
+        assert (max(excess.values()) > 0.0) is (not accepted)
 
 
 def test_gate_loo_metrics_keys_match_run_loo_rows():

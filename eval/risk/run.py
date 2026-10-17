@@ -27,6 +27,7 @@ from eval.risk.core import (
     cascade_summary,
     decisions_for_examples,
     flatten,
+    gate_excess,
     gate_risk_vs_confidence,
     gate_tolerances,
     ranker_report,
@@ -112,6 +113,11 @@ def evaluate(
         "candidate": "risk_model",
         "tol": GATE_TOL,
         "tolerances": gate_tolerances(GATE_RANKER_METRICS),
+        # по-метричные превышения допуска: прод пересчитывает вердикт под своим
+        # DECISION_RISK_GATE_DELTA, не переобучая модель (см. src.risk.gate_verdict)
+        "excess": gate_excess(
+            ranking["confidence"], ranking["risk_model"], GATE_RANKER_METRICS
+        ),
         "metrics": ranking,
         "ci": ranking_ci,
     }

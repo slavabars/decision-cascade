@@ -92,6 +92,23 @@
   делят с `production` ту же матрицу признаков, отличаясь только силой L2. Сетка
   по `C` — один прогон вместо прогона на значение (кодирование и обучение голов
   общие). Ключ `c_grid` в `features.json`.
+- **Правила перехода risk-aware в stable (Шаг 6):** `src.risk.gate_verdict` и
+  `ErrorRiskModel.gate_verdict` пересчитывают вердикт гейта с допуском `delta`
+  по-метричным превышениям `gate.excess` (пишется `eval.risk.run`, считает
+  `eval.risk.core.gate_excess`); конфиг `DECISION_RISK_GATE_DELTA` (`> 0`
+  ослабляет гейт, `< 0` ужесточает) и `DECISION_RISK_FEW_SHOT_N`.
+- **Few-shot переобучение риск-модели под новый вопрос (Шаг 6):** numpy-решатель
+  `src.risk.fit_logistic` (Ньютон/IRLS с L2, без sklearn — соглашение о `C` как
+  у `LogisticRegression`) и `ErrorRiskModel.retrained_with` (схема {общие строки +
+  свои `n`}). В `RiskAwareCascadeBackend` порог `few_shot_n` и `add_examples`:
+  набрав `DECISION_RISK_FEW_SHOT_N` (дефолт `RISK_FEW_SHOT_MIN_N = 10`)
+  размеченных примеров вопроса, каскад переобучает модель и применяет её только к
+  этому вопросу. Константа `RISK_FEW_SHOT_MIN_N`; `/info` отдаёт
+  `risk_few_shot_n`/`risk_few_shot`/`risk_gate_delta`.
+- Раздел «Правила перехода в stable» в `docs/risk-aware-cascade.md` — формализует
+  условия beta→stable (включение, hard gate и его допуск, zero-shot, few-shot,
+  возврат). Транспорт размеченных примеров в сервисе пока не подключён: это
+  программный шов, не продуктовый API.
 
 ### Changed
 

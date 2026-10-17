@@ -33,6 +33,10 @@ def _questions(names):
     return {name: NoulSpec(f"?{name}") for name in names}
 
 
+def _noul(confidence):
+    return NoulResult(noul=confidence, confidence=confidence)
+
+
 def _risk_model():
     # z = -20*confidence + 14: уверенно -> P(ошибка) ~0, у границы 0.5 -> ~0.95
     return ErrorRiskModel(
@@ -250,3 +254,127 @@ def test_create_cascade_backend_applies_rejected_gate(monkeypatch, tmp_path):
     info = _engine_info(backend)
     assert info["risk_gate"] == "rejected"
     assert info["risk_budget"] == pytest.approx(0.12)
+
+
+def test_risk_cascade_ignores_few_shot_without_threshold():
+    from src.risk import RISK_FEW_SHOT_MIN_N
+
+    assert RISK_FEW_SHOT_MIN_N == 10
+    cascade = RiskAwareCascadeBackend(
+        _StubBackend("local", {"b": 0.55}),
+        _StubBackend("remote", {"b": 0.99}),
+        _risk_model(),
+        risk_budget=0.5,
+    )
+    assert cascade.few_shot_n is None
+    assert cascade.add_examples("b", [_noul(0.55)], [True]) is None
+    assert cascade.few_shot_questions == []
+
+
+def test_risk_cascade_retrains_after_few_shot_threshold():
+    primary = _StubBackend("local", {"a": 0.9, "b": 0.55})
+    fallback = _StubBackend("remote", {"a": 0.0, "b": 0.99})
+    cascade = RiskAwareCascadeBackend(
+        primary, fallback, _risk_model(), risk_budget=0.5, few_shot_n=3
+    )
+
+    # до порога свои примеры только копятся — базовая модель эскалирует "b"
+    assert cascade.add_examples("b", [_noul(0.55), _noul(0.56)], [True, True]) is None
+    assert cascade.few_shot_questions == []
+    cascade.decide("s", _questions(["a", "b"]))
+    assert fallback.calls == [("s", ("b",))]
+
+    # порог достигнут: "b" переобучен на своих (все верные) — риск около нуля
+    model = cascade.add_examples("b", [_noul(0.55)], [True])
+    assert model is not None
+    assert cascade.few_shot_questions == ["b"]
+    assert cascade._model_for("b") is model
+    assert cascade._model_for("a") is cascade.risk_model
+
+    fallback.calls.clear()
+    result = cascade.decide("s", _questions(["a", "b"]))
+    assert fallback.calls == []
+    assert result.usage["escalated"] == 0
+
+
+def test_add_examples_rejects_length_mismatch():
+    cascade = RiskAwareCascadeBackend(
+        _StubBackend("local", {}),
+        _StubBackend("remote", {}),
+        _risk_model(),
+        few_shot_n=2,
+    )
+    with pytest.raises(ValueError, match="same length"):
+        cascade.add_examples("b", [_noul(0.5)], [True, False])
+
+
+def test_risk_cascade_few_shot_n_validated():
+    with pytest.raises(ValueError, match="few_shot_n"):
+        RiskAwareCascadeBackend(
+            _StubBackend("local", {}),
+            _StubBackend("remote", {}),
+            _risk_model(),
+            few_shot_n=1,
+        )
+
+
+def test_create_cascade_backend_reads_few_shot_and_gate_delta(monkeypatch, tmp_path):
+    from api.server.main import _engine_info, create_cascade_backend
+    from api.server.service import DecisionService
+    from src.risk import RISK_FEW_SHOT_MIN_N
+
+    model_path = tmp_path / "risk.json"
+    _risk_model().save(model_path)
+    monkeypatch.setenv("DECISION_CASCADE_FALLBACK_URL", "http://fallback")
+    monkeypatch.setenv("DECISION_CASCADE_RISK_BUDGET", "0.12")
+    monkeypatch.setenv("DECISION_RISK_MODEL_PATH", str(model_path))
+    monkeypatch.delenv("DECISION_RISK_FEW_SHOT_N", raising=False)
+    monkeypatch.setenv("DECISION_RISK_GATE_DELTA", "0.02")
+
+    backend = create_cascade_backend(DecisionService(seed=0))
+
+    assert backend.few_shot_n == RISK_FEW_SHOT_MIN_N  # дефолт Шага 6
+    assert backend.gate_delta == pytest.approx(0.02)
+    info = _engine_info(backend)
+    assert info["risk_few_shot_n"] == RISK_FEW_SHOT_MIN_N
+    assert info["risk_few_shot"] == []
+    assert info["risk_gate_delta"] == pytest.approx(0.02)
+
+
+def test_create_cascade_backend_few_shot_can_be_disabled(monkeypatch, tmp_path):
+    from api.server.main import _engine_info, create_cascade_backend
+    from api.server.service import DecisionService
+
+    model_path = tmp_path / "risk.json"
+    _risk_model().save(model_path)
+    monkeypatch.setenv("DECISION_CASCADE_FALLBACK_URL", "http://fallback")
+    monkeypatch.setenv("DECISION_CASCADE_RISK_BUDGET", "0.12")
+    monkeypatch.setenv("DECISION_RISK_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("DECISION_RISK_FEW_SHOT_N", "0")
+
+    backend = create_cascade_backend(DecisionService(seed=0))
+
+    assert backend.few_shot_n is None
+    assert "risk_few_shot_n" not in _engine_info(backend)
+
+
+def test_gate_delta_relaxes_rejected_certificate(monkeypatch, tmp_path):
+    from api.server.main import create_cascade_backend
+    from api.server.service import DecisionService
+
+    model = _risk_model()
+    model.gate = {"accepted": False, "worse": ["aurc: регрессия"], "excess": {"aurc": 0.004}}
+    model_path = tmp_path / "risk.json"
+    model.save(model_path)
+    monkeypatch.setenv("DECISION_CASCADE_FALLBACK_URL", "http://fallback")
+    monkeypatch.setenv("DECISION_CASCADE_RISK_BUDGET", "0.12")
+    monkeypatch.setenv("DECISION_RISK_MODEL_PATH", str(model_path))
+
+    monkeypatch.setenv("DECISION_RISK_GATE_DELTA", "0.0")
+    assert create_cascade_backend(DecisionService(seed=0)).gate_rejected
+
+    # допуск шире регрессии — сертификат принимается, риск-правило применяется
+    monkeypatch.setenv("DECISION_RISK_GATE_DELTA", "0.01")
+    relaxed = create_cascade_backend(DecisionService(seed=0))
+    assert not relaxed.gate_rejected
+    assert relaxed.escalation_reason == "risk"

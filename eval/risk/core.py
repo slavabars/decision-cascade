@@ -368,6 +368,33 @@ def gate_risk_vs_confidence(
     return len(worse) == 0, worse
 
 
+def gate_excess(
+    baseline: dict[str, float],
+    candidate: dict[str, float],
+    metrics: tuple[GateMetric, ...] = GATE_AB_METRICS,
+    *,
+    tol: float | None = None,
+) -> dict[str, float]:
+    """Насколько каждая метрика кандидата хуже baseline **сверх** допуска.
+
+    Положительное значение — регрессия за пределами допуска (именно она
+    отвергает вариант), нуль и меньше — «в пределах шума». Пишется в сертификат
+    (``gate["excess"]``), чтобы прод мог пересчитать вердикт под своим допуском
+    (``DECISION_RISK_GATE_DELTA``, см. ``src.risk.gate_verdict``) без
+    переобучения модели.
+    """
+    excess: dict[str, float] = {}
+    for metric in metrics:
+        key = metric.key
+        if key not in baseline or key not in candidate:
+            continue
+        limit = metric.tol if tol is None else float(tol)
+        base, cand = float(baseline[key]), float(candidate[key])
+        margin = cand - base if metric.lower_better else base - cand
+        excess[key] = margin - limit
+    return excess
+
+
 def selective_accuracy(
     scores: np.ndarray, correct: np.ndarray, coverages=DEFAULT_COVERAGES
 ) -> dict[str, float]:
