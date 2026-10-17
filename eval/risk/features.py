@@ -104,7 +104,7 @@ from eval.risk.core import (
     stability_report,
 )
 from src.decision_head.heads import OptionScoringChoiceHead
-from src.risk import FEATURE_NAMES, features_matrix
+from src.risk import FEATURE_NAMES, RISK_C_DEFAULT, features_matrix
 from src.sampler.questions import QuestionSpec
 from src.schemas import DecisionResult
 
@@ -167,7 +167,8 @@ def _scaled(
 
 
 def _fit_logistic(
-    features: np.ndarray, correct: np.ndarray, *, seed: int = 0, C: float = 1.0
+    features: np.ndarray, correct: np.ndarray, *, seed: int = 0,
+    C: float = RISK_C_DEFAULT,
 ) -> tuple[np.ndarray, float]:
     """Логистическая регрессия ``признаки -> P(ошибка)``.
 
@@ -526,7 +527,7 @@ def _c_for(prepared: _Prepared, name: str, default: float) -> float:
 
 
 def run_ab(
-    prepared: _Prepared, *, seed: int = 0, C: float = 1.0
+    prepared: _Prepared, *, seed: int = 0, C: float = RISK_C_DEFAULT
 ) -> list[dict[str, float]]:
     """Подгоняет риск-модели на валидации и считает метрики на тесте."""
     _, test_correct = prepared.correct
@@ -541,7 +542,7 @@ def run_ab(
 
 
 def run_loo(
-    prepared: _Prepared, *, seed: int = 0, C: float = 1.0
+    prepared: _Prepared, *, seed: int = 0, C: float = RISK_C_DEFAULT
 ) -> list[dict[str, Any]]:
     """Leave-one-question-out: обучать без одного вопроса, замерять на нём.
 
@@ -610,7 +611,7 @@ def shots_report(
     shots: list[int],
     *,
     seed: int = 0,
-    C: float = 1.0,
+    C: float = RISK_C_DEFAULT,
     variant: str = PRODUCTION_VARIANT,
     baseline: str = "confidence",
     shot_seeds: Sequence[int] = (0,),
@@ -1123,7 +1124,10 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     parser.add_argument("--seeds", type=int, nargs="+", default=[0])
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dtype", default="float32")
-    parser.add_argument("--C", type=float, default=1.0)
+    parser.add_argument(
+        "--C", type=float, default=RISK_C_DEFAULT,
+        help=f"сила L2 (по умолчанию {RISK_C_DEFAULT}, дефолт продукта)",
+    )
     parser.add_argument("--C-grid", type=float, nargs="+", default=None,
                         help="сетка сил L2 для вариантов production[C]: "
                              "признаки кодируются один раз, сетка по C не "

@@ -36,6 +36,14 @@ FEATURE_NAMES = (
 #: обучена.
 LEGACY_FEATURE_NAMES = ("confidence", "entropy", "margin")
 
+#: Сила L2 логистической регрессии риск-модели по умолчанию. ``0.2`` — по замеру
+#: Шага 5а (``docs/risk-aware-cascade.md``, «Находка: провал hash — это
+#: перерегуляризация»): на RouterBench/hash, RouterBench/gpt2 и AG News/gpt2
+#: перенос (LOO) не хуже, in-dist не хуже, разброс по seeds не растёт, а падает.
+#: Прежний ``1.0`` переобучал межвопросные константы и на hash значимо проигрывал
+#: ``confidence`` на новом вопросе.
+RISK_C_DEFAULT = 0.2
+
 
 def decision_distribution(decision: DecisionResult) -> np.ndarray:
     """Распределение вероятностей решения как вектор (noul -> [p, 1 - p])."""

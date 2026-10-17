@@ -233,7 +233,7 @@ def test_cli_c_grid_shares_features_and_uses_own_C(tmp_path):
     main([
         "--specs", "support", "--encoder", "hash", "--dim", "16",
         "--limit", "120", "--train-steps", "30", "--seeds", "0",
-        "--C-grid", "1.0", "1e-4", "--loo",
+        "--C", "1.0", "--C-grid", "1.0", "1e-4", "--loo",
         "--out-dir", str(tmp_path),
     ])
     payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
@@ -246,6 +246,19 @@ def test_cli_c_grid_shares_features_and_uses_own_C(tmp_path):
     assert loo["production[1]"] == loo["production"]
     # своя L2 меняет балл, значит и AURC отложенного вопроса
     assert loo["production[0.0001]"] != loo["production"]
+
+
+def test_risk_c_default_is_shared_with_product_training():
+    """Дефолт силы L2 один и тот же в продукте и в замерном харнессе (Шаг 5а)."""
+    import inspect
+
+    from eval.risk.features import _fit_logistic, run_ab, run_loo
+    from src.risk import RISK_C_DEFAULT
+    from training.recipe.risk import fit_error_risk_model, fit_from_arrays
+
+    assert RISK_C_DEFAULT == 0.2
+    for fn in (fit_error_risk_model, fit_from_arrays, _fit_logistic, run_ab, run_loo):
+        assert inspect.signature(fn).parameters["C"].default == RISK_C_DEFAULT
 
 
 def test_cli_runs_offline_on_support_specs(tmp_path, capsys):

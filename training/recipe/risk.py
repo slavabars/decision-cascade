@@ -15,7 +15,12 @@ from pathlib import Path
 
 import numpy as np
 
-from src.risk import FEATURE_NAMES, ErrorRiskModel, features_matrix
+from src.risk import (
+    FEATURE_NAMES,
+    RISK_C_DEFAULT,
+    ErrorRiskModel,
+    features_matrix,
+)
 from src.schemas import DecisionResult
 
 
@@ -24,7 +29,7 @@ def fit_error_risk_model(
     correct: list[bool] | np.ndarray,
     *,
     seed: int = 0,
-    C: float = 1.0,
+    C: float = RISK_C_DEFAULT,
 ) -> ErrorRiskModel:
     """Обучает ``P(ошибка)`` по решениям и их корректности.
 
@@ -61,7 +66,7 @@ def fit_from_arrays(
     correct: np.ndarray,
     *,
     seed: int = 0,
-    C: float = 1.0,
+    C: float = RISK_C_DEFAULT,
 ) -> ErrorRiskModel:
     """Как ``fit_error_risk_model``, но по уже готовой матрице признаков.
 
@@ -103,7 +108,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--correct", type=Path, required=True, help="npy [n] {0,1}")
     parser.add_argument("--out", type=Path, required=True, help="куда сохранить risk.json")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--C", type=float, default=1.0)
+    parser.add_argument(
+        "--C", type=float, default=RISK_C_DEFAULT,
+        help=f"сила L2 (по умолчанию {RISK_C_DEFAULT}, см. Шаг 5а в docs)",
+    )
     args = parser.parse_args(argv)
 
     features = np.load(args.features)
