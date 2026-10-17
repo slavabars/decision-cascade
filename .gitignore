@@ -43,8 +43,9 @@ checkpoints/
 .vscode/
 *.swp
 
-# Агентная инфраструктура разработки
+# Локальные служебные файлы (вне публикации)
 .opencode/
+AGENTS.md
 agents.md
 ROADMAP.md
 scripts/bootstrap.sh
