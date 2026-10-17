@@ -127,6 +127,135 @@ def ranker_report(scores: np.ndarray, correct: np.ndarray) -> dict[str, float]:
     }
 
 
+#: Сколько bootstrap-выборок по умолчанию. Дёшево (numpy), но сглаживает
+#: хвост перцентилей: 2000 хватает для 95% CI в двух знаках.
+BOOTSTRAP_DRAWS = 2000
+
+
+def bootstrap_mean_ci(
+    values: Any,
+    *,
+    n_boot: int = BOOTSTRAP_DRAWS,
+    level: float = 0.95,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Перцентильный bootstrap-CI **среднего** для 1-D выборки.
+
+    Перевыборка единиц измерения (пар «seed×вопрос» или тестовых строк) с
+    возвращением. Даёт то, чего не может постоянный допуск: интервал, внутри
+    которого среднее «плавает» из-за конечности замера.
+    """
+    array = np.asarray(values, dtype=float)
+    array = array[np.isfinite(array)]
+    if array.size == 0:
+        return {
+            "mean": float("nan"), "lo": float("nan"), "hi": float("nan"), "n": 0
+        }
+    rng = np.random.default_rng(seed)
+    index = rng.integers(0, array.size, size=(n_boot, array.size))
+    means = array[index].mean(axis=1)
+    tail = (1.0 - level) / 2.0
+    lo, hi = np.quantile(means, [tail, 1.0 - tail])
+    return {
+        "mean": float(array.mean()),
+        "lo": float(lo),
+        "hi": float(hi),
+        "n": int(array.size),
+    }
+
+
+def bootstrap_ranker_ci(
+    scores: np.ndarray,
+    correct: np.ndarray,
+    *,
+    n_boot: int = BOOTSTRAP_DRAWS,
+    level: float = 0.95,
+    seed: int = 0,
+) -> dict[str, dict[str, float]]:
+    """Bootstrap-CI метрик ранжирования по **тестовым строкам**.
+
+    Единица перевыборки — строка теста: именно её не хватает, чтобы отличить
+    «эффект» от «конечной выборки». Числа в CI считаются тем же
+    ``ranker_report``, поэтому интервал согласован с точечной оценкой.
+    """
+    scores = np.asarray(scores, dtype=float)
+    correct = np.asarray(correct, dtype=float)
+    if scores.size == 0:
+        return {}
+    rng = np.random.default_rng(seed)
+    index = rng.integers(0, scores.size, size=(n_boot, scores.size))
+    accumulated: dict[str, list[float]] = {}
+    for draw in range(n_boot):
+        pick = index[draw]
+        report = ranker_report(scores[pick], correct[pick])
+        for key, value in report.items():
+            accumulated.setdefault(key, []).append(value)
+    tail = (1.0 - level) / 2.0
+    point = ranker_report(scores, correct)
+    ci: dict[str, dict[str, float]] = {}
+    for key, values in accumulated.items():
+        lo, hi = np.quantile(values, [tail, 1.0 - tail])
+        ci[key] = {"value": float(point[key]), "lo": float(lo), "hi": float(hi)}
+    return ci
+
+
+def paired_differences(
+    rows: list[dict[str, Any]],
+    metrics: tuple[GateMetric, ...],
+    *,
+    unit: tuple[str, ...] = ("seed", "question"),
+    baseline: str = "confidence",
+    candidate: str = "production",
+) -> dict[str, list[float]]:
+    """Разница ``candidate − baseline`` по парам ``unit`` в направлении «хуже».
+
+    Для метрик «больше лучше» знак переворачивается, поэтому положительное
+    значение **всегда** означает «кандидат хуже baseline». Возвращает по списку
+    различий на метрику — их и подают в `bootstrap_mean_ci`.
+    """
+    join = (*unit, "variant")
+    index = {tuple(row.get(key) for key in join): row for row in rows}
+    differences: dict[str, list[float]] = {metric.key: [] for metric in metrics}
+    for key, row in index.items():
+        if key[-1] != candidate:
+            continue
+        base = index.get((*key[:-1], baseline))
+        if base is None:
+            continue
+        for metric in metrics:
+            if metric.key not in row or metric.key not in base:
+                continue
+            direction = 1.0 if metric.lower_better else -1.0
+            differences[metric.key].append(
+                direction * (float(row[metric.key]) - float(base[metric.key]))
+            )
+    return differences
+
+
+def stability_report(
+    differences: dict[str, list[float]],
+    *,
+    n_boot: int = BOOTSTRAP_DRAWS,
+    level: float = 0.95,
+    seed: int = 0,
+) -> dict[str, dict[str, float]]:
+    """CI среднего различия + доля пар, где кандидат хуже baseline.
+
+    ``significant`` — интервал не накрывает ноль: разницу нельзя объяснить
+    конечностью замера. Это оценка для решения «принимать только лучшее»,
+    отдельная от жёсткого по-точечного гейта.
+    """
+    report: dict[str, dict[str, float]] = {}
+    for key, values in differences.items():
+        if not values:
+            continue
+        ci = bootstrap_mean_ci(values, n_boot=n_boot, level=level, seed=seed)
+        ci["share_worse"] = float(np.mean(np.asarray(values) > 0.0))
+        ci["significant"] = bool(ci["lo"] > 0.0 or ci["hi"] < 0.0)
+        report[key] = ci
+    return report
+
+
 DEFAULT_COVERAGES = (0.5, 0.7, 0.9)
 
 #: Допуск только на шумовые колебания. Регрессия сильнее — отказ от варианта.

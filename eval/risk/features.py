@@ -81,6 +81,8 @@ from eval.risk.core import (
     flatten,
     gate_risk_vs_confidence,
     gate_tolerances,
+    paired_differences,
+    stability_report,
 )
 from src.decision_head.heads import OptionScoringChoiceHead
 from src.risk import FEATURE_NAMES, features_matrix
@@ -931,6 +933,53 @@ def print_shots_stability(
         )
 
 
+def print_stability(report: dict[str, dict[str, float]], *, context: str) -> None:
+    """CI среднего различия candidate−baseline («+» = кандидат хуже).
+
+    Даёт «эффект или шум» по-настоящему: интервал строится перевыборкой пар
+    «seed×вопрос», а не сравнением с постоянным допуском.
+    """
+    print(f"\nстабильность, {context} (разница production−confidence, «+» — хуже):")
+    print(
+        f"{'метрика':>26} {'mean':>9} {'95% CI':>20} {'доля хуже':>10} {'n':>4}"
+    )
+    for key, entry in report.items():
+        if not np.isfinite(entry["mean"]):
+            continue
+        flag = "  ← эффект" if entry["significant"] else ""
+        print(
+            f"{key:>26} {entry['mean']:>9.4f} "
+            f"[{entry['lo']:>7.4f}, {entry['hi']:>7.4f}] "
+            f"{entry['share_worse']:>10.2f} {entry['n']:>4}{flag}"
+        )
+
+
+def worst_case_by_question(
+    rows: list[dict[str, Any]],
+    metric: str,
+    *,
+    variant: str = PRODUCTION_VARIANT,
+) -> dict[str, Any] | None:
+    """Худший вопрос по метрике (для «меньше лучше» — максимум).
+
+    Макро-среднее прячет провал на одном вопросе; worst-case — минимальная
+    страховка от этого (bootstrap-CI в `stability_report` работает по парам).
+    """
+    selected = [
+        row for row in rows
+        if row["variant"] == variant and metric in row and row[metric] is not None
+    ]
+    if not selected:
+        return None
+    worst = max(selected, key=lambda row: float(row[metric]))
+    return {
+        "question": worst.get("question"),
+        "seed": worst.get("seed"),
+        "metric": metric,
+        "value": float(worst[metric]),
+    }
+
+
 def print_loo_per_question(
     rows: list[dict[str, Any]],
     variant: str = PRODUCTION_VARIANT,
@@ -1063,6 +1112,39 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             metrics=GATE_SHOTS_METRICS,
         )
 
+    # стабильность: CI среднего различия по парам (seed, вопрос) — «эффект или шум»
+    stability: dict[str, Any] = {
+        "in_dist": stability_report(
+            paired_differences(ab_rows, GATE_AB_METRICS)
+        ),
+    }
+    print_stability(stability["in_dist"], context="in-dist (пул)")
+    if args.loo:
+        stability["loo"] = stability_report(
+            paired_differences(loo_rows, GATE_LOO_METRICS)
+        )
+        stability["loo_worst_auc"] = worst_case_by_question(loo_rows, "loo_aurc")
+        print_stability(stability["loo"], context="новый вопрос (LOO)")
+        worst = stability["loo_worst_auc"]
+        if worst is not None:
+            print(
+                f"худший вопрос по LOO AURC: {worst['question']} "
+                f"(seed {worst['seed']}) = {worst['value']:.4f}"
+            )
+    if shots is not None:
+        stability["shots"] = {}
+        for point in sorted({row["shots"] for row in shots_averaged},
+                            key=lambda value: (value is None, value)):
+            rows_at_point = [
+                row for row in shots_averaged if row["shots"] == point
+            ]
+            stability["shots"][str(point)] = stability_report(
+                paired_differences(rows_at_point, GATE_SHOTS_METRICS)
+            )
+        stability["shots_worst_auc"] = worst_case_by_question(
+            shots_averaged, "aurc"
+        )
+
     if args.out_dir is not None:
         args.out_dir.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -1097,6 +1179,7 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "shots_per_question": shots_averaged or None,
             # сырые точки по каждому порядку примеров — для оценки шума гейта
             "shots_per_shot_seed": shots_rows or None,
+            "stability": stability,
         }
         (args.out_dir / "features.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

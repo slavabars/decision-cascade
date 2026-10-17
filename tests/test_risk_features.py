@@ -21,11 +21,13 @@ from eval.risk.features import (
     head_features,
     main,
     mean_pairwise_cosine,
+    print_stability,
     question_onehot,
     risk_report,
     run_loo,
     shots_report,
     with_state_variants,
+    worst_case_by_question,
 )
 from src.risk import FEATURE_NAMES, decision_features
 from src.sampler.questions import NoulSpec
@@ -559,3 +561,55 @@ def test_cli_loo_prints_gate_and_saves_it(tmp_path, capsys):
     assert {entry["variant"] for entry in gate["loo"]} >= {"production"}
     for verdict in gate["verdicts_loo"]:
         assert isinstance(verdict["accepted"], bool)
+
+
+def test_print_stability_marks_significant_and_direction(capsys):
+    report = {
+        "aurc": {"mean": 0.01, "lo": 0.004, "hi": 0.016, "n": 9,
+                 "share_worse": 0.78, "significant": True},
+        "ece": {"mean": -0.04, "lo": -0.06, "hi": -0.02, "n": 9,
+                "share_worse": 0.0, "significant": True},
+    }
+    print_stability(report, context="in-dist")
+    out = capsys.readouterr().out
+    assert "стабильность, in-dist" in out
+    # «+» = кандидат хуже, помечаем только значимые интервалы
+    assert out.count("← эффект") == 2
+    assert "0.78" in out and "0.00" in out
+
+
+def test_worst_case_by_question_picks_max_and_ignores_others():
+    rows = [
+        {"variant": "production", "question": "a", "seed": 0, "loo_aurc": 0.2},
+        {"variant": "production", "question": "b", "seed": 0, "loo_aurc": 0.5},
+        {"variant": "confidence", "question": "b", "seed": 0, "loo_aurc": 0.9},
+    ]
+    worst = worst_case_by_question(rows, "loo_aurc")
+    assert worst == {"question": "b", "seed": 0, "metric": "loo_aurc", "value": 0.5}
+    assert worst_case_by_question(rows, "missing") is None
+
+
+def test_cli_writes_stability_ci(tmp_path, capsys):
+    main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "200", "--train-steps", "30", "--seeds", "0", "1",
+        "--loo", "--shots", "0", "5", "--out-dir", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert "стабильность, in-dist" in out
+    assert "стабильность, новый вопрос (LOO)" in out
+    assert "худший вопрос по LOO AURC" in out
+
+    payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+    stability = payload["stability"]
+    assert set(stability["in_dist"]) >= {"aurc", "eaurc", "ece", "brier"}
+    for entry in stability["in_dist"].values():
+        assert entry["lo"] <= entry["mean"] <= entry["hi"]
+        assert 0.0 <= entry["share_worse"] <= 1.0
+        assert isinstance(entry["significant"], bool)
+    assert set(stability["loo"]) == {
+        "loo_aurc", "loo_eaurc", "loo_coverage_at_5pct_risk", "loo_acc_at_0.7",
+    }
+    assert stability["loo_worst_auc"]["metric"] == "loo_aurc"
+    assert set(stability["shots"]) == {"0", "5", "None"}
+    assert stability["shots_worst_auc"]["metric"] == "aurc"

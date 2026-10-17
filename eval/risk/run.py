@@ -23,6 +23,7 @@ from eval.report.run import _encoder, _load_splits, _specs
 from eval.risk.core import (
     GATE_RANKER_METRICS,
     GATE_TOL,
+    bootstrap_ranker_ci,
     cascade_summary,
     decisions_for_examples,
     flatten,
@@ -95,6 +96,11 @@ def evaluate(
         "confidence": ranker_report(confidence_scores, test_correct),
         "risk_model": ranker_report(risk_scores, test_correct),
     }
+    # неопределённость точечных чисел: bootstrap по тестовым строкам
+    ranking_ci = {
+        "confidence": bootstrap_ranker_ci(confidence_scores, test_correct),
+        "risk_model": bootstrap_ranker_ci(risk_scores, test_correct),
+    }
     # hard gate: риск-ранжировщик принимается только если не хуже confidence
     gate_accepted, gate_worse = gate_risk_vs_confidence(
         ranking["confidence"], ranking["risk_model"], GATE_RANKER_METRICS
@@ -107,6 +113,7 @@ def evaluate(
         "tol": GATE_TOL,
         "tolerances": gate_tolerances(GATE_RANKER_METRICS),
         "metrics": ranking,
+        "ci": ranking_ci,
     }
 
     return {
@@ -117,6 +124,7 @@ def evaluate(
         "threshold_cascade": threshold_rows,
         "risk_cascade": risk_rows,
         "ranking": ranking,
+        "ranking_ci": ranking_ci,
         "gate": gate,
         "acceptance": {
             "confidence": selective_accuracy(confidence_scores, test_correct),
@@ -201,14 +209,18 @@ def main(argv: list[str] | None = None) -> None:
     print(f"local accuracy (test) = {report['local_accuracy']:.3f}")
     _print_table("threshold cascade (confidence < t):", report["threshold_cascade"])
     _print_table("risk-aware cascade (P(error) > budget):", report["risk_cascade"])
-    print("ranking (lower AURC/eAURC/ECE/Brier is better):")
+    print("ranking (lower AURC/eAURC/ECE/Brier is better), 95% CI по тестовым строкам:")
     for name, metrics in report["ranking"].items():
+        ci = report["ranking_ci"][name]
         print(
             f"  {name:>11}: AURC={metrics['aurc']:.4f} "
+            f"[{ci['aurc']['lo']:.4f}, {ci['aurc']['hi']:.4f}] "
             f"eAURC={metrics['eaurc']:.4f} "
             f"cov@5%={metrics['coverage_at_5pct_risk']:.3f} "
             f"cov@10%={metrics['coverage_at_10pct_risk']:.3f} "
-            f"ECE={metrics['ece']:.4f} Brier={metrics['brier']:.4f}"
+            f"ECE={metrics['ece']:.4f} "
+            f"[{ci['ece']['lo']:.4f}, {ci['ece']['hi']:.4f}] "
+            f"Brier={metrics['brier']:.4f}"
         )
     print("quality among accepted at equal escalation rates:")
     print(f"  {'accept%':>8} {'confidence':>11} {'risk_model':>11}")

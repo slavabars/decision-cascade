@@ -8,14 +8,19 @@ from eval.risk.core import (
     GATE_AB_METRICS,
     GATE_LOO_METRICS,
     GATE_SHOTS_METRICS,
+    GateMetric,
+    bootstrap_mean_ci,
+    bootstrap_ranker_ci,
     cascade_summary,
     flatten,
     gate_risk_vs_confidence,
     is_correct,
     labels_for,
+    paired_differences,
     ranker_report,
     risk_escalation,
     selective_accuracy,
+    stability_report,
     threshold_escalation,
 )
 from src.risk import LEGACY_FEATURE_NAMES, ErrorRiskModel
@@ -295,3 +300,75 @@ def test_run_cli_reports_gate_in_json(tmp_path, capsys):
 
     model = ErrorRiskModel.load(tmp_path / "risk.json")
     assert model.gate_rejected == (not gate["accepted"])
+
+
+def test_bootstrap_mean_ci_brackets_mean_and_shrinks_with_n():
+    values = [-0.05, -0.04, -0.06, -0.03, -0.05]
+    ci = bootstrap_mean_ci(values, n_boot=400, seed=0)
+    assert ci["n"] == 5
+    assert ci["mean"] == pytest.approx(np.mean(values))
+    assert ci["lo"] <= ci["mean"] <= ci["hi"]
+
+    # у выборки без разброса интервал нулевой, у шумной — шире
+    flat = bootstrap_mean_ci([0.1, 0.1, 0.1, 0.1], n_boot=200, seed=0)
+    assert flat["lo"] == pytest.approx(0.1) and flat["hi"] == pytest.approx(0.1)
+    noisy = bootstrap_mean_ci([0.0, 0.5, -0.5, 0.4, -0.4], n_boot=400, seed=0)
+    assert noisy["hi"] - noisy["lo"] > flat["hi"] - flat["lo"]
+
+
+def test_bootstrap_mean_ci_handles_empty():
+    ci = bootstrap_mean_ci([])
+    assert ci["n"] == 0 and np.isnan(ci["mean"])
+
+
+def test_bootstrap_ranker_ci_covers_point_estimates():
+    rng = np.random.default_rng(0)
+    scores = rng.random(200)
+    correct = (scores + rng.normal(0, 0.2, 200) > 0.5).astype(float)
+    ci = bootstrap_ranker_ci(scores, correct, n_boot=120, seed=0)
+    assert set(ci) == {"aurc", "eaurc", "coverage_at_5pct_risk",
+                       "coverage_at_10pct_risk", "ece", "brier"}
+    point = ranker_report(scores, correct)
+    for key, entry in ci.items():
+        assert entry["value"] == pytest.approx(point[key])
+        assert entry["lo"] <= entry["hi"]
+        assert entry["lo"] > -0.5 and entry["hi"] < 1.5
+
+
+def test_paired_differences_flip_sign_for_higher_better():
+    rows = [
+        {"variant": "confidence", "seed": 0, "question": "q",
+         "aurc": 0.30, "coverage_at_5pct_risk": 0.50},
+        {"variant": "production", "seed": 0, "question": "q",
+         "aurc": 0.40, "coverage_at_5pct_risk": 0.40},
+    ]
+    metrics = (
+        GateMetric("aurc", True),
+        GateMetric("coverage_at_5pct_risk", False),
+    )
+    diffs = paired_differences(rows, metrics)
+    # «хуже» всегда положительно: у AURC production выше — хуже (+0.1),
+    # у покрытия production ниже — тоже хуже (+0.1)
+    assert diffs["aurc"] == pytest.approx([0.1])
+    assert diffs["coverage_at_5pct_risk"] == pytest.approx([0.1])
+
+    # если кандидата нет, пара пропускается
+    only_baseline = [row for row in rows if row["variant"] == "confidence"]
+    assert paired_differences(only_baseline, metrics)["aurc"] == []
+
+
+def test_stability_report_flags_significant_regression():
+    rows = [
+        {"variant": "confidence", "seed": seed, "question": "q", "aurc": 0.30}
+        for seed in range(6)
+    ] + [
+        {"variant": "production", "seed": seed, "question": "q", "aurc": 0.40}
+        for seed in range(6)
+    ]
+    report = stability_report(paired_differences(rows, GATE_AB_METRICS))
+    assert report["aurc"]["mean"] == pytest.approx(0.1)
+    # разница одинакова во всех парах — интервал не накрывает ноль
+    assert report["aurc"]["significant"] is True
+    assert report["aurc"]["share_worse"] == pytest.approx(1.0)
+    # калибровочных метрик в строках нет — их в отчёте тоже нет
+    assert "ece" not in report
