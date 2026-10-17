@@ -14,6 +14,7 @@ from eval.risk.features import (
     aggregate_gate,
     aggregate_loo,
     aggregate_shots,
+    average_shot_seeds,
     calibration_report,
     feature_variants,
     gate_vs_baseline,
@@ -251,6 +252,68 @@ def test_shots_report_takes_nested_subsets_of_validation_only():
             assert row["n_train"] == 20 + row["n_own"]
             assert row["n_test"] == 7
             assert 0.0 <= row["aurc"] <= 1.0
+            assert row["shot_seed"] == 0
+
+
+def test_shots_report_shot_seeds_vary_the_order_only():
+    """Разные shot_seed — те же строки, другой порядок; n=0 и «все» не зависят."""
+    prepared = _prepared_fixture()
+    rows = shots_report(prepared, [0, 3], seed=0, shot_seeds=[0, 1, 2])
+    assert {row["shot_seed"] for row in rows} == {0, 1, 2}
+
+    for question in prepared.questions:
+        points = [row for row in rows if row["question"] == question]
+        by_key = {(row["shot_seed"], row["shots"]): row for row in points}
+        # n_own у всех порядков одинаковый — меняется только состав строк
+        for shot_seed in (0, 1, 2):
+            assert by_key[(shot_seed, 0)]["n_own"] == 0
+            assert by_key[(shot_seed, 3)]["n_own"] == 3
+        # n = 0 — переноса нет, порядок не на что не влияет
+        assert by_key[(0, 0)]["aurc"] == pytest.approx(by_key[(2, 0)]["aurc"])
+
+
+def test_average_shot_seeds_means_metrics_and_keeps_spread():
+    def row(shot_seed, question, aurc, ece):
+        return {
+            "variant": "v", "question": question, "seed": 0, "shot_seed": shot_seed,
+            "shots": 5, "n_own": 5, "n_train": 25, "n_test": 7,
+            "aurc": aurc, "eaurc": aurc / 2,
+            "coverage_at_5pct_risk": 0.4, "acc_at_0.7_coverage": 0.5,
+            "ece": ece, "brier": 0.2,
+        }
+
+    averaged = average_shot_seeds([
+        row(0, "q1", 0.2, 0.10), row(1, "q1", 0.4, 0.14),
+        row(0, "q2", 0.1, 0.02), row(1, "q2", 0.3, 0.06),
+    ])
+    by_question = {entry["question"]: entry for entry in averaged}
+    assert set(by_question) == {"q1", "q2"}
+    q1 = by_question["q1"]
+    assert len(averaged) == 2  # по строке на (variant, seed, question, shots)
+    assert q1["aurc"] == pytest.approx(0.3)
+    assert q1["n_shot_seeds"] == 2
+    # разброс по порядкам сохраняется рядом, чтобы его было видно в отчёте
+    assert q1["aurc_shot_std"] == pytest.approx(0.1)
+    assert q1["ece_shot_std"] == pytest.approx(0.02)
+    assert by_question["q2"]["aurc"] == pytest.approx(0.2)
+
+
+def test_aggregate_shots_carries_shot_seed_spread():
+    def row(question, aurc, shot_std):
+        return {
+            "variant": "v", "question": question, "seed": 0, "shots": 5,
+            "n_own": 5, "n_train": 25, "n_test": 7,
+            "aurc": aurc, "eaurc": aurc / 2,
+            "coverage_at_5pct_risk": 0.4, "acc_at_0.7_coverage": 0.5,
+            "ece": 0.1, "brier": 0.2,
+            "aurc_shot_std": shot_std, "ece_shot_std": 0.01,
+        }
+
+    entry = aggregate_shots([row("q1", 0.2, 0.02), row("q2", 0.4, 0.04)])[0]
+    assert entry["aurc"] == pytest.approx(0.3)
+    # разброс по порядкам примеров усредняется по вопросам
+    assert entry["aurc_shot_std"] == pytest.approx(0.03)
+    assert entry["ece_shot_std"] == pytest.approx(0.01)
 
 
 def test_aggregate_shots_macro_averages_over_questions():
@@ -309,19 +372,29 @@ def test_cli_shots_writes_curve(tmp_path, capsys):
     main([
         "--specs", "support", "--encoder", "hash", "--dim", "16",
         "--limit", "120", "--train-steps", "30", "--seeds", "0",
-        "--shots", "0", "5", "--out-dir", str(tmp_path),
+        "--shots", "0", "5", "--shot-seeds", "0", "1", "--out-dir", str(tmp_path),
     ])
     out = capsys.readouterr().out
     assert "сколько строк нового вопроса нужно" in out
     assert "все (in-dist)" in out
+    # разброс по порядкам примеров печатается, раз порядков больше одного
+    assert "разброс по порядку примеров" in out
 
     payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+    assert payload["shot_seeds"] == [0, 1]
     assert {entry["shots"] for entry in payload["shots"]} == {None, 0, 5}
     assert payload["shots_per_question"]
     for row in payload["shots_per_question"]:
         assert row["n_test"] > 0 and row["n_own"] <= row["n_train"]
         assert 0.0 <= row["aurc"] <= 1.0
         assert 0.0 <= row["ece"] <= 1.0 and 0.0 <= row["brier"] <= 1.0
+        # метрики усреднены по порядкам, разброс рядом
+        assert row["n_shot_seeds"] == 2
+        assert row["aurc_shot_std"] >= 0.0
+    # n = 0 — переноса нет, порядок примеров не влияет
+    for entry in payload["shots_per_question"]:
+        if entry["shots"] == 0:
+            assert entry["aurc_shot_std"] == pytest.approx(0.0)
     # гейт считается и по кривой: production против confidence при том же n
     gate_shots = payload["gate"]["shots"]
     assert gate_shots and {entry["variant"] for entry in gate_shots} == {"production"}

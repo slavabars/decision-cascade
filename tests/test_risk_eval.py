@@ -7,6 +7,7 @@ import pytest
 from eval.risk.core import (
     GATE_AB_METRICS,
     GATE_LOO_METRICS,
+    GATE_SHOTS_METRICS,
     cascade_summary,
     flatten,
     gate_risk_vs_confidence,
@@ -206,9 +207,23 @@ def test_gate_loo_metrics_keys_match_run_loo_rows():
         "loo_eaurc",
         "loo_coverage_at_5pct_risk",
         "loo_acc_at_0.7",
-        "loo_ece",
-        "loo_brier",
     }
+
+
+def test_gate_calibration_only_where_it_is_resolvable():
+    """Калибровка входит в гейт пула (in-dist/сертификат), но не одного вопроса.
+
+    На одном новом вопросе измеренный разброс ECE-разницы сравним с эффектом
+    (σ 0.03–0.07 при ~3 прогонах), поэтому постоянный допуск там отвергал бы на
+    шуме; калибровку вернёт Шаг 3 по CI.
+    """
+    ab_keys = {metric.key for metric in GATE_AB_METRICS}
+    assert {"ece", "brier"} <= ab_keys
+    assert {"aurc", "eaurc", "coverage_at_5pct_risk", "acc_at_0.7_coverage"} <= ab_keys
+    assert {"ece", "brier"} & {metric.key for metric in GATE_LOO_METRICS} == set()
+    assert {"ece", "brier"} & {metric.key for metric in GATE_SHOTS_METRICS} == set()
+    # у кривой тот же набор SLO-метрик, что у пула, только без калибровки
+    assert {metric.key for metric in GATE_SHOTS_METRICS} == ab_keys - {"ece", "brier"}
 
 
 def test_gate_calibration_metrics_have_measured_tolerances():

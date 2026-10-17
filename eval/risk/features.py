@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,6 +74,7 @@ from eval.report.run import _encoder, _load_splits, _specs
 from eval.risk.core import (
     GATE_AB_METRICS,
     GATE_LOO_METRICS,
+    GATE_SHOTS_METRICS,
     GATE_TOL,
     GateMetric,
     decisions_for_examples,
@@ -500,7 +502,7 @@ def shots_report(
     C: float = 1.0,
     variant: str = PRODUCTION_VARIANT,
     baseline: str = "confidence",
-    shot_seed: int = 0,
+    shot_seeds: Sequence[int] = (0,),
 ) -> list[dict[str, Any]]:
     """Кривая «сколько строк нового вопроса нужно»: AURC на отложенном вопросе.
 
@@ -510,10 +512,16 @@ def shots_report(
     поэтому рост кривой не объясняется случайной подменой примеров.
 
     Для каждой точки считаются метрики и варианта ``variant``, и ``baseline`` —
-    с ними потом работает hard gate (см. `gate_vs_baseline`, `GATE_AB_METRICS`).
+    с ними потом работает hard gate (см. `gate_vs_baseline`,
+    `GATE_SHOTS_METRICS`).
 
     ``shots=None`` — все свои строки (обучение на всех вопросах, верхняя
     граница), ``n = 0`` — перенос без своих данных (совпадает с ``--loo``).
+
+    ``shot_seeds`` — несколько случайных **порядков** выбора своих строк (какие
+    именно строки попали в первые ``n``). Строки отдаются по каждому порядку
+    отдельно (ключ ``shot_seed``), усредняет их `average_shot_seeds` — так
+    видно, насколько кривая зависит от удачного выбора примеров.
     """
     val_correct, test_correct = prepared.correct
     val_groups = np.asarray(prepared.groups[0])
@@ -521,38 +529,74 @@ def shots_report(
     candidates = [name for name in (variant, baseline) if name in prepared.variants]
 
     rows: list[dict[str, Any]] = []
-    for position, question in enumerate(prepared.questions):
-        own = np.flatnonzero(val_groups == question)
-        others = np.flatnonzero(val_groups != question)
-        test_rows = test_groups == question
-        subset_correct = test_correct[test_rows]
-        # один и тот же порядок строк для всех точек кривой: точки вложены
-        order = np.random.default_rng([shot_seed, position]).permutation(len(own))
-        for n in [None, *shots]:
-            picked = own if n is None else own[order[:n]]
-            train_rows = np.concatenate([others, picked])
-            for name in candidates:
-                val_matrix, test_matrix = prepared.variants[name]
-                scores = _scores(
-                    val_matrix[train_rows],
-                    test_matrix[test_rows],
-                    val_correct[train_rows],
-                    seed=seed,
-                    C=_c_for(prepared, name, C),
-                )
-                rows.append(
-                    {
-                        "variant": name,
-                        "question": question,
-                        "seed": seed,
-                        "shots": n,
-                        "n_own": len(picked),
-                        "n_train": len(train_rows),
-                        "n_test": int(test_rows.sum()),
-                        **risk_report(scores, subset_correct),
-                    }
-                )
+    for shot_seed in shot_seeds:
+        for position, question in enumerate(prepared.questions):
+            own = np.flatnonzero(val_groups == question)
+            others = np.flatnonzero(val_groups != question)
+            test_rows = test_groups == question
+            subset_correct = test_correct[test_rows]
+            # один порядок строк для всех точек кривой: точки вложены
+            order = np.random.default_rng([shot_seed, position]).permutation(len(own))
+            for n in [None, *shots]:
+                picked = own if n is None else own[order[:n]]
+                train_rows = np.concatenate([others, picked])
+                for name in candidates:
+                    val_matrix, test_matrix = prepared.variants[name]
+                    scores = _scores(
+                        val_matrix[train_rows],
+                        test_matrix[test_rows],
+                        val_correct[train_rows],
+                        seed=seed,
+                        C=_c_for(prepared, name, C),
+                    )
+                    rows.append(
+                        {
+                            "variant": name,
+                            "question": question,
+                            "seed": seed,
+                            "shot_seed": shot_seed,
+                            "shots": n,
+                            "n_own": len(picked),
+                            "n_train": len(train_rows),
+                            "n_test": int(test_rows.sum()),
+                            **risk_report(scores, subset_correct),
+                        }
+                    )
     return rows
+
+
+def average_shot_seeds(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Усреднить кривую по ``shot_seed``: ``(variant, seed, question, shots)``.
+
+    Порядок выбора своих строк — nuisance-переменная: удачный порядок не должен
+    выглядеть улучшением. Поэтому метрики усредняются по порядкам, а разброс
+    хранится рядом (``<метрика>_shot_std``) и печатается отдельно. Если порядок
+    один, ``std`` нулевой и строки эквивалентны исходным.
+    """
+    groups: dict[tuple[Any, Any, Any, Any], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (row["variant"], row.get("seed"), row["question"], row["shots"])
+        groups.setdefault(key, []).append(row)
+
+    averaged: list[dict[str, Any]] = []
+    for group in groups.values():
+        first = group[0]
+        entry: dict[str, Any] = {
+            "variant": first["variant"],
+            "question": first["question"],
+            "seed": first.get("seed"),
+            "shots": first["shots"],
+            "n_own": first["n_own"],
+            "n_train": first["n_train"],
+            "n_test": first["n_test"],
+            "n_shot_seeds": len(group),
+        }
+        for column in SHOT_METRIC_COLUMNS:
+            values = [float(row[column]) for row in group]
+            entry[column] = float(np.mean(values))
+            entry[f"{column}_shot_std"] = float(np.std(values))
+        averaged.append(entry)
+    return averaged
 
 
 def gate_vs_baseline(
@@ -635,13 +679,22 @@ def aggregate_gate(verdicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def print_gate_report(
-    aggregated: list[dict[str, Any]], *, context: str, tol: float | None = None
+    aggregated: list[dict[str, Any]],
+    *,
+    context: str,
+    metrics: tuple[GateMetric, ...] | None = None,
+    tol: float | None = None,
 ) -> None:
     """Вердикты гейта: сколько замеров вариант прошёл против baseline."""
-    if tol is None:
-        detail = "допуск по метрике (AURC 0.0005, ECE 0.02, Brier 0.01)"
-    else:
+    if tol is not None:
         detail = f"tol={tol:g}"
+    elif metrics is not None:
+        tolerances = gate_tolerances(metrics)
+        detail = "допуски " + ", ".join(
+            f"{key} {value:g}" for key, value in tolerances.items()
+        )
+    else:
+        detail = "допуск по метрике"
     print(
         f"\nhard gate, {context} (вариант принимается только если не хуже "
         f"baseline по всем метрикам, {detail}):"
@@ -776,19 +829,24 @@ def print_loo_calibration(aggregated: list[dict[str, Any]], n_seeds: int) -> Non
         )
 
 
-SHOT_COLUMNS = (
+SHOT_METRIC_COLUMNS = (
     "aurc",
     "eaurc",
     "coverage_at_5pct_risk",
     "acc_at_0.7_coverage",
     "ece",
     "brier",
-    "n_own",
 )
+SHOT_COLUMNS = (*SHOT_METRIC_COLUMNS, "n_own")
 
 
 def aggregate_shots(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Макро-среднее по вопросам, затем среднее и разброс по seed'ам."""
+    """Макро-среднее по вопросам, затем среднее и разброс по seed'ам.
+
+    Строки должны быть уже усреднены по ``shot_seed`` (`average_shot_seeds`):
+    разброс по порядкам примеров едет рядом как ``<метрика>_shot_std`` и тоже
+    усредняется (сколько в среднем «гуляет» метрика от порядка).
+    """
     per_seed: dict[tuple[Any, Any, int], list[dict[str, Any]]] = {}
     for row in rows:
         key = (row["variant"], row["shots"], row["seed"])
@@ -800,6 +858,12 @@ def aggregate_shots(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 column: float(np.mean([row[column] for row in group]))
                 for column in SHOT_COLUMNS
+            }
+            | {
+                f"{column}_shot_std": float(
+                    np.mean([row.get(f"{column}_shot_std", 0.0) for row in group])
+                )
+                for column in SHOT_METRIC_COLUMNS
             }
         )
 
@@ -814,6 +878,10 @@ def aggregate_shots(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             values = [item[column] for item in entries]
             entry[column] = float(np.mean(values))
             entry[f"{column}_std"] = float(np.std(values))
+        for column in SHOT_METRIC_COLUMNS:
+            entry[f"{column}_shot_std"] = float(
+                np.mean([item[f"{column}_shot_std"] for item in entries])
+            )
         aggregated.append(entry)
     return aggregated
 
@@ -844,6 +912,22 @@ def print_shots_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
             f"{entry['acc_at_0.7_coverage']:>8.4f} "
             f"{entry['ece']:>8.4f} {entry['brier']:>8.4f} "
             f"{entry['n_own']:>6.1f}"
+        )
+
+
+def print_shots_stability(
+    aggregated: list[dict[str, Any]], shot_seeds: Sequence[int]
+) -> None:
+    """Насколько кривая зависит от порядка выбора своих строк (std по shot_seed)."""
+    print(
+        f"\nразброс по порядку примеров (std по shot_seed={list(shot_seeds)}):"
+    )
+    print(f"{'variant':>24} {'своих строк':>12} {'σ(AURC)':>9} {'σ(ECE)':>9}")
+    for entry in sorted(aggregated, key=_shots_order):
+        label = "все (in-dist)" if entry["shots"] is None else str(entry["shots"])
+        print(
+            f"{entry['variant']:>24} {label:>12} "
+            f"{entry['aurc_shot_std']:>9.4f} {entry['ece_shot_std']:>9.4f}"
         )
 
 
@@ -902,6 +986,9 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
                         help="кривая дообучения на новом вопросе: сколько строк "
                              "валидации вопроса добавить в обучение (0 — перенос "
                              "без своих данных; 0 включается всегда)")
+    parser.add_argument("--shot-seeds", type=int, nargs="+", default=[0],
+                        help="случайные порядки выбора своих строк: усредняем по "
+                             "ним, чтобы кривая не зависела от удачного выбора")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -932,7 +1019,12 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
         if args.loo:
             loo_rows.extend(run_loo(prepared, seed=seed, C=args.C))
         if shots is not None:
-            shots_rows.extend(shots_report(prepared, shots, seed=seed, C=args.C))
+            shots_rows.extend(
+                shots_report(
+                    prepared, shots, seed=seed, C=args.C,
+                    shot_seeds=args.shot_seeds,
+                )
+            )
         if seed == args.seeds[0]:
             print(f"specs={args.specs} encoder={args.encoder} "
                   f"train={len(train)} val={len(val)} test={len(test)}")
@@ -941,7 +1033,10 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     print_report(aggregated, len(args.seeds))
     ab_rows = [row for rows in rows_by_variant.values() for row in rows]
     gate_ab = gate_vs_baseline(ab_rows, GATE_AB_METRICS)
-    print_gate_report(aggregate_gate(gate_ab), context="in-dist (та же база)")
+    print_gate_report(
+        aggregate_gate(gate_ab), context="in-dist (та же база)",
+        metrics=GATE_AB_METRICS,
+    )
     loo_aggregated = aggregate_loo(loo_rows) if args.loo else []
     gate_loo: list[dict[str, Any]] = []
     if args.loo:
@@ -950,14 +1045,22 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
         print_loo_per_question(loo_rows)
         gate_loo = gate_vs_baseline(loo_rows, GATE_LOO_METRICS)
         print_gate_report(
-            aggregate_gate(gate_loo), context="на новом вопросе (LOO)"
+            aggregate_gate(gate_loo), context="на новом вопросе (LOO)",
+            metrics=GATE_LOO_METRICS,
         )
     gate_shots: list[dict[str, Any]] = []
+    shots_averaged: list[dict[str, Any]] = []
     if shots is not None:
-        print_shots_report(aggregate_shots(shots_rows), len(args.seeds))
-        gate_shots = gate_vs_baseline(shots_rows, GATE_AB_METRICS)
+        # порядок выбора своих строк — nuisance: усредняем до гейта
+        shots_averaged = average_shot_seeds(shots_rows)
+        shots_aggregated = aggregate_shots(shots_averaged)
+        print_shots_report(shots_aggregated, len(args.seeds))
+        if len(args.shot_seeds) > 1:
+            print_shots_stability(shots_aggregated, args.shot_seeds)
+        gate_shots = gate_vs_baseline(shots_averaged, GATE_SHOTS_METRICS)
         print_gate_report(
-            aggregate_gate(gate_shots), context="кривая few-shot (новый вопрос)"
+            aggregate_gate(gate_shots), context="кривая few-shot (новый вопрос)",
+            metrics=GATE_SHOTS_METRICS,
         )
 
     if args.out_dir is not None:
@@ -966,6 +1069,7 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "specs": args.specs,
             "encoder": args.encoder,
             "seeds": args.seeds,
+            "shot_seeds": args.shot_seeds,
             "scaled": args.scale,
             "feature_names": list(FEATURE_NAMES),
             "extra_features": list(EXTRA_FEATURE_NAMES),
@@ -977,7 +1081,8 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "gate": {
                 "tol": GATE_TOL,
                 "tolerances": gate_tolerances(GATE_AB_METRICS)
-                | gate_tolerances(GATE_LOO_METRICS),
+                | gate_tolerances(GATE_LOO_METRICS)
+                | gate_tolerances(GATE_SHOTS_METRICS),
                 "baseline": "confidence",
                 "in_dist": aggregate_gate(gate_ab),
                 "loo": aggregate_gate(gate_loo) if args.loo else None,
@@ -986,8 +1091,12 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
                 "verdicts_loo": gate_loo,
                 "verdicts_shots": gate_shots,
             },
-            "shots": aggregate_shots(shots_rows) if shots is not None else None,
-            "shots_per_question": shots_rows or None,
+            "shots": (
+                aggregate_shots(shots_averaged) if shots is not None else None
+            ),
+            "shots_per_question": shots_averaged or None,
+            # сырые точки по каждому порядку примеров — для оценки шума гейта
+            "shots_per_shot_seed": shots_rows or None,
         }
         (args.out_dir / "features.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

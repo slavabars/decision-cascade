@@ -134,9 +134,12 @@ DEFAULT_COVERAGES = (0.5, 0.7, 0.9)
 #: не прощается, допуск съедает только численный шум.
 GATE_TOL = 0.0005
 
-#: Допуски калибровки — по **измеренному** разбросу, иначе бинаризованный ECE
-#: отвергал бы варианты на чистом шуме. На LOO-замерах RouterBench/hash
-#: (3 seeds) seed-σ ECE ≈ 0.012–0.024, у Brier ≈ 0.002–0.007; берём ≈2σ.
+#: Допуски калибровки — по **измеренному** разбросу. Их можно ставить жёстко
+#: только там, где метрика разрешима: в пуле вопросов (~3000 тестовых строк,
+#: RouterBench/hash) измеренный seed-σ разницы `production − confidence` —
+#: 0.024 у ECE и 0.004 у Brier, а наблюдаемые эффекты 0.04–0.09. Берём ≈1σ:
+#: порог намеренно строгий, ложный отказ безопасен (фолбэк на `confidence`).
+#: На **одном** новом вопросе ECE так не работает (см. `GATE_LOO_METRICS`).
 GATE_TOL_ECE = 0.02
 GATE_TOL_BRIER = 0.01
 
@@ -149,33 +152,51 @@ class GateMetric(NamedTuple):
     tol: float = GATE_TOL
 
 
-#: Метрики, по которым гейт сравнивает варианты.
-#: AURC/eAURC — качество ранжирования, точность при фиксированном покрытии
-#: и покрытие при бюджете риска — рабочие SLO риск-каскада; ECE/Brier —
-#: калибровка ``P(ошибка)`` (свои допуски, см. ``GATE_TOL_ECE``).
-GATE_AB_METRICS = (
+#: AURC/eAURC/покрытие/точность — рабочие SLO риск-каскада, калибровка — честность
+#: `P(ошибка)`, по которой каскад сравнивает с бюджетом.
+_GATE_RANKING = (
     GateMetric("aurc", True),
     GateMetric("eaurc", True),
     GateMetric("coverage_at_5pct_risk", False),
-    GateMetric("acc_at_0.7_coverage", False),
+)
+_GATE_CALIBRATION = (
     GateMetric("ece", True, GATE_TOL_ECE),
     GateMetric("brier", True, GATE_TOL_BRIER),
 )
+
+#: Гейт **пула** вопросов: in-dist A/B (`--shots` в точке «все») — тут калибровка
+#: разрешима, поэтому входит в критерии.
+GATE_AB_METRICS = (
+    *_GATE_RANKING,
+    GateMetric("acc_at_0.7_coverage", False),
+    *_GATE_CALIBRATION,
+)
+#: Гейт сертификата `eval/risk/run.py`: тоже пул (перенос считается идеальным),
+#: калибровка входит.
 GATE_RANKER_METRICS = (
     GateMetric("aurc", True),
     GateMetric("eaurc", True),
     GateMetric("coverage_at_5pct_risk", False),
     GateMetric("coverage_at_10pct_risk", False),
-    GateMetric("ece", True, GATE_TOL_ECE),
-    GateMetric("brier", True, GATE_TOL_BRIER),
+    *_GATE_CALIBRATION,
 )
+#: Гейт **одного нового вопроса** (LOO). Калибровки здесь нет намеренно:
+#: измеренный разброс разницы `production − confidence` по seed'ам — σ_ECE
+#: 0.03–0.07 (и всего ~3 независимых прогона, порядок примеров при n=0 не
+#: добавляет информации), то есть любой осмысленный допуск отвергал бы на шуме.
+#: Замеры показали, что «калибровочные» отказы Шага 1 были артефактом одного
+#: seed'а: усреднение по трём даёт +0.007 ± 0.030 (эффекта нет). Калибровку в
+#: этот гейт вернёт Шаг 3 по bootstrap-CI, а не по константному допуску.
 GATE_LOO_METRICS = (
     GateMetric("loo_aurc", True),
     GateMetric("loo_eaurc", True),
     GateMetric("loo_coverage_at_5pct_risk", False),
     GateMetric("loo_acc_at_0.7", False),
-    GateMetric("loo_ece", True, GATE_TOL_ECE),
-    GateMetric("loo_brier", True, GATE_TOL_BRIER),
+)
+#: Гейт кривой few-shot: срез идёт по вопросу, поэтому как у LOO — без калибровки.
+GATE_SHOTS_METRICS = (
+    *_GATE_RANKING,
+    GateMetric("acc_at_0.7_coverage", False),
 )
 
 
