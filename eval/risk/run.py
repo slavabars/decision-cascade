@@ -59,6 +59,34 @@ def _print_table(title: str, rows: dict[str, dict[str, float]]) -> None:
         )
 
 
+def gate_certificate(
+    ranking: dict[str, dict[str, float]],
+    ranking_ci: dict[str, dict[str, dict[str, float]]],
+) -> dict[str, Any]:
+    """Сертификат hard gate: риск-ранжировщик против ``confidence``.
+
+    Помимо вердикта несёт по-метричные ``excess`` (превышения допуска) — прод
+    пересчитывает вердикт под своим ``DECISION_RISK_GATE_DELTA``, не переобучая
+    модель (см. ``src.risk.gate_verdict``), и точечные метрики с bootstrap-CI.
+    """
+    accepted, worse = gate_risk_vs_confidence(
+        ranking["confidence"], ranking["risk_model"], GATE_RANKER_METRICS
+    )
+    return {
+        "accepted": accepted,
+        "worse": worse,
+        "baseline": "confidence",
+        "candidate": "risk_model",
+        "tol": GATE_TOL,
+        "tolerances": gate_tolerances(GATE_RANKER_METRICS),
+        "excess": gate_excess(
+            ranking["confidence"], ranking["risk_model"], GATE_RANKER_METRICS
+        ),
+        "metrics": ranking,
+        "ci": ranking_ci,
+    }
+
+
 def evaluate(
     specs,
     heads,
@@ -103,24 +131,7 @@ def evaluate(
         "risk_model": bootstrap_ranker_ci(risk_scores, test_correct),
     }
     # hard gate: риск-ранжировщик принимается только если не хуже confidence
-    gate_accepted, gate_worse = gate_risk_vs_confidence(
-        ranking["confidence"], ranking["risk_model"], GATE_RANKER_METRICS
-    )
-    gate = {
-        "accepted": gate_accepted,
-        "worse": gate_worse,
-        "baseline": "confidence",
-        "candidate": "risk_model",
-        "tol": GATE_TOL,
-        "tolerances": gate_tolerances(GATE_RANKER_METRICS),
-        # по-метричные превышения допуска: прод пересчитывает вердикт под своим
-        # DECISION_RISK_GATE_DELTA, не переобучая модель (см. src.risk.gate_verdict)
-        "excess": gate_excess(
-            ranking["confidence"], ranking["risk_model"], GATE_RANKER_METRICS
-        ),
-        "metrics": ranking,
-        "ci": ranking_ci,
-    }
+    gate = gate_certificate(ranking, ranking_ci)
 
     return {
         "model": model,

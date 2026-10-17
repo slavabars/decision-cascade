@@ -236,6 +236,26 @@ def test_gate_excess_is_consistent_with_gate_verdict():
         assert (max(excess.values()) > 0.0) is (not accepted)
 
 
+def test_gate_certificate_carries_excess_consistent_with_verdict():
+    from eval.risk.run import gate_certificate
+
+    base = {**_gate_row(), "ece": 0.10, "brier": 0.25}
+    better = {**_gate_row(aurc=0.25), "ece": 0.05, "brier": 0.22}
+    cert = gate_certificate({"confidence": base, "risk_model": better}, {})
+    assert cert["accepted"]
+    assert cert["worse"] == []
+    assert set(cert["excess"]) == {metric.key for metric in GATE_RANKER_METRICS}
+    assert all(value <= 0.0 for value in cert["excess"].values())
+    assert cert["metrics"]["risk_model"] is better
+
+    worse = {**_gate_row(aurc=0.35), "ece": 0.10, "brier": 0.25}
+    cert = gate_certificate({"confidence": base, "risk_model": worse}, {})
+    assert not cert["accepted"]
+    assert cert["excess"]["aurc"] == pytest.approx(0.05 - 0.0005)
+    # вердикт и excess согласованы при допуске 0
+    assert (max(cert["excess"].values()) > 0.0) is (not cert["accepted"])
+
+
 def test_gate_loo_metrics_keys_match_run_loo_rows():
     keys = {metric.key for metric in GATE_LOO_METRICS}
     assert keys == {
