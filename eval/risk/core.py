@@ -12,11 +12,12 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
 
+from eval.calibration.metrics import brier_score, ece
 from eval.calibration.selective import aurc, coverage_at_risk, eaurc, risk_at_coverage
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec
 from src.schemas import DecisionResult
@@ -109,71 +110,111 @@ def cascade_summary(correct: np.ndarray, escalate: np.ndarray) -> dict[str, floa
 
 
 def ranker_report(scores: np.ndarray, correct: np.ndarray) -> dict[str, float]:
-    """AURC/eAURC и покрытие при бюджете риска 5% и 10%."""
+    """AURC/eAURC, покрытие при бюджете риска 5% и 10%, калибровка ``P(ошибка)``.
+
+    ``scores`` — балл «решение верно», поэтому ECE/Brier считаются на
+    вероятности ошибки ``1 - score`` против факта ``1 - correct``.
+    """
+    error_prob = 1.0 - np.asarray(scores, dtype=float)
+    errors = 1.0 - np.asarray(correct, dtype=float)
     return {
         "aurc": aurc(scores, correct),
         "eaurc": eaurc(scores, correct),
         "coverage_at_5pct_risk": coverage_at_risk(scores, correct, 0.05),
         "coverage_at_10pct_risk": coverage_at_risk(scores, correct, 0.10),
+        "ece": float(ece(error_prob, errors)),
+        "brier": float(brier_score(error_prob, errors)),
     }
 
 
 DEFAULT_COVERAGES = (0.5, 0.7, 0.9)
 
+#: Допуск только на шумовые колебания. Регрессия сильнее — отказ от варианта.
+#: Для AURC/eAURC/покрытия берём по решению проекта жёсткие 0.0005: регрессия
+#: не прощается, допуск съедает только численный шум.
+GATE_TOL = 0.0005
 
-#: (ключ, «меньше лучше») — метрики, по которым гейт сравнивает варианты.
+#: Допуски калибровки — по **измеренному** разбросу, иначе бинаризованный ECE
+#: отвергал бы варианты на чистом шуме. На LOO-замерах RouterBench/hash
+#: (3 seeds) seed-σ ECE ≈ 0.012–0.024, у Brier ≈ 0.002–0.007; берём ≈2σ.
+GATE_TOL_ECE = 0.02
+GATE_TOL_BRIER = 0.01
+
+
+class GateMetric(NamedTuple):
+    """Метрика гейта: ключ, направление («меньше лучше») и допуск на шум."""
+
+    key: str
+    lower_better: bool
+    tol: float = GATE_TOL
+
+
+#: Метрики, по которым гейт сравнивает варианты.
 #: AURC/eAURC — качество ранжирования, точность при фиксированном покрытии
-#: и покрытие при бюджете риска — рабочие SLO риск-каскада.
+#: и покрытие при бюджете риска — рабочие SLO риск-каскада; ECE/Brier —
+#: калибровка ``P(ошибка)`` (свои допуски, см. ``GATE_TOL_ECE``).
 GATE_AB_METRICS = (
-    ("aurc", True),
-    ("eaurc", True),
-    ("coverage_at_5pct_risk", False),
-    ("acc_at_0.7_coverage", False),
+    GateMetric("aurc", True),
+    GateMetric("eaurc", True),
+    GateMetric("coverage_at_5pct_risk", False),
+    GateMetric("acc_at_0.7_coverage", False),
+    GateMetric("ece", True, GATE_TOL_ECE),
+    GateMetric("brier", True, GATE_TOL_BRIER),
 )
 GATE_RANKER_METRICS = (
-    ("aurc", True),
-    ("eaurc", True),
-    ("coverage_at_5pct_risk", False),
-    ("coverage_at_10pct_risk", False),
+    GateMetric("aurc", True),
+    GateMetric("eaurc", True),
+    GateMetric("coverage_at_5pct_risk", False),
+    GateMetric("coverage_at_10pct_risk", False),
+    GateMetric("ece", True, GATE_TOL_ECE),
+    GateMetric("brier", True, GATE_TOL_BRIER),
 )
 GATE_LOO_METRICS = (
-    ("loo_aurc", True),
-    ("loo_eaurc", True),
-    ("loo_coverage_at_5pct_risk", False),
-    ("loo_acc_at_0.7", False),
+    GateMetric("loo_aurc", True),
+    GateMetric("loo_eaurc", True),
+    GateMetric("loo_coverage_at_5pct_risk", False),
+    GateMetric("loo_acc_at_0.7", False),
+    GateMetric("loo_ece", True, GATE_TOL_ECE),
+    GateMetric("loo_brier", True, GATE_TOL_BRIER),
 )
 
-#: Допуск только на шумовые колебания. Регрессия сильнее — отказ от варианта.
-GATE_TOL = 0.0005
+
+def gate_tolerances(metrics: tuple[GateMetric, ...]) -> dict[str, float]:
+    """Допуски метрик в виде словаря — чтобы отчёт/сертификат был самодостаточным."""
+    return {metric.key: metric.tol for metric in metrics}
 
 
 def gate_risk_vs_confidence(
     baseline: dict[str, float],
     candidate: dict[str, float],
-    metrics: tuple[tuple[str, bool], ...] = GATE_AB_METRICS,
+    metrics: tuple[GateMetric, ...] = GATE_AB_METRICS,
     *,
-    tol: float = GATE_TOL,
+    tol: float | None = None,
 ) -> tuple[bool, list[str]]:
     """Hard gate: кандидат принимается **только** если не хуже baseline.
 
     Возвращает ``(accepted, reasons)``: ``accepted`` истинен лишь когда по
-    **всем** перечисленным метрикам кандидат не хуже baseline (допуск ``tol``
-    поедает только шум). Любая регрессия — причина отказа, тогда на выход идёт
-    лучший baseline (по умолчанию `confidence`).
+    **всем** перечисленным метрикам кандидат не хуже baseline (допуск поедает
+    только шум). Любая регрессия — причина отказа, тогда на выход идёт лучший
+    baseline (по умолчанию `confidence`).
 
     Параметры:
     - ``baseline`` / ``candidate`` — словари метрик;
-    - ``metrics`` — пары ``(ключ, меньше_лучше)``.
+    - ``metrics`` — кортеж ``GateMetric`` (ключ, меньше_лучше, допуск);
+    - ``tol`` — переопределить допуск **всех** метрик одним числом
+      (по умолчанию у каждой метрики свой, см. ``GATE_TOL*``).
     """
     worse: list[str] = []
-    for key, lower_better in metrics:
+    for metric in metrics:
+        key = metric.key
         if key not in baseline or key not in candidate:
             continue
+        limit = metric.tol if tol is None else float(tol)
         base, cand = float(baseline[key]), float(candidate[key])
-        bad = cand > base + tol if lower_better else cand < base - tol
+        bad = cand > base + limit if metric.lower_better else cand < base - limit
         if bad:
-            relation = ">" if lower_better else "<"
-            worse.append(f"{key}: {cand:.4f} {relation} {base:.4f}±{tol:g}")
+            relation = ">" if metric.lower_better else "<"
+            worse.append(f"{key}: {cand:.4f} {relation} {base:.4f}±{limit:g}")
     return len(worse) == 0, worse
 
 

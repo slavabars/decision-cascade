@@ -81,7 +81,7 @@
 - Прод: `RiskAwareCascadeBackend` при `accepted: false` безусловно фолбэчит на порог уверенности (`usage.reason = "risk_gate"`, `/info → engine.risk_gate = "rejected"`, warning в лог). Без сертификата поведение прежнее (откатывать нечего).
 - Тесты: `tests/test_risk_eval.py` (положительный/отрицательный кейсы, допуск, направление метрик, CLI/JSON), `tests/test_risk_features.py` (гейт по LOO и по кривой), `tests/test_risk_cascade.py` (фолбэк в проде, roundtrip сертификата, конфиг API).
 - **Замер:** `production` против `confidence` — in-dist 2/3 (RB/hash, 3 seeds), 1/1 (RB/gpt2), 1/1 (AG News/gpt2); LOO 0-shot — 5/9, 0/3, 3/3; кривая few-shot на RB/gpt2 — 0/3 → 1/3 (начиная с 5 примеров), `route`/`benefit` не проходят ни при каком `n`. На новых вопросах RouterBench риск-режим по умолчанию **отклоняется** — правило работает.
-- **Осталось:** калибровочные метрики (ECE/Brier) в гейте — они появляются в замерах Шагом 1, после чего наборы `GATE_*_METRICS` расширяются.
+- **Осталось (не блокер шага):** калибровочные метрики (ECE/Brier) добавлены в гейт Шагом 1 (см. ниже).
 
 #### Шаг 1. Калибровка в замерах (P0, CPU-only)
 **Цель:** замерять не только AURC, но и **калиброванность** `P(ошибка)=1-score`.
@@ -93,6 +93,12 @@
 - **DoD:** метрики присутствуют во всех отчётах, тесты на вычисление не падают, ruff/pytest зелёны.
 
 **Файлы:** `eval/risk/features.py`, `eval/calibration/` (уже есть ECE/Brier в проекте — переиспользовать), тесты.
+
+**Статус: выполнен.**
+- `calibration_report` (ECE/Brier на `P(ошибка)`) в `eval/risk/features.py`; он же добавлен в `ranker_report` (`eval/risk/core.py`) → попадает в `metrics.json` и сертификат.
+- Метрики в `run_loo` (`loo_ece`/`loo_brier`/`indist_ece`/`indist_brier`), в `risk_report` (кривая `--shots`) и во всех агрегатах (`LOO_COLUMNS`/`SHOT_COLUMNS`/`COLUMNS`) как mean ± std по seed'ам; отчёты — `print_report`, `print_loo_calibration`, `print_shots_report`; всё уезжает в `features.json`.
+- **Камеральные метрики подключены к гейту**: `GATE_*_METRICS` расширены ECE/Brier с допусками `0.02`/`0.01` (=≈2σ измеренного seed-разброса), AURC-допуск остался `0.0005`.
+- **Замер:** in-dist ECE `production` 0.039 против 0.132 у `confidence` (RouterBench/hash, 3 seeds); в LOO — 0.204 против 0.201, по вопросам хуже (`escalate` 0.326 против 0.277, `benefit` 0.141 против 0.095). Из-за этого вердикты LOO ужесточились: `production` 3/9 вместо 5/9. Кривая few-shot: ECE падает 0.204 → 0.136 (n=5) → 0.096 (n=20) → 0.039 (все) — калибровка лечится примерами.
 
 #### Шаг 2. Few-shot cold-start как измеряемый путь (P0, CPU-only)
 **Цель:** формализовать и зафиксировать практический cold-start.
@@ -167,7 +173,7 @@
 | Шаг | Зависит от | Роль | Приоритет |
 |---|---|---|---|
 | 0 ✅ | (база) | architect/ml-engineer | **P0** — блокер стабильности (выполнен) |
-| 1 | 0 (можно параллельно с 2) | ml-engineer | **P0** |
+| 1 ✅ | 0 (можно параллельно с 2) | ml-engineer | **P0** (выполнен) |
 | 2 | 1 (совместимо) | ml-engineer | **P0** |
 | 3 | 1–2 | evaluator/ml-engineer | **P1** |
 | 4 | 1–2 | ml-engineer (симуляция) | **P1** |

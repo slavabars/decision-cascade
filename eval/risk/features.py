@@ -67,15 +67,18 @@ from typing import Any
 import numpy as np
 
 from eval.benchmark.core import TextEncoder, encode_examples, train_benchmark
+from eval.calibration.metrics import brier_score, ece
 from eval.calibration.selective import aurc, coverage_at_risk, eaurc, risk_at_coverage
 from eval.report.run import _encoder, _load_splits, _specs
 from eval.risk.core import (
     GATE_AB_METRICS,
     GATE_LOO_METRICS,
     GATE_TOL,
+    GateMetric,
     decisions_for_examples,
     flatten,
     gate_risk_vs_confidence,
+    gate_tolerances,
 )
 from src.decision_head.heads import OptionScoringChoiceHead
 from src.risk import FEATURE_NAMES, features_matrix
@@ -161,13 +164,30 @@ def _fit_logistic(
     return clf.coef_[0], float(clf.intercept_[0])
 
 
+def calibration_report(scores: np.ndarray, correct: np.ndarray) -> dict[str, float]:
+    """Калибровка оценки ошибки: ECE и Brier score (меньше лучше).
+
+    ``scores`` — балл «решение верно» (чем больше, тем увереннее). Модель риска
+    предсказывает ``P(ошибка) = 1 - score``, поэтому обе метрики считаются на
+    вероятности ошибки против фактической ошибки: ECE — |средний P(ошибка) −
+    доля ошибок| по бинам, Brier — средний квадрат той же разницы.
+    """
+    error_prob = 1.0 - np.asarray(scores, dtype=float)
+    errors = 1.0 - np.asarray(correct, dtype=float)
+    return {
+        "ece": float(ece(error_prob, errors)),
+        "brier": float(brier_score(error_prob, errors)),
+    }
+
+
 def risk_report(scores: np.ndarray, correct: np.ndarray) -> dict[str, float]:
-    """AURC/eAURC, покрытие при бюджете 5% и точность при покрытии 0.7."""
+    """AURC/eAURC, покрытие при бюджете 5%, точность при покрытии 0.7, калибровка."""
     return {
         "aurc": aurc(scores, correct),
         "eaurc": eaurc(scores, correct),
         "coverage_at_5pct_risk": coverage_at_risk(scores, correct, 0.05),
         "acc_at_0.7_coverage": 1.0 - risk_at_coverage(scores, correct, 0.7),
+        **calibration_report(scores, correct),
     }
 
 
@@ -454,9 +474,19 @@ def run_loo(
                     ),
                     "loo_acc_at_0.7": 1.0
                     - risk_at_coverage(loo, subset_correct, 0.7),
+                    **{
+                        f"loo_{key}": value
+                        for key, value in calibration_report(loo, subset_correct).items()
+                    },
                     "indist_aurc": aurc(indist[test_rows], subset_correct),
                     "indist_acc_at_0.7": 1.0
                     - risk_at_coverage(indist[test_rows], subset_correct, 0.7),
+                    **{
+                        f"indist_{key}": value
+                        for key, value in calibration_report(
+                            indist[test_rows], subset_correct
+                        ).items()
+                    },
                 }
             )
     return rows
@@ -527,10 +557,10 @@ def shots_report(
 
 def gate_vs_baseline(
     rows: list[dict[str, Any]],
-    metrics: tuple[tuple[str, bool], ...],
+    metrics: tuple[GateMetric, ...],
     *,
     baseline: str = "confidence",
-    tol: float = GATE_TOL,
+    tol: float | None = None,
 ) -> list[dict[str, Any]]:
     """Hard gate: каждый вариант против ``baseline`` по каждой (seed, вопрос).
 
@@ -605,12 +635,16 @@ def aggregate_gate(verdicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def print_gate_report(
-    aggregated: list[dict[str, Any]], *, context: str, tol: float = GATE_TOL
+    aggregated: list[dict[str, Any]], *, context: str, tol: float | None = None
 ) -> None:
     """Вердикты гейта: сколько замеров вариант прошёл против baseline."""
+    if tol is None:
+        detail = "допуск по метрике (AURC 0.0005, ECE 0.02, Brier 0.01)"
+    else:
+        detail = f"tol={tol:g}"
     print(
         f"\nhard gate, {context} (вариант принимается только если не хуже "
-        f"baseline по всем метрикам, tol={tol:g}):"
+        f"baseline по всем метрикам, {detail}):"
     )
     print(f"{'variant':>24} {'своих строк':>12} {'пройдено':>9} {'доля':>6}")
     for entry in aggregated:
@@ -630,7 +664,14 @@ def print_gate_report(
             )
 
 
-COLUMNS = ("aurc", "eaurc", "coverage_at_5pct_risk", "acc_at_0.7_coverage")
+COLUMNS = (
+    "aurc",
+    "eaurc",
+    "coverage_at_5pct_risk",
+    "acc_at_0.7_coverage",
+    "ece",
+    "brier",
+)
 
 
 def aggregate(
@@ -649,17 +690,29 @@ def aggregate(
 
 
 def print_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
-    print(f"\nmean ± std over {n_seeds} seeds (lower AURC/eAURC is better):")
-    print(f"{'variant':>24} {'AURC':>16} {'eAURC':>16} {'acc@0.7':>16}")
+    print(f"\nmean ± std over {n_seeds} seeds (lower is better):")
+    print(
+        f"{'variant':>24} {'AURC':>16} {'eAURC':>16} {'acc@0.7':>16} "
+        f"{'ECE':>16} {'Brier':>16}"
+    )
     for entry in aggregated:
         cells = [
             f"{entry[c]:.4f}±{entry[f'{c}_std']:.4f}"
-            for c in ("aurc", "eaurc", "acc_at_0.7_coverage")
+            for c in ("aurc", "eaurc", "acc_at_0.7_coverage", "ece", "brier")
         ]
         print(f"{entry['variant']:>24} " + " ".join(f"{c:>16}" for c in cells))
 
 
-LOO_COLUMNS = ("loo_aurc", "loo_acc_at_0.7", "indist_aurc", "indist_acc_at_0.7")
+LOO_COLUMNS = (
+    "loo_aurc",
+    "loo_acc_at_0.7",
+    "loo_ece",
+    "loo_brier",
+    "indist_aurc",
+    "indist_acc_at_0.7",
+    "indist_ece",
+    "indist_brier",
+)
 
 
 def aggregate_loo(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -706,11 +759,30 @@ def print_loo_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
         )
 
 
+def print_loo_calibration(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
+    """Калибровка ``P(ошибка)``: LOO против in-dist (меньше лучше)."""
+    print(f"\nкалибровка P(ошибка), макро по вопросам ± std over {n_seeds} seeds:")
+    print(
+        f"{'variant':>24} {'LOO ECE':>16} {'in-dist ECE':>13} "
+        f"{'LOO Brier':>16} {'in-dist Brier':>14}"
+    )
+    for entry in aggregated:
+        print(
+            f"{entry['variant']:>24} "
+            f"{entry['loo_ece']:.4f}±{entry['loo_ece_std']:.4f} "
+            f"{entry['indist_ece']:>13.4f} "
+            f"{entry['loo_brier']:.4f}±{entry['loo_brier_std']:.4f} "
+            f"{entry['indist_brier']:>14.4f}"
+        )
+
+
 SHOT_COLUMNS = (
     "aurc",
     "eaurc",
     "coverage_at_5pct_risk",
     "acc_at_0.7_coverage",
+    "ece",
+    "brier",
     "n_own",
 )
 
@@ -762,14 +834,16 @@ def print_shots_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
     )
     print(
         f"{'variant':>24} {'своих строк':>12} {'AURC':>16} {'acc@0.7':>8} "
-        f"{'взято':>6}"
+        f"{'ECE':>8} {'Brier':>8} {'взято':>6}"
     )
     for entry in sorted(aggregated, key=_shots_order):
         label = "все (in-dist)" if entry["shots"] is None else str(entry["shots"])
         print(
             f"{entry['variant']:>24} {label:>12} "
             f"{entry['aurc']:.4f}±{entry['aurc_std']:.4f} "
-            f"{entry['acc_at_0.7_coverage']:>8.4f} {entry['n_own']:>6.1f}"
+            f"{entry['acc_at_0.7_coverage']:>8.4f} "
+            f"{entry['ece']:>8.4f} {entry['brier']:>8.4f} "
+            f"{entry['n_own']:>6.1f}"
         )
 
 
@@ -872,6 +946,7 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     gate_loo: list[dict[str, Any]] = []
     if args.loo:
         print_loo_report(loo_aggregated, len(args.seeds))
+        print_loo_calibration(loo_aggregated, len(args.seeds))
         print_loo_per_question(loo_rows)
         gate_loo = gate_vs_baseline(loo_rows, GATE_LOO_METRICS)
         print_gate_report(
@@ -901,6 +976,8 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "loo_per_question": loo_rows,
             "gate": {
                 "tol": GATE_TOL,
+                "tolerances": gate_tolerances(GATE_AB_METRICS)
+                | gate_tolerances(GATE_LOO_METRICS),
                 "baseline": "confidence",
                 "in_dist": aggregate_gate(gate_ab),
                 "loo": aggregate_gate(gate_loo) if args.loo else None,

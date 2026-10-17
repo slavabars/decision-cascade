@@ -14,12 +14,14 @@ from eval.risk.features import (
     aggregate_gate,
     aggregate_loo,
     aggregate_shots,
+    calibration_report,
     feature_variants,
     gate_vs_baseline,
     head_features,
     main,
     mean_pairwise_cosine,
     question_onehot,
+    risk_report,
     run_loo,
     shots_report,
     with_state_variants,
@@ -169,7 +171,9 @@ def test_aggregate_loo_macro_averages_over_questions():
         return {
             "variant": "v", "question": question, "seed": 0,
             "loo_aurc": loo, "loo_acc_at_0.7": 0.5,
+            "loo_ece": 0.10, "loo_brier": 0.20,
             "indist_aurc": indist, "indist_acc_at_0.7": 0.6,
+            "indist_ece": 0.08, "indist_brier": 0.18,
         }
 
     aggregated = aggregate_loo([row("q1", 0.2, 0.1), row("q2", 0.4, 0.3)])
@@ -180,6 +184,10 @@ def test_aggregate_loo_macro_averages_over_questions():
     # макро-среднее по вопросам, а не по строкам
     assert entry["loo_aurc"] == pytest.approx(0.3)
     assert entry["indist_aurc"] == pytest.approx(0.2)
+    # калибровка тоже агрегируется: LOO против in-dist
+    assert entry["loo_ece"] == pytest.approx(0.10)
+    assert entry["indist_ece"] == pytest.approx(0.08)
+    assert entry["loo_brier_std"] == pytest.approx(0.0)
 
 
 def _fixture_block(questions, rows_per_question, rng):
@@ -252,6 +260,7 @@ def test_aggregate_shots_macro_averages_over_questions():
             "n_own": 4, "n_train": 24, "n_test": 7,
             "aurc": aurc, "eaurc": aurc / 2,
             "coverage_at_5pct_risk": 0.4, "acc_at_0.7_coverage": 0.5,
+            "ece": 0.1, "brier": 0.2,
         }
 
     rows = [
@@ -271,6 +280,7 @@ def _shots_row(question, aurc, acc, *, variant, shots):
         "n_own": 0 if shots is None else shots, "n_train": 24, "n_test": 7,
         "aurc": aurc, "eaurc": aurc / 2,
         "coverage_at_5pct_risk": 0.4, "acc_at_0.7_coverage": acc,
+        "ece": 0.1, "brier": 0.2,
     }
 
 
@@ -311,6 +321,7 @@ def test_cli_shots_writes_curve(tmp_path, capsys):
     for row in payload["shots_per_question"]:
         assert row["n_test"] > 0 and row["n_own"] <= row["n_train"]
         assert 0.0 <= row["aurc"] <= 1.0
+        assert 0.0 <= row["ece"] <= 1.0 and 0.0 <= row["brier"] <= 1.0
     # гейт считается и по кривой: production против confidence при том же n
     gate_shots = payload["gate"]["shots"]
     assert gate_shots and {entry["variant"] for entry in gate_shots} == {"production"}
@@ -339,7 +350,40 @@ def test_cli_loo_writes_per_question_metrics(tmp_path):
         assert row["n_val"] > 0 and row["n_test"] > 0
         assert 0.0 <= row["loo_aurc"] <= 1.0
         assert 0.0 <= row["loo_acc_at_0.7"] <= 1.0
+        # калибровка P(ошибка) — и на новом вопросе, и внутри вопроса
+        assert 0.0 <= row["loo_ece"] <= 1.0
+        assert 0.0 <= row["loo_brier"] <= 1.0
+        assert 0.0 <= row["indist_ece"] <= 1.0
+        assert 0.0 <= row["indist_brier"] <= 1.0
     assert {entry["variant"] for entry in payload["loo"]} == variants
+    # агрегат LOO несёт калибровку и разброс по seed'ам
+    for entry in payload["loo"]:
+        for key in ("loo_ece", "loo_brier", "indist_ece", "indist_brier"):
+            assert key in entry and f"{key}_std" in entry
+
+
+def test_calibration_report_scores_error_probability():
+    """ECE/Brier считаются на P(ошибка): идеальные баллы дают нули."""
+    scores = np.array([0.9, 0.9, 0.1, 0.1])
+    correct = np.array([1.0, 1.0, 0.0, 0.0])
+    report = calibration_report(scores, correct)
+    assert report["brier"] == pytest.approx(0.01)
+    assert report["ece"] == pytest.approx(0.1)
+
+    # баллы-константы: ECE ловит недокалиброванность, Brier — квадрат промаха
+    flat = calibration_report(np.full(4, 0.5), np.ones(4))
+    assert flat["ece"] == pytest.approx(0.5)
+    assert flat["brier"] == pytest.approx(0.25)
+
+
+def test_risk_report_includes_calibration_and_metrics():
+    scores = np.array([0.9, 0.8, 0.3, 0.2])
+    correct = np.array([1.0, 1.0, 0.0, 0.0])
+    report = risk_report(scores, correct)
+    assert {"aurc", "eaurc", "coverage_at_5pct_risk", "acc_at_0.7_coverage",
+            "ece", "brier"} <= set(report)
+    assert 0.0 <= report["ece"] <= 1.0
+    assert 0.0 <= report["brier"] <= 1.0
 
 
 def test_with_state_variants_shapes_and_standardization():

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from eval.risk.core import (
+    GATE_AB_METRICS,
     GATE_LOO_METRICS,
     cascade_summary,
     flatten,
@@ -82,9 +83,28 @@ def test_ranker_report_keys_and_bounds():
         "eaurc",
         "coverage_at_5pct_risk",
         "coverage_at_10pct_risk",
+        "ece",
+        "brier",
     }
     assert report["eaurc"] == pytest.approx(0.0, abs=1e-9)
     assert 0.0 <= report["coverage_at_5pct_risk"] <= 1.0
+    # балл идеально упорядочен и калиброван: ошибка 1 при score<=0.3
+    assert 0.0 <= report["ece"] <= 1.0
+    assert 0.0 <= report["brier"] <= 1.0
+
+
+def test_ranker_report_calibration_is_error_calibration():
+    """ECE/Brier считаются на P(ошибка) = 1 - score, поэтому идеальный score даёт 0."""
+    scores = np.array([1.0, 1.0, 0.0, 0.0])
+    correct = np.array([1.0, 1.0, 0.0, 0.0])
+    report = ranker_report(scores, correct)
+    assert report["ece"] == pytest.approx(0.0, abs=1e-9)
+    assert report["brier"] == pytest.approx(0.0, abs=1e-9)
+
+    # score 0.5 при верных ответах: P(ошибка) предсказано 0.5, ошибок нет
+    uncertain = ranker_report(np.array([0.5, 0.5]), np.array([1.0, 1.0]))
+    assert uncertain["brier"] == pytest.approx(0.25)
+    assert uncertain["ece"] == pytest.approx(0.5)
 
 
 def test_labels_and_is_correct_noul():
@@ -180,13 +200,50 @@ def test_gate_respects_metric_direction():
 
 
 def test_gate_loo_metrics_keys_match_run_loo_rows():
-    keys = {key for key, _ in GATE_LOO_METRICS}
+    keys = {metric.key for metric in GATE_LOO_METRICS}
     assert keys == {
         "loo_aurc",
         "loo_eaurc",
         "loo_coverage_at_5pct_risk",
         "loo_acc_at_0.7",
+        "loo_ece",
+        "loo_brier",
     }
+
+
+def test_gate_calibration_metrics_have_measured_tolerances():
+    """У калибровки свой допуск: бинаризованный ECE шумит сильнее AURC."""
+    tolerances = {metric.key: metric.tol for metric in GATE_AB_METRICS}
+    assert tolerances["aurc"] == pytest.approx(0.0005)
+    assert tolerances["ece"] == pytest.approx(0.02)
+    assert tolerances["brier"] == pytest.approx(0.01)
+
+    # разница уровня seed-шума не должна отвергать вариант
+    base = _gate_row(ece=0.20, brier=0.26)
+    accepted, _ = gate_risk_vs_confidence(
+        base, _gate_row(ece=0.212, brier=0.267)
+    )
+    assert accepted
+
+    # а измеримая деградация калибровки — должна
+    accepted, worse = gate_risk_vs_confidence(
+        base, _gate_row(ece=0.25, brier=0.29)
+    )
+    assert not accepted
+    assert any(reason.startswith("ece") for reason in worse)
+    assert any(reason.startswith("brier") for reason in worse)
+
+
+def test_gate_explicit_tol_overrides_all_metrics():
+    base = _gate_row(ece=0.20, brier=0.26)
+    accepted, _ = gate_risk_vs_confidence(
+        base, _gate_row(ece=0.212, brier=0.267), tol=0.05
+    )
+    assert accepted
+    accepted, worse = gate_risk_vs_confidence(
+        base, _gate_row(ece=0.2004), tol=0.0001
+    )
+    assert not accepted and worse[0].startswith("ece")
 
 
 def test_run_cli_reports_gate_in_json(tmp_path, capsys):
@@ -206,7 +263,12 @@ def test_run_cli_reports_gate_in_json(tmp_path, capsys):
     gate = payload["gate"]
     assert isinstance(gate["accepted"], bool)
     assert gate["tol"] == pytest.approx(0.0005)
+    assert gate["tolerances"]["ece"] == pytest.approx(0.02)
+    assert gate["tolerances"]["brier"] == pytest.approx(0.01)
     assert gate["baseline"] == "confidence"
+    # калибровка P(ошибка) есть и у baseline, и у кандидата
+    assert {"ece", "brier"} <= set(gate["metrics"]["confidence"])
+    assert {"ece", "brier"} <= set(gate["metrics"]["risk_model"])
     if not gate["accepted"]:
         assert gate["worse"]
 

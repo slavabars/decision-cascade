@@ -8,6 +8,18 @@
 
 ### Added
 
+- **Калибровка `P(ошибка)` в замерах** (Шаг 1): ECE и Brier score считаются на
+  вероятности ошибки `1 − score` против факта `1 − correct` — в
+  `risk_report`/`calibration_report` (`eval/risk/features.py`) и в
+  `ranker_report` (`eval/risk/core.py`, значит и в `metrics.json`/`risk.json`).
+  Метрики выводятся в отчётах `print_report`, `print_loo_calibration` и
+  `print_shots_report` и попадают во все агрегаты `features.json`
+  (`per_seed`, `loo`, `shots`) как mean ± std по seed'ам.
+- **Калибровка в hard gate:** `GATE_*_METRICS` расширены ECE/Brier со своими
+  допусками (`GATE_TOL_ECE = 0.02`, `GATE_TOL_BRIER = 0.01` ≈2σ измеренного
+  seed-разброса; AURC-допуск остался жёстким 0.0005). Метрика гейта — теперь
+  `GateMetric(ключ, меньше_лучше, допуск)`; `tol` в `gate_risk_vs_confidence`
+  по умолчанию берётся по метрике и может быть переопределён числом.
 - **Hard gate «принимать только лучшее решение»** (`eval/risk/core.py`,
   `gate_risk_vs_confidence`): вариант принимается, только если он не хуже
   baseline `confidence` по AURC, eAURC, coverage@5% risk и acc@0.7 (допуск
@@ -44,6 +56,11 @@
 
 ### Changed
 
+- **Замеры калибровки поменяли вердикты гейта в LOO**: на RouterBench/hash
+  (3 seeds) `production` проходит 3/9 вместо 5/9 — на `escalate` (ECE 0.326
+  против 0.277) и `benefit` (0.141 против 0.095) оценка риска на новом вопросе
+  недокалибрована сильнее, чем сырая уверенность. Это измеренная регрессия, а не
+  шум: разница на порядок больше seed-σ ECE (0.012–0.024).
 - Кривая `--shots` считает и baseline `confidence` в каждой точке, поэтому
   `SHOT_COLUMNS`/агрегат группируются по `(variant, shots)` — иначе точки разных
   вариантов смешивались бы в одну строку.

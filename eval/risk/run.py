@@ -27,6 +27,7 @@ from eval.risk.core import (
     decisions_for_examples,
     flatten,
     gate_risk_vs_confidence,
+    gate_tolerances,
     ranker_report,
     risk_escalation,
     selective_accuracy,
@@ -104,6 +105,7 @@ def evaluate(
         "baseline": "confidence",
         "candidate": "risk_model",
         "tol": GATE_TOL,
+        "tolerances": gate_tolerances(GATE_RANKER_METRICS),
         "metrics": ranking,
     }
 
@@ -199,13 +201,14 @@ def main(argv: list[str] | None = None) -> None:
     print(f"local accuracy (test) = {report['local_accuracy']:.3f}")
     _print_table("threshold cascade (confidence < t):", report["threshold_cascade"])
     _print_table("risk-aware cascade (P(error) > budget):", report["risk_cascade"])
-    print("ranking (lower AURC/eAURC is better):")
+    print("ranking (lower AURC/eAURC/ECE/Brier is better):")
     for name, metrics in report["ranking"].items():
         print(
             f"  {name:>11}: AURC={metrics['aurc']:.4f} "
             f"eAURC={metrics['eaurc']:.4f} "
             f"cov@5%={metrics['coverage_at_5pct_risk']:.3f} "
-            f"cov@10%={metrics['coverage_at_10pct_risk']:.3f}"
+            f"cov@10%={metrics['coverage_at_10pct_risk']:.3f} "
+            f"ECE={metrics['ece']:.4f} Brier={metrics['brier']:.4f}"
         )
     print("quality among accepted at equal escalation rates:")
     print(f"  {'accept%':>8} {'confidence':>11} {'risk_model':>11}")
@@ -217,7 +220,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     gate = report["gate"]
     verdict = "ПРИНЯТ" if gate["accepted"] else "ОТКАЗАН (фолбэк на confidence)"
-    print(f"gate (risk vs confidence): {verdict} [tol={gate['tol']:g}]")
+    print(
+        f"gate (risk vs confidence): {verdict} "
+        f"[допуск по метрике, AURC {gate['tol']:g}, "
+        f"ECE {gate['tolerances']['ece']:g}, Brier {gate['tolerances']['brier']:g}]"
+    )
     for reason in gate["worse"]:
         print(f"  регрессия: {reason}")
     print(f"metrics -> {args.out_dir / 'metrics.json'}")
