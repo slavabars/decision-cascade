@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -34,6 +35,8 @@ from src.encoder.vision import VisionEncoder
 from src.errors import UntrainedDecisionError
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
 from src.schemas import SCHEMA_VERSION, DecisionResult
+
+logger = logging.getLogger("decision.cascade")
 
 
 def create_vision_encoder() -> VisionEncoder | None:
@@ -201,6 +204,7 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
             os.environ.get("DECISION_CASCADE_FALLBACK_MODALITIES", "text")
         ),
     )
+    threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
     risk_budget = os.environ.get("DECISION_CASCADE_RISK_BUDGET")
     if risk_budget is not None:
         from src.backends.cascade import RiskAwareCascadeBackend
@@ -216,13 +220,22 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
                 f"{model_path} (set DECISION_RISK_MODEL_PATH or train it via "
                 "python -m eval.risk.run)"
             )
+        risk_model = ErrorRiskModel.load(model_path)
+        if risk_model.gate_rejected:
+            # hard gate отклонил риск-вариант: риск-каскад не применяем
+            logger.warning(
+                "hard gate отклонил risk-модель (%s); риск-каскад заменён "
+                "порогом уверенности %.2f",
+                ", ".join(risk_model.gate.get("worse", [])) or "метрики не хуже",
+                threshold,
+            )
         return RiskAwareCascadeBackend(
             primary,
             fallback,
-            ErrorRiskModel.load(model_path),
+            risk_model,
             risk_budget=float(risk_budget),
+            fallback_threshold=threshold,
         )
-    threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
     return CascadeBackend(primary, fallback, threshold=threshold)
 
 
@@ -347,6 +360,10 @@ def _engine_info(backend: Backend) -> dict[str, Any] | None:
         risk_budget = getattr(backend, "risk_budget", None)
         if risk_budget is not None:
             info["risk_budget"] = risk_budget
+            # видно ли в /info, что hard gate отклонил риск-вариант
+            info["risk_gate"] = (
+                "rejected" if getattr(backend, "gate_rejected", False) else "ok"
+            )
         return info
     return None
 

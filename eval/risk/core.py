@@ -121,6 +121,62 @@ def ranker_report(scores: np.ndarray, correct: np.ndarray) -> dict[str, float]:
 DEFAULT_COVERAGES = (0.5, 0.7, 0.9)
 
 
+#: (ключ, «меньше лучше») — метрики, по которым гейт сравнивает варианты.
+#: AURC/eAURC — качество ранжирования, точность при фиксированном покрытии
+#: и покрытие при бюджете риска — рабочие SLO риск-каскада.
+GATE_AB_METRICS = (
+    ("aurc", True),
+    ("eaurc", True),
+    ("coverage_at_5pct_risk", False),
+    ("acc_at_0.7_coverage", False),
+)
+GATE_RANKER_METRICS = (
+    ("aurc", True),
+    ("eaurc", True),
+    ("coverage_at_5pct_risk", False),
+    ("coverage_at_10pct_risk", False),
+)
+GATE_LOO_METRICS = (
+    ("loo_aurc", True),
+    ("loo_eaurc", True),
+    ("loo_coverage_at_5pct_risk", False),
+    ("loo_acc_at_0.7", False),
+)
+
+#: Допуск только на шумовые колебания. Регрессия сильнее — отказ от варианта.
+GATE_TOL = 0.0005
+
+
+def gate_risk_vs_confidence(
+    baseline: dict[str, float],
+    candidate: dict[str, float],
+    metrics: tuple[tuple[str, bool], ...] = GATE_AB_METRICS,
+    *,
+    tol: float = GATE_TOL,
+) -> tuple[bool, list[str]]:
+    """Hard gate: кандидат принимается **только** если не хуже baseline.
+
+    Возвращает ``(accepted, reasons)``: ``accepted`` истинен лишь когда по
+    **всем** перечисленным метрикам кандидат не хуже baseline (допуск ``tol``
+    поедает только шум). Любая регрессия — причина отказа, тогда на выход идёт
+    лучший baseline (по умолчанию `confidence`).
+
+    Параметры:
+    - ``baseline`` / ``candidate`` — словари метрик;
+    - ``metrics`` — пары ``(ключ, меньше_лучше)``.
+    """
+    worse: list[str] = []
+    for key, lower_better in metrics:
+        if key not in baseline or key not in candidate:
+            continue
+        base, cand = float(baseline[key]), float(candidate[key])
+        bad = cand > base + tol if lower_better else cand < base - tol
+        if bad:
+            relation = ">" if lower_better else "<"
+            worse.append(f"{key}: {cand:.4f} {relation} {base:.4f}±{tol:g}")
+    return len(worse) == 0, worse
+
+
 def selective_accuracy(
     scores: np.ndarray, correct: np.ndarray, coverages=DEFAULT_COVERAGES
 ) -> dict[str, float]:

@@ -15,6 +15,7 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -117,6 +118,11 @@ class ErrorRiskModel:
     weights: np.ndarray
     bias: float
     feature_names: tuple[str, ...] = FEATURE_NAMES
+    #: Заключение hard gate (см. ``eval.risk.core.gate_risk_vs_confidence``):
+    #: ``{"accepted": bool, "worse": [...], "tol": ..., ...}``. Модель с явным
+    #: отказом гейта в проде не применяется — каскад фолбэчит на порог
+    #: уверенности. ``None`` — замеры не проводились, заключения нет.
+    gate: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.weights = np.asarray(self.weights, dtype=float).reshape(-1)
@@ -145,12 +151,24 @@ class ErrorRiskModel:
     def should_escalate(self, decision: DecisionResult, risk_budget: float) -> bool:
         return self.predict_error(decision) > risk_budget
 
+    @property
+    def gate_rejected(self) -> bool:
+        """Известен ли отказ hard gate: замера не было — не отказ.
+
+        Модель считается неприемлемой только при **явном** вердикте
+        «не лучше baseline»: откатывать нечего, пока ничего не измеряли.
+        """
+        return bool(self.gate) and not bool(self.gate.get("accepted", True))
+
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "feature_names": list(self.feature_names),
             "weights": [float(w) for w in self.weights],
             "bias": float(self.bias),
         }
+        if self.gate is not None:
+            payload["gate"] = self.gate
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict) -> ErrorRiskModel:
@@ -168,6 +186,7 @@ class ErrorRiskModel:
             weights=weights,
             bias=float(payload["bias"]),
             feature_names=tuple(names),
+            gate=payload.get("gate"),
         )
 
     def save(self, path: str | Path) -> Path:

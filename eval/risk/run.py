@@ -21,9 +21,12 @@ import numpy as np
 from eval.benchmark.core import encode_examples, train_benchmark
 from eval.report.run import _encoder, _load_splits, _specs
 from eval.risk.core import (
+    GATE_RANKER_METRICS,
+    GATE_TOL,
     cascade_summary,
     decisions_for_examples,
     flatten,
+    gate_risk_vs_confidence,
     ranker_report,
     risk_escalation,
     selective_accuracy,
@@ -87,6 +90,23 @@ def evaluate(
         [1.0 - model.predict_error(d) for d in test_flat], dtype=float
     )
 
+    ranking = {
+        "confidence": ranker_report(confidence_scores, test_correct),
+        "risk_model": ranker_report(risk_scores, test_correct),
+    }
+    # hard gate: риск-ранжировщик принимается только если не хуже confidence
+    gate_accepted, gate_worse = gate_risk_vs_confidence(
+        ranking["confidence"], ranking["risk_model"], GATE_RANKER_METRICS
+    )
+    gate = {
+        "accepted": gate_accepted,
+        "worse": gate_worse,
+        "baseline": "confidence",
+        "candidate": "risk_model",
+        "tol": GATE_TOL,
+        "metrics": ranking,
+    }
+
     return {
         "model": model,
         "local_accuracy": float(test_correct.mean()),
@@ -94,10 +114,8 @@ def evaluate(
         "n_test": len(test),
         "threshold_cascade": threshold_rows,
         "risk_cascade": risk_rows,
-        "ranking": {
-            "confidence": ranker_report(confidence_scores, test_correct),
-            "risk_model": ranker_report(risk_scores, test_correct),
-        },
+        "ranking": ranking,
+        "gate": gate,
         "acceptance": {
             "confidence": selective_accuracy(confidence_scores, test_correct),
             "risk_model": selective_accuracy(risk_scores, test_correct),
@@ -168,6 +186,9 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    # сертификат гейта уезжает в risk.json: риск-каскад в проде читает его и
+    # при отказе фолбэчит на порог уверенности
+    report["model"].gate = report["gate"]
     report["model"].save(args.out_dir / "risk.json")
     payload = {key: value for key, value in report.items() if key != "model"}
     payload.update(specs=args.specs, encoder=args.encoder, feature_dim=args.dim)
@@ -194,6 +215,11 @@ def main(argv: list[str] | None = None) -> None:
         print(
             f"  {coverage:>8} {confidence_value:>11.3f} {risk_value:>11.3f}"
         )
+    gate = report["gate"]
+    verdict = "ПРИНЯТ" if gate["accepted"] else "ОТКАЗАН (фолбэк на confidence)"
+    print(f"gate (risk vs confidence): {verdict} [tol={gate['tol']:g}]")
+    for reason in gate["worse"]:
+        print(f"  регрессия: {reason}")
     print(f"metrics -> {args.out_dir / 'metrics.json'}")
     print(f"risk    -> {args.out_dir / 'risk.json'}")
 

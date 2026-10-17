@@ -6,13 +6,16 @@ import numpy as np
 import pytest
 import torch
 
+from eval.risk.core import GATE_AB_METRICS, GATE_LOO_METRICS
 from eval.risk.features import (
     BASE_WIDTH,
     EXTRA_FEATURE_NAMES,
     _Prepared,
+    aggregate_gate,
     aggregate_loo,
     aggregate_shots,
     feature_variants,
+    gate_vs_baseline,
     head_features,
     main,
     mean_pairwise_cosine,
@@ -220,7 +223,7 @@ def test_shots_report_endpoints_match_loo():
         ]
         points = {row["shots"]: row for row in own}
         assert points[0]["aurc"] == pytest.approx(held_out["loo_aurc"])
-        assert points[0]["acc_at_0.7"] == pytest.approx(
+        assert points[0]["acc_at_0.7_coverage"] == pytest.approx(
             held_out["loo_acc_at_0.7"]
         )
         assert points[None]["aurc"] == pytest.approx(held_out["indist_aurc"])
@@ -247,7 +250,8 @@ def test_aggregate_shots_macro_averages_over_questions():
         return {
             "variant": "v", "question": question, "seed": 0, "shots": shots,
             "n_own": 4, "n_train": 24, "n_test": 7,
-            "aurc": aurc, "acc_at_0.7": 0.5,
+            "aurc": aurc, "eaurc": aurc / 2,
+            "coverage_at_5pct_risk": 0.4, "acc_at_0.7_coverage": 0.5,
         }
 
     rows = [
@@ -259,6 +263,36 @@ def test_aggregate_shots_macro_averages_over_questions():
     # макро-среднее по вопросам, а не по строкам
     assert by_shots[0]["aurc"] == pytest.approx(0.3)
     assert by_shots[None]["aurc"] == pytest.approx(0.2)
+
+
+def _shots_row(question, aurc, acc, *, variant, shots):
+    return {
+        "variant": variant, "question": question, "seed": 0, "shots": shots,
+        "n_own": 0 if shots is None else shots, "n_train": 24, "n_test": 7,
+        "aurc": aurc, "eaurc": aurc / 2,
+        "coverage_at_5pct_risk": 0.4, "acc_at_0.7_coverage": acc,
+    }
+
+
+def test_gate_on_shots_curve_joins_baseline_at_same_shots():
+    """Гейт по кривой: точка сравнивается с baseline при том же числе примеров."""
+    rows = []
+    for question in ("q1", "q2"):
+        rows.append(_shots_row(question, 0.30, 0.60, variant="confidence", shots=0))
+        rows.append(_shots_row(question, 0.40, 0.55, variant="production", shots=0))
+        rows.append(_shots_row(question, 0.30, 0.60, variant="confidence", shots=5))
+        rows.append(_shots_row(question, 0.25, 0.65, variant="production", shots=5))
+
+    verdicts = gate_vs_baseline(rows, GATE_AB_METRICS)
+    assert {v["shots"] for v in verdicts} == {0, 5}
+    assert all(v["variant"] == "production" for v in verdicts)
+
+    by_point = {(e["variant"], e["shots"]): e for e in aggregate_gate(verdicts)}
+    assert by_point[("production", 0)]["accepted_rate"] == 0.0
+    assert by_point[("production", 5)]["accepted_rate"] == 1.0
+    assert by_point[("production", 0)]["failures"][0]["question"] == "q1"
+    # смешивать точки с разным числом примеров нельзя
+    assert by_point[("production", 0)]["n"] == 2
 
 
 def test_cli_shots_writes_curve(tmp_path, capsys):
@@ -277,6 +311,11 @@ def test_cli_shots_writes_curve(tmp_path, capsys):
     for row in payload["shots_per_question"]:
         assert row["n_test"] > 0 and row["n_own"] <= row["n_train"]
         assert 0.0 <= row["aurc"] <= 1.0
+    # гейт считается и по кривой: production против confidence при том же n
+    gate_shots = payload["gate"]["shots"]
+    assert gate_shots and {entry["variant"] for entry in gate_shots} == {"production"}
+    assert {entry["shots"] for entry in gate_shots} == {None, 0, 5}
+    assert "hard gate, кривая few-shot" in out
 
 
 def test_cli_loo_writes_per_question_metrics(tmp_path):
@@ -334,3 +373,72 @@ def test_cli_state_adds_state_variants(tmp_path):
     for name in ("state[0.05]", "prod+state[1]"):
         for row in payload["per_seed"][name]:
             assert 0.0 <= row["aurc"] <= 1.0
+
+
+def _loo_row(question, aurc, acc, *, variant="production", seed=0, conf=False):
+    return {
+        "variant": "confidence" if conf else variant,
+        "question": question,
+        "seed": seed,
+        "n_val": 40,
+        "n_test": 20,
+        "loo_aurc": aurc,
+        "loo_eaurc": aurc / 2,
+        "loo_coverage_at_5pct_risk": 0.5,
+        "loo_acc_at_0.7": acc,
+        "indist_aurc": aurc,
+        "indist_acc_at_0.7": acc,
+    }
+
+
+def test_gate_vs_baseline_flags_regression_per_question():
+    rows = [
+        _loo_row("q1", aurc=0.30, acc=0.80, conf=True),
+        _loo_row("q1", aurc=0.28, acc=0.82),
+        _loo_row("q2", aurc=0.30, acc=0.80, conf=True),
+        _loo_row("q2", aurc=0.40, acc=0.75),
+    ]
+    verdicts = gate_vs_baseline(rows, GATE_LOO_METRICS)
+    by_question = {v["question"]: v for v in verdicts}
+    assert by_question["q1"]["accepted"]
+    assert not by_question["q2"]["accepted"]
+    assert by_question["q2"]["worse"] and by_question["q2"]["worse"][0].startswith(
+        "loo_aurc"
+    )
+    # baseline сам с собой не сравнивается
+    assert all(v["variant"] == "production" for v in verdicts)
+
+
+def test_aggregate_gate_reports_pass_rate():
+    rows = [
+        _loo_row("q1", aurc=0.30, acc=0.80, conf=True),
+        _loo_row("q1", aurc=0.28, acc=0.82),
+        _loo_row("q2", aurc=0.30, acc=0.80, conf=True),
+        _loo_row("q2", aurc=0.40, acc=0.75),
+    ]
+    aggregated = aggregate_gate(gate_vs_baseline(rows, GATE_LOO_METRICS))
+    assert len(aggregated) == 1
+    entry = aggregated[0]
+    assert entry["variant"] == "production"
+    assert entry["n"] == 2 and entry["accepted"] == 1
+    assert entry["accepted_rate"] == pytest.approx(0.5)
+    assert entry["failures"][0]["question"] == "q2"
+
+
+def test_cli_loo_prints_gate_and_saves_it(tmp_path, capsys):
+    main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "200", "--train-steps", "30", "--seeds", "0", "--loo",
+        "--out-dir", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert "hard gate, на новом вопросе (LOO)" in out
+
+    payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+    gate = payload["gate"]
+    assert gate["baseline"] == "confidence"
+    assert gate["tol"] == pytest.approx(0.0005)
+    assert gate["in_dist"] and gate["loo"]
+    assert {entry["variant"] for entry in gate["loo"]} >= {"production"}
+    for verdict in gate["verdicts_loo"]:
+        assert isinstance(verdict["accepted"], bool)

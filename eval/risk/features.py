@@ -69,7 +69,14 @@ import numpy as np
 from eval.benchmark.core import TextEncoder, encode_examples, train_benchmark
 from eval.calibration.selective import aurc, coverage_at_risk, eaurc, risk_at_coverage
 from eval.report.run import _encoder, _load_splits, _specs
-from eval.risk.core import decisions_for_examples, flatten
+from eval.risk.core import (
+    GATE_AB_METRICS,
+    GATE_LOO_METRICS,
+    GATE_TOL,
+    decisions_for_examples,
+    flatten,
+    gate_risk_vs_confidence,
+)
 from src.decision_head.heads import OptionScoringChoiceHead
 from src.risk import FEATURE_NAMES, features_matrix
 from src.sampler.questions import QuestionSpec
@@ -441,6 +448,10 @@ def run_loo(
                     "n_val": int(train_rows.sum()),
                     "n_test": int(test_rows.sum()),
                     "loo_aurc": aurc(loo, subset_correct),
+                    "loo_eaurc": eaurc(loo, subset_correct),
+                    "loo_coverage_at_5pct_risk": coverage_at_risk(
+                        loo, subset_correct, 0.05
+                    ),
                     "loo_acc_at_0.7": 1.0
                     - risk_at_coverage(loo, subset_correct, 0.7),
                     "indist_aurc": aurc(indist[test_rows], subset_correct),
@@ -458,6 +469,7 @@ def shots_report(
     seed: int = 0,
     C: float = 1.0,
     variant: str = PRODUCTION_VARIANT,
+    baseline: str = "confidence",
     shot_seed: int = 0,
 ) -> list[dict[str, Any]]:
     """Кривая «сколько строк нового вопроса нужно»: AURC на отложенном вопросе.
@@ -467,14 +479,16 @@ def shots_report(
     трогается). Точки вложены: одни и те же ``n`` строк берутся в одном порядке,
     поэтому рост кривой не объясняется случайной подменой примеров.
 
+    Для каждой точки считаются метрики и варианта ``variant``, и ``baseline`` —
+    с ними потом работает hard gate (см. `gate_vs_baseline`, `GATE_AB_METRICS`).
+
     ``shots=None`` — все свои строки (обучение на всех вопросах, верхняя
     граница), ``n = 0`` — перенос без своих данных (совпадает с ``--loo``).
     """
-    val_matrix, test_matrix = prepared.variants[variant]
     val_correct, test_correct = prepared.correct
     val_groups = np.asarray(prepared.groups[0])
     test_groups = np.asarray(prepared.groups[1])
-    c = _c_for(prepared, variant, C)
+    candidates = [name for name in (variant, baseline) if name in prepared.variants]
 
     rows: list[dict[str, Any]] = []
     for position, question in enumerate(prepared.questions):
@@ -487,28 +501,133 @@ def shots_report(
         for n in [None, *shots]:
             picked = own if n is None else own[order[:n]]
             train_rows = np.concatenate([others, picked])
-            scores = _scores(
-                val_matrix[train_rows],
-                test_matrix[test_rows],
-                val_correct[train_rows],
-                seed=seed,
-                C=c,
-            )
-            rows.append(
-                {
-                    "variant": variant,
-                    "question": question,
-                    "seed": seed,
-                    "shots": n,
-                    "n_own": len(picked),
-                    "n_train": len(train_rows),
-                    "n_test": int(test_rows.sum()),
-                    "aurc": aurc(scores, subset_correct),
-                    "acc_at_0.7": 1.0
-                    - risk_at_coverage(scores, subset_correct, 0.7),
-                }
-            )
+            for name in candidates:
+                val_matrix, test_matrix = prepared.variants[name]
+                scores = _scores(
+                    val_matrix[train_rows],
+                    test_matrix[test_rows],
+                    val_correct[train_rows],
+                    seed=seed,
+                    C=_c_for(prepared, name, C),
+                )
+                rows.append(
+                    {
+                        "variant": name,
+                        "question": question,
+                        "seed": seed,
+                        "shots": n,
+                        "n_own": len(picked),
+                        "n_train": len(train_rows),
+                        "n_test": int(test_rows.sum()),
+                        **risk_report(scores, subset_correct),
+                    }
+                )
     return rows
+
+
+def gate_vs_baseline(
+    rows: list[dict[str, Any]],
+    metrics: tuple[tuple[str, bool], ...],
+    *,
+    baseline: str = "confidence",
+    tol: float = GATE_TOL,
+) -> list[dict[str, Any]]:
+    """Hard gate: каждый вариант против ``baseline`` по каждой (seed, вопрос).
+
+    Строки соединяются по ``(seed, question, variant[, shots])``; ``question``
+    равен ``None`` в A/B-строках (вопрос общий), ``shots`` — только у кривой
+    few-shot. Возвращает вердикт по каждой паре: ``accepted`` ложно, если по
+    **хотя бы одной** метрике вариант хуже baseline сильнее допуска — тогда от
+    него отказываемся и остаёмся на baseline.
+    """
+    index = {
+        (
+            row.get("seed"),
+            row.get("question"),
+            row["variant"],
+            row.get("shots"),
+        ): row
+        for row in rows
+    }
+    verdicts: list[dict[str, Any]] = []
+    for (seed, question, variant, shots), row in index.items():
+        if variant == baseline:
+            continue
+        base = index.get((seed, question, baseline, shots))
+        if base is None:
+            continue
+        accepted, worse = gate_risk_vs_confidence(base, row, metrics, tol=tol)
+        verdicts.append(
+            {
+                "variant": variant,
+                "question": question,
+                "seed": seed,
+                "shots": shots,
+                "accepted": accepted,
+                "worse": worse,
+            }
+        )
+    return verdicts
+
+
+def aggregate_gate(verdicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Доля замеров, где вариант прошёл гейт (лучший — 100%)."""
+    by_point: dict[tuple[str, Any], list[dict[str, Any]]] = {}
+    for verdict in verdicts:
+        by_point.setdefault((verdict["variant"], verdict.get("shots")), []).append(
+            verdict
+        )
+
+    aggregated = []
+    for (variant, shots), group in sorted(
+        by_point.items(), key=lambda item: str(item[0])
+    ):
+        accepted = sum(1 for verdict in group if verdict["accepted"])
+        aggregated.append(
+            {
+                "variant": variant,
+                "shots": shots,
+                "n": len(group),
+                "accepted": accepted,
+                "accepted_rate": accepted / len(group),
+                "failures": [
+                    {
+                        "question": verdict["question"],
+                        "seed": verdict["seed"],
+                        "worse": verdict["worse"],
+                    }
+                    for verdict in group
+                    if not verdict["accepted"]
+                ],
+            }
+        )
+    return aggregated
+
+
+def print_gate_report(
+    aggregated: list[dict[str, Any]], *, context: str, tol: float = GATE_TOL
+) -> None:
+    """Вердикты гейта: сколько замеров вариант прошёл против baseline."""
+    print(
+        f"\nhard gate, {context} (вариант принимается только если не хуже "
+        f"baseline по всем метрикам, tol={tol:g}):"
+    )
+    print(f"{'variant':>24} {'своих строк':>12} {'пройдено':>9} {'доля':>6}")
+    for entry in aggregated:
+        label = "-" if entry["shots"] is None else str(entry["shots"])
+        print(
+            f"{entry['variant']:>24} {label:>12} "
+            f"{entry['accepted']:>4}/{entry['n']:<4} {entry['accepted_rate']:>6.2f}"
+        )
+    for entry in aggregated:
+        if entry["variant"] != PRODUCTION_VARIANT or not entry["failures"]:
+            continue
+        for failure in entry["failures"][:3]:
+            print(
+                f"  отказ {PRODUCTION_VARIANT} "
+                f"(question={failure['question']}, seed={failure['seed']}): "
+                + "; ".join(failure["worse"])
+            )
 
 
 COLUMNS = ("aurc", "eaurc", "coverage_at_5pct_risk", "acc_at_0.7_coverage")
@@ -587,18 +706,25 @@ def print_loo_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
         )
 
 
-SHOT_COLUMNS = ("aurc", "acc_at_0.7", "n_own")
+SHOT_COLUMNS = (
+    "aurc",
+    "eaurc",
+    "coverage_at_5pct_risk",
+    "acc_at_0.7_coverage",
+    "n_own",
+)
 
 
 def aggregate_shots(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Макро-среднее по вопросам, затем среднее и разброс по seed'ам."""
-    per_seed: dict[tuple[Any, int], list[dict[str, Any]]] = {}
+    per_seed: dict[tuple[Any, Any, int], list[dict[str, Any]]] = {}
     for row in rows:
-        per_seed.setdefault((row["shots"], row["seed"]), []).append(row)
+        key = (row["variant"], row["shots"], row["seed"])
+        per_seed.setdefault(key, []).append(row)
 
-    by_shots: dict[Any, list[dict[str, float]]] = {}
-    for (shots, _seed), group in per_seed.items():
-        by_shots.setdefault(shots, []).append(
+    by_point: dict[tuple[Any, Any], list[dict[str, float]]] = {}
+    for (variant, shots, _seed), group in per_seed.items():
+        by_point.setdefault((variant, shots), []).append(
             {
                 column: float(np.mean([row[column] for row in group]))
                 for column in SHOT_COLUMNS
@@ -606,8 +732,12 @@ def aggregate_shots(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
 
     aggregated = []
-    for shots, entries in by_shots.items():
-        entry: dict[str, Any] = {"shots": shots, "n_seeds": len(entries)}
+    for (variant, shots), entries in by_point.items():
+        entry: dict[str, Any] = {
+            "variant": variant,
+            "shots": shots,
+            "n_seeds": len(entries),
+        }
         for column in SHOT_COLUMNS:
             values = [item[column] for item in entries]
             entry[column] = float(np.mean(values))
@@ -616,24 +746,30 @@ def aggregate_shots(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return aggregated
 
 
-def _shots_order(entry: dict[str, Any]) -> tuple[int, float]:
-    """Числовые точки по возрастанию, «все свои строки» — последней."""
-    shots = entry["shots"]
-    return (1, 0.0) if shots is None else (0, float(shots))
+def _shots_order(entry: dict[str, Any]) -> tuple[str, int, float]:
+    """По варианту, затем числовые точки по возрастанию, «все» — последней."""
+    variant = str(entry["variant"])
+    if entry["shots"] is None:
+        return (variant, 1, 0.0)
+    return (variant, 0, float(entry["shots"]))
 
 
 def print_shots_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
     """Кривая: AURC на новом вопросе против числа его размеченных строк."""
     print(
-        f"\nсколько строк нового вопроса нужно (production, макро по вопросам "
+        f"\nсколько строк нового вопроса нужно (макро по вопросам "
         f"± std over {n_seeds} seeds):"
     )
-    print(f"{'своих строк':>13} {'AURC':>16} {'acc@0.7':>16} {'взято':>7}")
+    print(
+        f"{'variant':>24} {'своих строк':>12} {'AURC':>16} {'acc@0.7':>8} "
+        f"{'взято':>6}"
+    )
     for entry in sorted(aggregated, key=_shots_order):
         label = "все (in-dist)" if entry["shots"] is None else str(entry["shots"])
         print(
-            f"{label:>13} {entry['aurc']:.4f}±{entry['aurc_std']:.4f} "
-            f"{entry['acc_at_0.7']:>16.4f} {entry['n_own']:>7.1f}"
+            f"{entry['variant']:>24} {label:>12} "
+            f"{entry['aurc']:.4f}±{entry['aurc_std']:.4f} "
+            f"{entry['acc_at_0.7_coverage']:>8.4f} {entry['n_own']:>6.1f}"
         )
 
 
@@ -729,12 +865,25 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
 
     aggregated = aggregate(rows_by_variant)
     print_report(aggregated, len(args.seeds))
+    ab_rows = [row for rows in rows_by_variant.values() for row in rows]
+    gate_ab = gate_vs_baseline(ab_rows, GATE_AB_METRICS)
+    print_gate_report(aggregate_gate(gate_ab), context="in-dist (та же база)")
     loo_aggregated = aggregate_loo(loo_rows) if args.loo else []
+    gate_loo: list[dict[str, Any]] = []
     if args.loo:
         print_loo_report(loo_aggregated, len(args.seeds))
         print_loo_per_question(loo_rows)
+        gate_loo = gate_vs_baseline(loo_rows, GATE_LOO_METRICS)
+        print_gate_report(
+            aggregate_gate(gate_loo), context="на новом вопросе (LOO)"
+        )
+    gate_shots: list[dict[str, Any]] = []
     if shots is not None:
         print_shots_report(aggregate_shots(shots_rows), len(args.seeds))
+        gate_shots = gate_vs_baseline(shots_rows, GATE_AB_METRICS)
+        print_gate_report(
+            aggregate_gate(gate_shots), context="кривая few-shot (новый вопрос)"
+        )
 
     if args.out_dir is not None:
         args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -750,6 +899,16 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "aggregate": aggregated,
             "loo": aggregate_loo(loo_rows) if args.loo else None,
             "loo_per_question": loo_rows,
+            "gate": {
+                "tol": GATE_TOL,
+                "baseline": "confidence",
+                "in_dist": aggregate_gate(gate_ab),
+                "loo": aggregate_gate(gate_loo) if args.loo else None,
+                "shots": aggregate_gate(gate_shots) if shots is not None else None,
+                "verdicts_in_dist": gate_ab,
+                "verdicts_loo": gate_loo,
+                "verdicts_shots": gate_shots,
+            },
             "shots": aggregate_shots(shots_rows) if shots is not None else None,
             "shots_per_question": shots_rows or None,
         }

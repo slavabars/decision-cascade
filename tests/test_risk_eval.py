@@ -1,10 +1,14 @@
 """Тесты честного сравнения маршрутизации (eval/risk/core)."""
+import json
+
 import numpy as np
 import pytest
 
 from eval.risk.core import (
+    GATE_LOO_METRICS,
     cascade_summary,
     flatten,
+    gate_risk_vs_confidence,
     is_correct,
     labels_for,
     ranker_report,
@@ -126,3 +130,91 @@ def test_selective_accuracy_at_fixed_coverages():
     assert quality["0.5"] == pytest.approx(1.0)  # принимаем оба правильных
     assert quality["0.8"] == pytest.approx(2 / 3)  # принято три из четырёх
     assert quality["1.0"] == pytest.approx(0.5)  # все решения
+
+
+def _gate_row(**overrides):
+    row = {
+        "aurc": 0.30,
+        "eaurc": 0.20,
+        "coverage_at_5pct_risk": 0.50,
+        "coverage_at_10pct_risk": 0.70,
+        "acc_at_0.7_coverage": 0.85,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_gate_accepts_when_candidate_not_worse():
+    base = _gate_row()
+    accepted, worse = gate_risk_vs_confidence(base, _gate_row(aurc=0.25))
+    assert accepted
+    assert worse == []
+
+
+def test_gate_rejects_regression_on_single_metric():
+    base = _gate_row()
+    accepted, worse = gate_risk_vs_confidence(
+        base, _gate_row(aurc=0.20, coverage_at_5pct_risk=0.40)
+    )
+    assert not accepted
+    assert worse and worse[0].startswith("coverage_at_5pct_risk")
+
+
+def test_gate_tolerates_noise_within_tol():
+    base = _gate_row()
+    accepted, _ = gate_risk_vs_confidence(base, _gate_row(aurc=0.3004), tol=0.0005)
+    assert accepted
+    # регрессия ровно на допуск + эпсилон — уже отказ
+    accepted, _ = gate_risk_vs_confidence(base, _gate_row(aurc=0.3006), tol=0.0005)
+    assert not accepted
+
+
+def test_gate_respects_metric_direction():
+    base = _gate_row()
+    # AURC стал лучше, но точность при покрытии упала — всё равно отказ
+    accepted, worse = gate_risk_vs_confidence(
+        base, _gate_row(aurc=0.10, **{"acc_at_0.7_coverage": 0.80})
+    )
+    assert not accepted
+    assert worse[0].startswith("acc_at_0.7_coverage")
+
+
+def test_gate_loo_metrics_keys_match_run_loo_rows():
+    keys = {key for key, _ in GATE_LOO_METRICS}
+    assert keys == {
+        "loo_aurc",
+        "loo_eaurc",
+        "loo_coverage_at_5pct_risk",
+        "loo_acc_at_0.7",
+    }
+
+
+def test_run_cli_reports_gate_in_json(tmp_path, capsys):
+    """CLI показывает вердикт гейта и сохраняет его в metrics.json."""
+    from eval.risk.run import main as run_main
+
+    run_main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "200", "--train-steps", "30", "--seed", "0",
+        "--out-dir", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert "gate (risk vs confidence):" in out
+    assert ("ПРИНЯТ" in out) or ("ОТКАЗАН" in out)
+
+    payload = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
+    gate = payload["gate"]
+    assert isinstance(gate["accepted"], bool)
+    assert gate["tol"] == pytest.approx(0.0005)
+    assert gate["baseline"] == "confidence"
+    if not gate["accepted"]:
+        assert gate["worse"]
+
+    # сертификат уезжает в risk.json — прод читает его при загрузке модели
+    risk_payload = json.loads((tmp_path / "risk.json").read_text(encoding="utf-8"))
+    assert risk_payload["gate"]["accepted"] == gate["accepted"]
+    assert risk_payload["gate"]["worse"] == gate["worse"]
+    from src.risk import ErrorRiskModel
+
+    model = ErrorRiskModel.load(tmp_path / "risk.json")
+    assert model.gate_rejected == (not gate["accepted"])

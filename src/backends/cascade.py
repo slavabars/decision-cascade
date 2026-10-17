@@ -271,6 +271,13 @@ class RiskAwareCascadeBackend(CascadeBackend):
     оценка превышает ``risk_budget``. Бюджет задаётся в терминах *доли ошибок*,
     которые мы готовы принять локально, — в отличие от порога на сыром
     confidence, который не равен вероятности ошибки.
+
+    **Hard gate.** Если у модели есть заключение гейта с ``accepted: false``
+    (risk-вариант измерен и оказался не лучше baseline), каскад безусловно
+    фолбэчит на порог уверенности (``fallback_threshold``): причина эскалации в
+    ``usage`` становится ``risk_gate`` — так видно, что фолбэк применён.
+    Отсутствие заключения означает, что замера не было, и режим работает
+    как прежде.
     """
 
     def __init__(
@@ -279,17 +286,33 @@ class RiskAwareCascadeBackend(CascadeBackend):
         fallback: Backend,
         risk_model,
         risk_budget: float = 0.05,
+        *,
+        gate: dict | None = None,
+        fallback_threshold: float = DEFAULT_THRESHOLD,
     ):
         if not 0.0 <= risk_budget <= 1.0:
             raise ValueError(f"risk_budget must be in [0.0, 1.0], got {risk_budget}")
+        if not 0.0 <= fallback_threshold <= 1.0:
+            raise ValueError(
+                f"fallback_threshold must be in [0.0, 1.0], got {fallback_threshold}"
+            )
         super().__init__(primary, fallback, threshold=0.0)
         self.risk_model = risk_model
         self.risk_budget = risk_budget
+        gate = gate if gate is not None else getattr(risk_model, "gate", None)
+        self.gate = gate
+        self.gate_rejected = bool(gate) and not bool(gate.get("accepted", True))
+        self.fallback_threshold = fallback_threshold
         self.name = f"risk-cascade[{primary.name}->{fallback.name}]"
 
     @property
     def escalation_reason(self) -> str | None:
+        if self.gate_rejected:
+            return "risk_gate"
         return "risk"
 
     def _uncertain(self, decision) -> bool:
+        if self.gate_rejected:
+            # решение худшего варианта отклонено: работает лучший baseline
+            return decision.confidence < self.fallback_threshold
         return bool(self.risk_model.should_escalate(decision, self.risk_budget))

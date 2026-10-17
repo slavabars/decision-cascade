@@ -143,3 +143,110 @@ def test_risk_json_roundtrip_file(tmp_path):
     payload = json.loads(path.read_text())
     assert payload["feature_names"] == ["confidence", "entropy", "margin"]
     assert "weights" in payload and "bias" in payload
+
+
+def test_risk_cascade_falls_back_to_confidence_when_gate_rejected():
+    """Отказ гейта: риск-правило не применяется, работает порог уверенности."""
+    model = _risk_model()
+    # при budget=0.99 риск-правило ничего не эскалирует (p(error) < 0.99)
+    assert not model.should_escalate(
+        NoulResult(noul=0.55, confidence=0.55), 0.99
+    )
+    model.gate = {"accepted": False, "worse": ["loo_aurc: 0.61 > 0.61±0.0005"]}
+    primary = _StubBackend("local", {"a": 0.9, "b": 0.55})
+    fallback = _StubBackend("remote", {"a": 0.0, "b": 0.99})
+
+    cascade = RiskAwareCascadeBackend(primary, fallback, model, risk_budget=0.99)
+    result = cascade.decide("s", _questions(["a", "b"]))
+
+    assert cascade.gate_rejected is True
+    assert fallback.calls == [("s", ("b",))]
+    assert result.usage["escalated"] == 1
+    assert result.usage["reason"] == "risk_gate"
+
+
+def test_risk_cascade_keeps_risk_rule_when_gate_accepted():
+    model = _risk_model()
+    model.gate = {"accepted": True, "worse": []}
+    primary = _StubBackend("local", {"a": 0.9, "b": 0.55})
+    fallback = _StubBackend("remote", {"a": 0.0, "b": 0.99})
+
+    cascade = RiskAwareCascadeBackend(primary, fallback, model, risk_budget=0.5)
+    result = cascade.decide("s", _questions(["a", "b"]))
+
+    assert cascade.gate_rejected is False
+    assert fallback.calls == [("s", ("b",))]
+    assert result.usage["reason"] == "risk"
+
+
+def test_risk_cascade_without_gate_certificate_unchanged():
+    """Замеры не проводились — отказывать нечего, режим работает как прежде."""
+    model = _risk_model()
+    assert model.gate is None
+    assert not model.gate_rejected
+    primary = _StubBackend("local", {"a": 0.9, "b": 0.55})
+    fallback = _StubBackend("remote", {"a": 0.0, "b": 0.99})
+
+    cascade = RiskAwareCascadeBackend(primary, fallback, model, risk_budget=0.5)
+    cascade.decide("s", _questions(["a", "b"]))
+
+    assert fallback.calls == [("s", ("b",))]
+    assert cascade.escalation_reason == "risk"
+
+
+def test_risk_cascade_fallback_threshold_validated():
+    from api.server.service import DecisionService
+    from src.backends.http import HttpSystemOneBackend, parse_modalities
+    from src.backends.local import LocalHeadsBackend
+
+    primary = LocalHeadsBackend(DecisionService(seed=0))
+    fallback = HttpSystemOneBackend(
+        "http://x", model="remote", modalities=parse_modalities("text")
+    )
+    with pytest.raises(ValueError):
+        RiskAwareCascadeBackend(
+            primary, fallback, _risk_model(), fallback_threshold=1.5
+        )
+
+
+def test_gate_certificate_survives_roundtrip(tmp_path):
+    model = _risk_model()
+    model.gate = {"accepted": False, "worse": ["aurc: 0.61 > 0.61±0.0005"],
+                  "tol": 0.0005}
+    path = model.save(tmp_path / "risk.json")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["gate"]["accepted"] is False
+
+    loaded = ErrorRiskModel.load(path)
+    assert loaded.gate_rejected
+    assert loaded.gate["worse"] == ["aurc: 0.61 > 0.61±0.0005"]
+    # старый файл без сертификата — не отказ
+    legacy = ErrorRiskModel.from_dict(
+        {"weights": [0.0, 0.0, 0.0], "bias": 0.0}
+    )
+    assert legacy.gate is None and not legacy.gate_rejected
+
+
+def test_create_cascade_backend_applies_rejected_gate(monkeypatch, tmp_path):
+    from api.server.main import _engine_info, create_cascade_backend
+    from api.server.service import DecisionService
+
+    model_path = tmp_path / "risk.json"
+    model = _risk_model()
+    model.gate = {"accepted": False, "worse": ["aurc: 0.61 > 0.61±0.0005"]}
+    model.save(model_path)
+    monkeypatch.setenv("DECISION_CASCADE_FALLBACK_URL", "http://fallback")
+    monkeypatch.setenv("DECISION_CASCADE_RISK_BUDGET", "0.12")
+    monkeypatch.setenv("DECISION_RISK_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("DECISION_CASCADE_THRESHOLD", "0.75")
+
+    backend = create_cascade_backend(DecisionService(seed=0))
+
+    assert isinstance(backend, RiskAwareCascadeBackend)
+    assert backend.gate_rejected
+    assert backend.escalation_reason == "risk_gate"
+    assert backend.fallback_threshold == pytest.approx(0.75)
+    info = _engine_info(backend)
+    assert info["risk_gate"] == "rejected"
+    assert info["risk_budget"] == pytest.approx(0.12)

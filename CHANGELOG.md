@@ -8,6 +8,26 @@
 
 ### Added
 
+- **Hard gate «принимать только лучшее решение»** (`eval/risk/core.py`,
+  `gate_risk_vs_confidence`): вариант принимается, только если он не хуже
+  baseline `confidence` по AURC, eAURC, coverage@5% risk и acc@0.7 (допуск
+  0.0005 поедает только шум). Считается в `eval/risk/run.py` и в
+  `eval/risk/features.py` — по in-dist, по LOO (новый вопрос) и по кривой
+  few-shot (точка против baseline при том же числе примеров); вердикты печатаются
+  в отчёт и пишутся в `features.json`/`metrics.json` → `gate`.
+- **Сертификат гейта в `risk.json`** (`ErrorRiskModel.gate`) и продакшен-фолбэк:
+  при `accepted: false` `RiskAwareCascadeBackend` безусловно переходит на порог
+  уверенности (`DECISION_CASCADE_THRESHOLD`), причина эскалации в `usage`
+  становится `risk_gate`, в лог пишется предупреждение, `/info → engine.risk_gate`
+  показывает `rejected`. Без сертификата режим работает как прежде.
+- Замеры гейта (доля проходов `production` против `confidence`): in-dist — 2/3
+  (RouterBench/hash, 3 seeds), 1/1 (RouterBench/gpt2), 1/1 (AG News/gpt2);
+  LOO 0-shot — 5/9, 0/3 и 3/3 соответственно. Кривая few-shot: на gpt2
+  `escalate` проходит с `n ≥ 5`, `route` и `benefit` не проходят ни при каком
+  `n` (включая «все»); на hash — 4–5 из 9 при любом `n`; на AG News — 3/3 при
+  `n = 0` и 2/3 дальше (добавление своих примеров переобучает `business`).
+- Вариант `confidence` в кривой `--shots`: однопризнаковая baseline-модель в
+  той же точке кривой — с ней и сравнивается гейт.
 - Флаг `--state` в `eval/risk/features.py` и варианты `state[C]` / `prod+state[C]`:
   замер, несёт ли **замороженное состояние энкодера** (пулированный вектор
   промпта) сигнал об ошибке сверх шести признаков `DecisionResult`. Сила L2 у
@@ -24,6 +44,9 @@
 
 ### Changed
 
+- Кривая `--shots` считает и baseline `confidence` в каждой точке, поэтому
+  `SHOT_COLUMNS`/агрегат группируются по `(variant, shots)` — иначе точки разных
+  вариантов смешивались бы в одну строку.
 - `eval/risk/features.py` считает `production` и варианты с состоянием при одном и
   том же `C` (`--C`), а для вариантов с состоянием берёт `--state-C`; это убирает
   сравнение, в котором выигрыш давала не новая информация, а более сильная
