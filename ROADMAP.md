@@ -1,0 +1,374 @@
+# ROADMAP — от прототипа к конкурентоспособной платформе
+
+Документ фиксирует проверенный статус проекта и план работ по закрытию оставшихся
+пробелов (в первую очередь: GPU, обученные веса, сравнение с конкурентами).
+
+> Статус на 2026‑10‑13. Проверено по коду и репозиторию, а не по описаниям.
+
+---
+
+## 0. Обновление на 2026‑10‑16 (сверх фаз A–F)
+
+Фазы A–F закрыты 13.10. За 14–16.10 сверху добавлено (это уже вне фазового плана):
+
+| Что | Статус | Где |
+|---|---|---|
+| Политика необученных голов `DECISION_UNTRAINED` | ✅ коммит `67d56ec`, релиз `v0.5.0` (локально) | `api/server/service.py` |
+| Risk-aware каскад: эскалация по `P(ошибка)` и **бюджету ошибок** | ✅ `777de90` | `src/risk.py`, `src/backends/cascade.py`, `eval/risk/` |
+| Голова option-scoring (перенос набора вариантов) | ✅ `c11f5ff`, opt-in | `src/decision_head/heads.py`, `docs/option-scoring.md` |
+| Риск-модель: 6 признаков + A/B и **LOO-замер переноса** | ✅ `da37217` | `eval/risk/features.py`, `docs/risk-aware-cascade.md` |
+| Риск: замер **состояния энкодера** (`--state`, `--state-C`) + базлайн `random` | ✅ измерено, **не подключено** | `eval/risk/features.py`, `docs/risk-aware-cascade.md` |
+| Риск: замер **явного свободного члена на вопрос** (`--question`) вместо `n_classes` | ✅ измерено, **замена не выигрывает** | `eval/risk/features.py`, `docs/risk-aware-cascade.md` |
+| Тесты | ✅ **439 passed, 10 skipped** | `tests/` |
+
+Открытые направления (проверено, не сделано):
+
+1. **Сигнал риска из состояния энкодера — замороженный закрыт.** Измерено
+   (`--state`): на RouterBench его выигрыш — только упорядочивание внутри вопроса
+   (на отложенном вопросе `production` не хуже), на AG News выигрыш есть, но мал и
+   держится только при сильной регуляризации (AURC 0.0403 против 0.0487 при равном
+   L2). `state` сам по себе слабее `base(3)`. Остаётся вариант с **обученным**
+   (fine-tuned) энкодером.
+2. **Явный свободный член на вопрос** вместо суррогата `n_classes` — измерено
+   (`--question`), **замена не выигрывает**: на новом вопросе хуже (0.4182 против
+   0.4040 на gpt2/RouterBench), на фиксированном наборе — в пределах шума.
+   `n_classes` остаётся: он группирует вопросы по числу исходов, поэтому
+   переносится чуть лучше, чем смещение, которого под новый вопрос нет.
+3. **Релиз.** `v0.6.0` опубликован (тег, wheel/sdist, gh release) — включает
+   option-scoring, шесть признаков риск-модели и LOO-замер. Версия `0.5.0`
+   осталась локальной без тега.
+4. **option-scoring**: перенос работает на близких вариантах, но не на
+   произвольных новых словах (`docs/option-scoring.md`).
+5. **Внешние конкуренты**: прогон Clef/Laya/Perplexity требует URL/ключей — за
+   пользователем.
+
+---
+
+## 4. Дорожная карта beta → stable (детальная)
+
+**Цель:** перевести risk-aware каскад из состояния с непредсказуемым zero-shot переносом на новый вопрос в **адаптивно-стабильное** поведение. Ключевые принципы: безопасность (не хуже baseline), предсказуемость (монотонность по данным), калиброванность `P(ошибка)`, воспроизводимость.
+
+**Модель стабильности:** либо есть достаточно примеров нового вопроса для few-shot адаптации, либо применяем **safety gate** с фолбэком на `confidence`.
+
+### 4.1 Контекст анализа (для восстановления после суммаризации)
+
+Основные измерения, фиксирующие текущее состояние:
+
+- **LOO (zero-shot на новом вопросе)**: `production` (6 признаков + `n_classes`) держится лучше `prod+question`/`no_n_classes+question` (RB/gpt2: 0.4040 vs 0.4182). `n_classes` работает как **грубая группировка** по числу исходов (`route` и `benefit` оба 3 класса) — переносит чуть лучше нулевого смещения.
+- **Замороженное состояние энкодера (`--state`)**: улучшает **внутри-вопросное** упорядочивание; на новом вопросе переносится только на AG News и только при сильной регуляризации; само по себе слабее `base(3)`. Вывод: нужен либо **fine-tuned** энкодер под риск, либо **адаптация по примерам**.
+- **Few-shot (`--shots`, вложенные точки)**: уже **5–20 примеров** закрывают львиную долю потери переноса (RB/gpt2: 0.3812 → 0.3787 при n=20, потолок ~0.379). Рост после 20 минимальный. По вопросам: `escalate/benefit` выходят на потолок сразу, `route` даёт минимальный прирост.
+- **Критика one-hot**: при 0-shot смещение = среднее по остальным вопросам → промах при сильно разном распределении ошибок (escalate~0.11, route~0.61, benefit~0.41). Группировка по `n_classes` в этом случае полезнее.
+- **Гипотеза стабильности**: неопределённость zero-shot → решать **адаптацией по фактам** (few-shot), а не угадыванием. Обязателен **safety gate** + фолбэк на `confidence`.
+
+### 4.2 Порядок действий (идём строго по порядку)
+
+Все пункты проверяемы, CPU-only там, где не указан GPU. После каждого шага обновляем `docs/risk-aware-cascade.md` и `CHANGELOG.md` (если меняется поведение/интерфейс), добавляем тесты.
+
+#### Шаг 0. Safety gate (P0, CPU-only) — **обязателен для стабильности**
+**Цель:** всегда проводить измерения и принимать **только лучшее** решение по метрикам; при сравнении с baseline **никогда** не выбирать вариант, который статистически/по ключевым метрикам хуже baseline — в таких случаях **безусловно отказываться** от риск-aware и фолбэкать на лучший доступный вариант (по умолчанию `confidence`).
+
+**Детали:**
+- В `eval/risk/run.py` и/или в логике каскада при выборе risk-aware режима: при LOO-подобной ситуации (новый вопрос, 0-shot) сравнивать `AURC_production` vs `AURC_confidence` (и `acc@0.7`, `coverage@risk`).
+- Критерий: применять фолбэк на **лучший** baseline (`confidence` как минимум), если по любому ключевому критерию (AURC, eAURC, acc@0.7, coverage@risk, ECE/Brier) риск-вариант **хуже** baseline **без статистически обоснованного преимущества**. Начальный порог: требуем **не-хуже** (>= -δ с малым δ 0.0005–0.002 только на шумовых колебаниях, либо жёсткое `>=` без допуска к регрессии). Регрессия **не допустима** — при малейшем ухудшении по любому из ключевых критериев — **отказ от варианта**. в тестах можно варьировать.
+- Работает и в оффлайн-замерах (`--loo`), и в продуктивной логике (где есть способ детектить «новый» вопрос без примеров).
+- **DoD:** gate реализован, юнит-тесты (положительный/отрицательный кейсы), CLI/отчёты показывают применён ли фолбэк.
+
+**Файлы:** `eval/risk/run.py`, `src/backends/cascade.py` (минимально), тесты.
+
+#### Шаг 1. Калибровка в замерах (P0, CPU-only)
+**Цель:** замерять не только AURC, но и **калиброванность** `P(ошибка)=1-score`.
+
+**Детали:**
+- Расширить `run_loo` и `shots_report` в `eval/risk/features.py`: добавить **ECE**, **Brier score**.
+- Добавить агрегацию по seed'ам (mean±std), сохранение в JSON (`loo_per_question`, `shots_per_question`, агрегаты).
+- Добавить `print_*` с кратким выводом ECE/Brier.
+- **DoD:** метрики присутствуют во всех отчётах, тесты на вычисление не падают, ruff/pytest зелёны.
+
+**Файлы:** `eval/risk/features.py`, `eval/calibration/` (уже есть ECE/Brier в проекте — переиспользовать), тесты.
+
+#### Шаг 2. Few-shot cold-start как измеряемый путь (P0, CPU-only)
+**Цель:** формализовать и зафиксировать практический cold-start.
+
+**Детали:**
+- Флаг `--shots` уже есть (вложенные точки, n=0 = LOO, None = in-dist). Расширить агрегацию: добавить **std по shot_seed** (R4).
+- Добавить опцию `--shot-seeds` (несколько random-порядков выбора примеров). По умолчанию достаточно 1–3.
+- В `shots_report` при нескольких `shot_seeds` усреднять по (question, shots, seed).
+- **DoD:** кривые монотонны в среднем, std по shot_seed контролируем, JSON содержит `shot_seeds`.
+- **Результат для документации:** таблицы с mean±std по shot_seed + макро по вопросам.
+
+**Файлы:** `eval/risk/features.py`, тесты.
+
+#### Шаг 3. Ужесточить статистику (P1, CPU-only)
+**Цель:** зафиксировать стабильность, а не точечные числа.
+
+**Детали (R1,R4,R6,R7):**
+- Запустить глубокие прогоны: **5–10 seeds**, `--shots 0 5 10 20 50 100`, `--loo`.
+- Наборы: `routerbench` (hash+gpt2), `public` (gpt2).
+- Считать mean±std по всем метрикам (AURC, acc@0.7, coverage@risk, ECE, Brier). Добавить **bootstrap-CI** (минимально) или хотя бы worst-case по вопросам (`max LOO AURC`).
+- Зафиксировать в `docs/risk-aware-cascade.md` раздел «Стабильность: много seeds + вариативность few-shot».
+- **DoD:** воспроизводимые команды в доке, сохранённые JSON в `data/risk_stable_*`, таблицы в docs.
+
+**Файлы:** `docs/risk-aware-cascade.md`, `eval/risk/features.py` (минимальные helper'ы для агрегации/печати), скрипт/команды.
+
+#### Шаг 4. Симуляции S1–S6 (P1, CPU-only)
+**Цель:** изолировать trade-off `n_classes` vs one-hot vs shots без шума.
+
+**Детали:**
+- Создать `eval/risk/simulate.py` (CLI + функции). Использовать те же `_fit_logistic`, `aurc`, `eaurc`, ECE/Brier-подходы.
+- **S1 (class-count collision):** 3 вопроса, все `n_classes=3`, p_err сильно разные. LOO по одному.
+- **S2 (no collision):** разные `n_classes`, разные p_err.
+- **S3 (continuous shift):** плавный сдвиг p_err между вопросами.
+- **S4 (few-shot convergence):** S1 + вложенные shots 0,1,2,5,10,20.
+- **S5 (calibration under shift):** ECE/Brier для S1/S4.
+- **S6 (worst-case/adversarial):** новый вопрос максимально далёк по p_err от обучающих.
+- Сравнить варианты: `production` (n_classes), `no_n_classes+question` (one-hot), `base(3)`, `confidence`-baseline.
+- **DoD:** тесты (быстрые), вывод в консоль + JSON, раздел в `docs/risk-aware-cascade.md` «Синтетические границы применимости».
+
+**Файлы:** `eval/risk/simulate.py`, `tests/test_risk_simulate.py` (быстрые), docs.
+
+#### Шаг 5. Мягкая группировка вместо жёсткого `n_classes` (P1, CPU-only)
+**Цель:** улучшить **zero-shot** без GPU, не ломая few-shot.
+
+**Идея:** заменить бинарно-группирующий `n_classes` на **мягкий prior** по вопросу. Простейший рабочий вариант (минимум кода):
+- Построить **необучаемый** вектор-признак: средний пулированный эмбеддинг промптов вопроса по train/val (`val_features[question].mean(dim=0)`) — усреднение по примерам вопроса из обучающей части (не подглядываем в тест).
+- Сжать (PCA) до малой размерности (2–4) или просто использовать нормированный mean-vector + небольшая регуляризация.
+- Добавить как **доп. признаки** к `production` (не удалять `n_classes` сразу) → вариант `production+qmean[d]`.
+- Сравнить LOO: production vs production+qmean vs prod+question.
+
+**Критерии успеха:** LOO не хуже production на RB/hash,gpt2,AGN; in-dist не хуже; без резкого роста std.
+
+**DoD:** эксперимент в `eval/risk/features.py` (флаг `--qmean`), замеры на тех же трёх наборах, раздел в docs с выводом (включать/не включать).
+
+**Файлы:** `eval/risk/features.py`, docs.
+
+#### Шаг 6. Промоут к stable (P2)
+**Цель:** формализовать правила включения risk-aware по умолчанию.
+
+**Детали:**
+- Определить **пороги** на основе шагов 1–4: минимальное `n` (few-shot) при котором AURC <= LOO_production и ECE/Brier не деградирует; worst-case gate против `confidence`.
+- В `src/backends/cascade.py` внедрить **адаптивную логику**:
+  - Если есть >= N размеченных примеров нового вопроса (few-shot) → использовать риск-модель, **переобученную** по схеме {others + own_N} (минимум: переобучить LR на валидационном срезе; веса энкодера/голов не трогаем — CPU-only, мгновенно).
+  - Иначе (zero-shot) → применять **safety gate**: считать risk-scores, но сравнить с baseline-предсказанием по gate; при провале → фолбэк на `confidence`.
+- Добавить конфиг: `DECISION_RISK_FEW_SHOT_N` (дефолт ~10), `DECISION_RISK_GATE_DELTA` и т.п. (через env).
+- **DoD:** интеграционные тесты, `docs/risk-aware-cascade.md` обновлён секцией «Правила перехода в stable», `CHANGELOG.md` отражает поведение по умолчанию.
+
+**Файлы:** `src/backends/cascade.py`, `src/risk.py`, `api/server/`, тесты, docs.
+
+### 4.3 Зависимости и приоритеты
+
+| Шаг | Зависит от | Роль | Приоритет |
+|---|---|---|---|
+| 0 | (база) | architect/ml-engineer | **P0** — блокер стабильности |
+| 1 | 0 (можно параллельно с 2) | ml-engineer | **P0** |
+| 2 | 1 (совместимо) | ml-engineer | **P0** |
+| 3 | 1–2 | evaluator/ml-engineer | **P1** |
+| 4 | 1–2 | ml-engineer (симуляция) | **P1** |
+| 5 | 1–3 (для валидации) | ml-engineer | **P1** |
+| 6 | 0–3 | architect + ml-engineer | **P2** |
+
+**Главный приоритет:** **0 → 1 → 2**. Шаги 3–5 дают доказательную базу, 6 — перевод в stable.
+
+### 4.4 Definition of Done для beta→stable
+
+- **Безопасность:** на всех LOO-прогонах (R1) риск-aware **не хуже** `confidence` при включённом gate. Worst-case (max LOO AURC по вопросам) контролируется.
+- **Монотонность:** кривая shots не возрастает статистически при увеличении n (вложенные точки), std по shot_seed разумный.
+- **Калиброванность:** ECE/Brier на LOO+shots в допустимых пределах; при деградации калибровки — gate/фолбэк.
+- **Репродуцируемость:** команды запуска с железом/версией, сохранённые JSON, mean±std.
+- **Тесты:** `ruff check` чисто, `pytest` зелёный (включая новые тесты gate/shots/calibration/sim).
+- **Документация:** `docs/risk-aware-cascade.md` содержит анализ, таблицы стабильности, синтетические границы, правила stable. `ROADMAP.md` отражает прогресс.
+
+
+## 1. Проверенный статус (что уже реализовано)
+
+| Возможность | Статус | Где |
+|---|---|---|
+| Типизированные решения Noul/Choice/Score + валидация распределений | ✅ | `src/schemas.py`, `src/decision_head/heads.py` |
+| Параллельная оценка всех вопросов одним прогоном | ✅ | `src/sampler/parallel.py` |
+| Каскадный бэкенд local-first + эскалация по `confidence` | ✅ | `src/backends/cascade.py` |
+| Батч-опрос многих состояний | ✅ | `POST /decisions/batch`, `DecisionService.decide_many` |
+| Allowlist медиа `DECISION_MEDIA_ROOT` | ✅ | `src/encoder/vision.py`, `api/server/main.py` |
+| Честная мультимодальность (`Capabilities` + `MODALITY_NOT_SUPPORTED`) | ✅ | `src/backends/*`, `api/server/main.py` |
+| Единый бэкенд для всех эндпоинтов, синхронные эндпоинты, потокобезопасные кэши | ✅ (13.10) | `api/server/main.py`, `api/server/service.py` |
+| `httpx` в зависимостях | ✅ (13.10) | `requirements.txt` |
+| Masked mean pooling (padding не влияет на признаки) | ✅ (13.10) | `src/encoder/gemma.py`, `tests/test_encoder.py` |
+| Выбор устройства/типа: `DECISION_DEVICE`/`DECISION_DTYPE` | ✅ (13.10) | `src/device.py`, `api/server/main.py` |
+| GPU-путь протестирован (маркер `gpu`, CPU↔CUDA allclose) | ✅ (13.10) | `tests/test_gpu.py`, `pytest.ini` |
+| Обученные веса «из коробки» (gpt2 + RLCD) | ✅ (13.10, релиз `v0.1.0`) | `training/recipe/train_weight_packs.sh`, `training/recipe/publish_weight_packs.sh` |
+| Честная оценка на публичном датасете (AG News) | ✅ (13.10) | `eval/datasets/public_dataset.py`, `eval/report/run.py` |
+| Калибровка для `choice`/`score` (Brier/ECE) | ✅ (13.10) | `eval/calibration/metrics.py`, `eval/benchmark/core.py` |
+| Бенчмарк против конкурентов + mock | ✅ (13.10) | `eval/competitors/`, `docs/competitor-benchmark.md` |
+| Тесты | ✅ **306 passing** (ruff + shellcheck чисто) | `tests/` |
+| Протокол Jev/SystemOne + прокси к Clef/Laya/Perplexity | ✅ | `api/server/systemone.py`, `src/backends/http.py` |
+| SFT + RLCD + рецепт train/val/test + публикация весов артефактом | ✅ (код) | `training/` |
+
+## 2. Подтверждённые пробелы
+
+> Все перечисленные пробелы закрыты 13.10 (см. §3 — статусы фаз). Таблица ниже
+> сохранена как исходная фиксация проблем.
+
+| Пробел | Факт проверки |
+|---|---|
+| **GPU реально не используется и не тестирован** | `api/server/main.py` жёстко задаёт `device="cpu"` и для `GemmaStateEncoder`, и для `ClipVisionEncoder`. В тестах нет ни одного упоминания `cuda/gpu/device`. GPU-ветка `GemmaStateEncoder` существует, но приложением не вызывается. |
+| **Нет обученных весов «из коробки»** | Нет каталога `checkpoints/`, нет `*.pt` вне `.venv`, нет git-тегов и релизов. README честно предупреждает о случайных головах. |
+| **Нет сравнения с конкурентами** | Есть только упоминания в README/докстрингах. Нет воспроизводимого прогона Clef/Clef-Flash/Laya/Perplexity в одном сценарии. |
+| **Оценка только на синтетике** | `eval/datasets/` — генератор синтетических тикетов; метки линейно отделимы (`accuracy = 1.000`), реальных датасетов нет. |
+| **Калибровка измеряется только для `noul`** | `eval/calibration/metrics.py` даёт ECE/Brier; для `choice`/`score` — только accuracy и `mean_expected_label`. |
+| **Roadmap-фичи не сделаны** | Реальная калибровка на выходе gemma, трансформерный энкодер с attention-mask, интеграция в чат-агентов. |
+
+### Дополнительно найденный дефект (важно) — ✅ исправлено (A1)
+
+**Mean-pooling игнорирует `attention_mask`.** В `src/encoder/gemma.py`:
+`hidden = ...hidden_states[-1]; pooled = hidden.mean(dim=1)`. При `padding=True`
+усредняются и padding-позиции (pad = EOS). Значит признаки состояния **зависят от
+соседей по батчу**: одно и то же состояние в разных батчах даёт разные векторы.
+Это подрывает детерминизм, искажает кэш признаков (ключ — промпт, а значение
+зависит от батча), обучение и все будущие замеры на реальном энкодере.
+Исправлено masked mean pooling + тест инвариантности к составу батча.
+
+---
+
+## 3. План по фазам
+
+Приоритеты: **A/B** — корректность и GPU (P0), **C** — веса (P0),
+**D/E** — доказательства (P1), **F** — развитие (P2).
+Оценки — в идеальных днях (S ≈ 0.5, M ≈ 1–2, L ≈ 3–5).
+
+### Фаза A — Корректность энкодера (P0) · M — ✅ сделано
+
+- [x] A1. Ввести masked mean pooling: `sum(hidden * mask) / sum(mask)` с учётом
+  `attention_mask`; padding-позиции не влияют на вектор. Файл: `src/encoder/gemma.py`.
+  Реализовано в `GemmaStateEncoder._mean_pool` (+ fallback на обычное среднее без маски).
+- [x] A2. Инвариантный к батчу тест: один и тот же state в батче 1 и батче 8 даёт
+  одинаковый вектор (`torch.allclose`), тест в `tests/test_encoder.py`.
+- [x] A3. Зафиксировать поведение `max_length`/pad-token в докстринге и README.
+  Докстринг обновлён; README — раздел «Устройство и тип».
+- [x] A4. (опц.) Регрессионный тест на кэш: признаки не зависят от порядка/состава батча.
+
+**Приёмка:** тест A2 зелёный; `pytest` не регрессирует; докстринг описывает pooling корректно.
+
+### Фаза B — GPU-путь и тесты на GPU (P0) · M–L — ✅ сделано
+
+- [x] B1. Переменные окружения: `DECISION_DEVICE` (`auto|cpu|cuda|cuda:N|mps`, default `auto`) и
+  `DECISION_DTYPE` (`float32|float16|bfloat16`, default `float32`); валидация. Файл: `src/device.py`.
+- [x] B2. Проброс в `create_service` и `create_vision_encoder` вместо `device="cpu"`;
+  `auto` → `cuda` при `torch.cuda.is_available()`.
+- [x] B3. Тесты-юниты на парсинг `DEVICE`/`DTYPE` (mock `torch.cuda.is_available`) — `tests/test_device.py`.
+- [x] B4. GPU-интеграция под маркером `@pytest.mark.gpu` + `skipif not cuda`:
+  крошечный gpt2 на CUDA — совпадение выхода с CPU (`allclose`), форма, fp16 — `tests/test_gpu.py`.
+- [x] B5. `pytest.ini`: маркер `gpu` зарегистрирован (auto-skip без CUDA).
+- [x] B6. `eval/latency/run.py --device --dtype --encoder`.
+- [x] B7. README: таблица «CPU vs GPU» / раздел «Устройство и тип».
+
+**Приёмка:** на CUDA-хосте сервер стартует с `DECISION_DEVICE=cuda`, выход совпадает
+с CPU в допуске; без CUDA тесты не падают (auto-skip).
+
+### Фаза C — Обученные веса «из коробки» (P0) · L — ✅ сделано (опубликовано v0.1.0)
+
+- [x] C1. Референсная задача: тикет-саппорт (`text_dataset.QUESTIONS`) + публичный
+  AG News для честной оценки (см. D). gpt2 на русском → нетривиальные метрики.
+- [x] C2. Адаптер `eval/datasets/public_dataset.py` (AG News → noul/choice/score).
+- [x] C3. Обучение референс-модели `training/recipe/train_reference_model.sh`
+  (`--encoder openai-community/gpt2 --dim 768 --train-steps 500`).
+- [x] C4. Калибровка `noul` через RLCD + **гейт «не навреди»**: если RLCD ухудшает
+  калибровку, веса головы откатываются (`training/rlcd/train.py:calibrate_noul_heads`).
+  Замерено: RLCD без гейта роняет noul-acc 1.00→0.53; с гейтом — без регрессии.
+- [x] C5. Артефакт: `heads.pt` + копия `<questions_signature>.pt` + `metadata.json`
+  (encoder, dim, max_length, sha256, specs/dataset_name, метрики train/val/test).
+  Публикация — `publish_release.sh` (один пак) или `publish_weight_packs.sh`
+  (матрица + `manifest.json`). **Опубликовано:** релиз
+  [`v0.1.0`](https://github.com/slavabars/decision-cascade/releases/tag/v0.1.0).
+- [x] C6. `training/recipe/train_reference_model.sh` (drop-in через `DECISION_CHECKPOINT_DIR`).
+- [x] C7. Матрица паков `{support, public} × {gpt2, distilgpt2, gpt2-medium}` —
+  `training/recipe/train_weight_packs.sh` (обучено на GPU). `train_heads.py` получил
+  `--specs public` (AG News с настоящим test-сплитом). README-раздел — «Готовые паки весов».
+
+**Замер (test-accuracy):** `support-gpt2` **0.926**, `support-gpt2-medium` 0.914,
+`support-distilgpt2` 0.868; `public-gpt2` 0.880, `public-distilgpt2` 0.879,
+`public-gpt2-medium` 0.873. noul-головы откалиброваны (ECE ≈ 0.01–0.02);
+необученный сервис даёт `срочность ≈ 0.50`, обученный — `0.007` (неслучайно).
+
+### Фаза D — Реальная оценка и калибровка (P1) · M–L — ✅ сделано
+
+- [x] D1. `eval/calibration/metrics.py`: `multiclass_brier_score`, `top_label_ece`;
+  `categorical_metrics` теперь даёт Brier/ECE для `choice`/`score`.
+- [x] D2. Честный отчёт `untrained vs trained` — `eval/report/run.py` на AG News.
+- [x] D3. Reliability-диаграммы для всех вопросов (`reliability_*.png`) + `metrics.json`.
+- [x] D4. README «как воспроизвести» — раздел «Публичная оценка (AG News)».
+
+**Замер (AG News, gpt2, HP=GPU):** overall accuracy **0.425 → 0.884**;
+calibration (ECE): topic 0.725→0.151, business 0.122→0.063, tech_level 0.795→0.091.
+Числа < 1.0, воспроизводимы одной командой.
+
+### Фаза E — Воспроизводимый бенчмарк против конкурентов (P1) · L — ✅ сделано
+
+- [x] E1. `eval/competitors/`: клиент `/v1/systemone` + адаптеры `local`, `cascade`,
+  `http`-внешний (переиспользуются бэкенды проекта).
+- [x] E2. Метрики: latency p50/p95/p99, accuracy/Brier/ECE по вопросам, escalation rate,
+  агрегированный `usage` (стоимость).
+- [x] E3. `MockCompetitor` на `httpx.MockTransport` (`eval/competitors/mocks.py`).
+- [x] E4. CLI `python -m eval.competitors.run --target … --out report.json`.
+- [x] E5. `docs/competitor-benchmark.md`: железо, версии, ключевой вывод.
+
+**Замер:** `cascade[local->mock]` acc **0.911** против local **0.908** при **1.94%**
+эскалаций — то же/лучшее качество при почти нулевых внешних вызовах.
+
+### Фаза F — Развитие (P2) · ✅ сделано
+
+- [x] F1. Трансформерный энкодер с attention-mask: `TransformerStateEncoder` (encoder-only,
+  `AutoModel`) + общий `masked_mean_pool`; вид выбирается `DECISION_ENCODER_KIND`
+  (`causal`/`encoder`) через `src/encoder/factory.py`. Тесты: unit + opt-in BERT (`-m model`).
+- [x] F2. Реальная калибровка на выходе энкодера (RLCD в масштабе): гейт «не навреди»
+  считается на **отложенном** val (`calibrate_noul_heads(gate_features=...)`),
+  `train_benchmark(rlcd_gate_examples=...)` прокидывается из рецепта, скрипт
+  `training/recipe/calibrate_rlcd.py` калибрует существующий пак и печатает
+  Brier/ECE до/после. Тесты: гейт на held-out, проброс gate, smoke-скрипт.
+- [x] F3. Пример интеграции в чат-агента (SDK + каскад): `api/sdk/agent.py`
+  (`route_ticket` → команда/приоритет/эскалация/тон), пример
+  `examples/chat_agent.py` с клиентским фолбэком на внешний SystemOne-сервис,
+  тесты `tests/test_agent.py`.
+- [x] F4. Политика версионирования схемы и миграций: `src/versioning.py`
+  (совместимость по major, legacy-версии), `schema_version` в чекпоинтах +
+  `migrate_checkpoint` (legacy → текущая, отказ на новом major), SDK принимает
+  совместимый minor. Тесты `tests/test_versioning.py`, `tests/test_service_sdk.py`.
+
+---
+
+## 4. Порядок и зависимости
+
+```
+A (masked pooling) ─┬─► B (GPU) ─────────────┐
+                    └─► C (веса) ──► D (реал. оценка) ──► E (конкуренты)
+                                                   └─► F (развитие)
+```
+
+- A обязательна до любых замеров на реальном энкодере (иначе метрики недостоверны).
+- B и C можно вести параллельно (разные роли).
+- E опирается на D (нужен единый размеченный набор).
+- F1 зависит от A.
+
+## 5. Роли (из `agents.md`)
+
+| Фаза | Роль |
+|---|---|
+| A, C, D | ml-engineer |
+| B | ml-engineer + sysadmin-bridge (CUDA-драйверы — только через sudo-request) |
+| E | evaluator + api-builder |
+| F | architect |
+
+## 6. Риски
+
+- **Нет GPU-хоста** → закрыто: доступен NVIDIA RTX 5060 Ti (`torch 2.14.1+cu130`),
+  GPU-тесты и обучение прогнаны.
+- **Внешние API конкурентов** (ключи, приватность) → E опирается на `MockCompetitor`
+  + открытые веса (Clef-Flash через vLLM/SGLang) локально; реальные прогоны — за
+  пользователем (нужны URL/ключи).
+- **Приватность весов**: не коммитим `*.pt` в git (уже в `.gitignore`) — только релиз
+  (`training/recipe/publish_release.sh` / `publish_weight_packs.sh`; `gh` установлен
+  и авторизован, релиз `v0.1.0` опубликован).
+
+## 7. Definition of Done (общая)
+
+- `ruff check` и `shellcheck` чисто; `pytest` зелёный (**430 passed, 10 skipped** —
+  opt-in GPU/модель; GPU-тесты auto-skip без CUDA).
+- Каждая фаза сопровождается тестами; README/ROADMAP обновляются по ходу.
+- Никаких «сырых» чисел без команды воспроизведения и указания железа/версий.
