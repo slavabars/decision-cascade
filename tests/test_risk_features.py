@@ -9,12 +9,16 @@ import torch
 from eval.risk.features import (
     BASE_WIDTH,
     EXTRA_FEATURE_NAMES,
+    _Prepared,
     aggregate_loo,
+    aggregate_shots,
     feature_variants,
     head_features,
     main,
     mean_pairwise_cosine,
     question_onehot,
+    run_loo,
+    shots_report,
     with_state_variants,
 )
 from src.risk import FEATURE_NAMES, decision_features
@@ -173,6 +177,106 @@ def test_aggregate_loo_macro_averages_over_questions():
     # макро-среднее по вопросам, а не по строкам
     assert entry["loo_aurc"] == pytest.approx(0.3)
     assert entry["indist_aurc"] == pytest.approx(0.2)
+
+
+def _fixture_block(questions, rows_per_question, rng):
+    """Один вопрос = по одному «своему» признаку, поэтому вопросы расходятся."""
+    matrix, correct, groups = [], [], []
+    for question in questions:
+        block = rng.uniform(-1.0, 1.0, size=(rows_per_question, len(FEATURE_NAMES)))
+        important = 0 if question == "q1" else 1
+        score = block[:, important] + 0.4 * rng.standard_normal(rows_per_question)
+        matrix.append(block)
+        correct.append(score > 0)
+        groups.extend([question] * rows_per_question)
+    return np.vstack(matrix), np.concatenate(correct), groups
+
+
+def _prepared_fixture() -> _Prepared:
+    """Валидация и тест по трём вопросам в порядке question-major."""
+    rng = np.random.default_rng(7)
+    questions = ["q1", "q2", "q3"]
+    val = _fixture_block(questions, 10, rng)
+    test = _fixture_block(questions, 7, rng)
+    return _Prepared(
+        variants={"production": (val[0], test[0])},
+        correct=(val[1], test[1]),
+        groups=(val[2], test[2]),
+        questions=questions,
+    )
+
+
+def test_shots_report_endpoints_match_loo():
+    """n = 0 — это ровно LOO, `shots=None` — ровно in-dist из `run_loo`."""
+    prepared = _prepared_fixture()
+    rows = shots_report(prepared, [0], seed=0, C=1.0)
+    loo = run_loo(prepared, seed=0, C=1.0)
+    assert {row["shots"] for row in rows} == {None, 0}
+
+    for held_out in loo:
+        own = [
+            row for row in rows
+            if row["question"] == held_out["question"]
+        ]
+        points = {row["shots"]: row for row in own}
+        assert points[0]["aurc"] == pytest.approx(held_out["loo_aurc"])
+        assert points[0]["acc_at_0.7"] == pytest.approx(
+            held_out["loo_acc_at_0.7"]
+        )
+        assert points[None]["aurc"] == pytest.approx(held_out["indist_aurc"])
+
+
+def test_shots_report_takes_nested_subsets_of_validation_only():
+    prepared = _prepared_fixture()
+    rows = shots_report(prepared, [0, 3, 8], seed=0)
+
+    for question in prepared.questions:
+        points = [row for row in rows if row["question"] == question]
+        # всегда есть точка «все свои строки» (верхняя граница)
+        assert [row["shots"] for row in points] == [None, 0, 3, 8]
+        assert [row["n_own"] for row in points] == [10, 0, 3, 8]
+        for row in points:
+            # чужие вопросы плюс свои: тест не подмешивается
+            assert row["n_train"] == 20 + row["n_own"]
+            assert row["n_test"] == 7
+            assert 0.0 <= row["aurc"] <= 1.0
+
+
+def test_aggregate_shots_macro_averages_over_questions():
+    def row(shots, question, aurc):
+        return {
+            "variant": "v", "question": question, "seed": 0, "shots": shots,
+            "n_own": 4, "n_train": 24, "n_test": 7,
+            "aurc": aurc, "acc_at_0.7": 0.5,
+        }
+
+    rows = [
+        row(0, "q1", 0.2), row(0, "q2", 0.4),
+        row(None, "q1", 0.1), row(None, "q2", 0.3),
+    ]
+    by_shots = {entry["shots"]: entry for entry in aggregate_shots(rows)}
+    assert set(by_shots) == {0, None}
+    # макро-среднее по вопросам, а не по строкам
+    assert by_shots[0]["aurc"] == pytest.approx(0.3)
+    assert by_shots[None]["aurc"] == pytest.approx(0.2)
+
+
+def test_cli_shots_writes_curve(tmp_path, capsys):
+    main([
+        "--specs", "support", "--encoder", "hash", "--dim", "16",
+        "--limit", "120", "--train-steps", "30", "--seeds", "0",
+        "--shots", "0", "5", "--out-dir", str(tmp_path),
+    ])
+    out = capsys.readouterr().out
+    assert "сколько строк нового вопроса нужно" in out
+    assert "все (in-dist)" in out
+
+    payload = json.loads((tmp_path / "features.json").read_text(encoding="utf-8"))
+    assert {entry["shots"] for entry in payload["shots"]} == {None, 0, 5}
+    assert payload["shots_per_question"]
+    for row in payload["shots_per_question"]:
+        assert row["n_test"] > 0 and row["n_own"] <= row["n_train"]
+        assert 0.0 <= row["aurc"] <= 1.0
 
 
 def test_cli_loo_writes_per_question_metrics(tmp_path):

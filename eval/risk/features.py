@@ -33,6 +33,13 @@
 состояния», а не production-путь: в сервисе оценщик риска пока видит только
 `DecisionResult`.
 
+С `--shots` считается **кривая дообучения на новом вопросе**: риск-модель учится
+на валидации остальных вопросов плюс `n` случайных строк валидации самого вопроса,
+а оценивается на его тесте. `n = 0` — это перенос без своих данных (`--loo`), `n` =
+вся валидация вопроса — обучение на всех вопросах (верхняя граница, `in-dist`).
+Кривая отвечает на продуктовый вопрос: сколько размеченных примеров нового
+вопроса нужно, чтобы бюджет ошибок на нём заработал.
+
 Вариант `+option_similarity` измеряется, но в production не подключён: его
 выигрыш меньше, чем цена изменения схемы и API.
 
@@ -444,6 +451,66 @@ def run_loo(
     return rows
 
 
+def shots_report(
+    prepared: _Prepared,
+    shots: list[int],
+    *,
+    seed: int = 0,
+    C: float = 1.0,
+    variant: str = PRODUCTION_VARIANT,
+    shot_seed: int = 0,
+) -> list[dict[str, Any]]:
+    """Кривая «сколько строк нового вопроса нужно»: AURC на отложенном вопросе.
+
+    Для каждого вопроса обучение идёт на валидации **остальных** вопросов плюс
+    ``n`` строк валидации самого вопроса, оценка — на его тесте (тест не
+    трогается). Точки вложены: одни и те же ``n`` строк берутся в одном порядке,
+    поэтому рост кривой не объясняется случайной подменой примеров.
+
+    ``shots=None`` — все свои строки (обучение на всех вопросах, верхняя
+    граница), ``n = 0`` — перенос без своих данных (совпадает с ``--loo``).
+    """
+    val_matrix, test_matrix = prepared.variants[variant]
+    val_correct, test_correct = prepared.correct
+    val_groups = np.asarray(prepared.groups[0])
+    test_groups = np.asarray(prepared.groups[1])
+    c = _c_for(prepared, variant, C)
+
+    rows: list[dict[str, Any]] = []
+    for position, question in enumerate(prepared.questions):
+        own = np.flatnonzero(val_groups == question)
+        others = np.flatnonzero(val_groups != question)
+        test_rows = test_groups == question
+        subset_correct = test_correct[test_rows]
+        # один и тот же порядок строк для всех точек кривой: точки вложены
+        order = np.random.default_rng([shot_seed, position]).permutation(len(own))
+        for n in [None, *shots]:
+            picked = own if n is None else own[order[:n]]
+            train_rows = np.concatenate([others, picked])
+            scores = _scores(
+                val_matrix[train_rows],
+                test_matrix[test_rows],
+                val_correct[train_rows],
+                seed=seed,
+                C=c,
+            )
+            rows.append(
+                {
+                    "variant": variant,
+                    "question": question,
+                    "seed": seed,
+                    "shots": n,
+                    "n_own": len(picked),
+                    "n_train": len(train_rows),
+                    "n_test": int(test_rows.sum()),
+                    "aurc": aurc(scores, subset_correct),
+                    "acc_at_0.7": 1.0
+                    - risk_at_coverage(scores, subset_correct, 0.7),
+                }
+            )
+    return rows
+
+
 COLUMNS = ("aurc", "eaurc", "coverage_at_5pct_risk", "acc_at_0.7_coverage")
 
 
@@ -520,6 +587,56 @@ def print_loo_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
         )
 
 
+SHOT_COLUMNS = ("aurc", "acc_at_0.7", "n_own")
+
+
+def aggregate_shots(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Макро-среднее по вопросам, затем среднее и разброс по seed'ам."""
+    per_seed: dict[tuple[Any, int], list[dict[str, Any]]] = {}
+    for row in rows:
+        per_seed.setdefault((row["shots"], row["seed"]), []).append(row)
+
+    by_shots: dict[Any, list[dict[str, float]]] = {}
+    for (shots, _seed), group in per_seed.items():
+        by_shots.setdefault(shots, []).append(
+            {
+                column: float(np.mean([row[column] for row in group]))
+                for column in SHOT_COLUMNS
+            }
+        )
+
+    aggregated = []
+    for shots, entries in by_shots.items():
+        entry: dict[str, Any] = {"shots": shots, "n_seeds": len(entries)}
+        for column in SHOT_COLUMNS:
+            values = [item[column] for item in entries]
+            entry[column] = float(np.mean(values))
+            entry[f"{column}_std"] = float(np.std(values))
+        aggregated.append(entry)
+    return aggregated
+
+
+def _shots_order(entry: dict[str, Any]) -> tuple[int, float]:
+    """Числовые точки по возрастанию, «все свои строки» — последней."""
+    shots = entry["shots"]
+    return (1, 0.0) if shots is None else (0, float(shots))
+
+
+def print_shots_report(aggregated: list[dict[str, Any]], n_seeds: int) -> None:
+    """Кривая: AURC на новом вопросе против числа его размеченных строк."""
+    print(
+        f"\nсколько строк нового вопроса нужно (production, макро по вопросам "
+        f"± std over {n_seeds} seeds):"
+    )
+    print(f"{'своих строк':>13} {'AURC':>16} {'acc@0.7':>16} {'взято':>7}")
+    for entry in sorted(aggregated, key=_shots_order):
+        label = "все (in-dist)" if entry["shots"] is None else str(entry["shots"])
+        print(
+            f"{label:>13} {entry['aurc']:.4f}±{entry['aurc_std']:.4f} "
+            f"{entry['acc_at_0.7']:>16.4f} {entry['n_own']:>7.1f}"
+        )
+
+
 def print_loo_per_question(
     rows: list[dict[str, Any]],
     variant: str = PRODUCTION_VARIANT,
@@ -571,12 +688,18 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     parser.add_argument("--question", action="store_true",
                         help="добавить варианты с явным свободным членом на "
                              "вопрос: prod+question и no_n_classes+question")
+    parser.add_argument("--shots", type=int, nargs="+", default=None,
+                        help="кривая дообучения на новом вопросе: сколько строк "
+                             "валидации вопроса добавить в обучение (0 — перенос "
+                             "без своих данных; 0 включается всегда)")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
+    shots = None if not args.shots else sorted({0, *args.shots})
     specs = _specs(args.specs)
     rows_by_variant: dict[str, list[dict[str, float]]] = {}
     loo_rows: list[dict[str, Any]] = []
+    shots_rows: list[dict[str, Any]] = []
     for seed in args.seeds:
         splits = _load_splits(SimpleNamespace(
             specs=args.specs, dataset=None, limit=args.limit, seed=seed,
@@ -598,6 +721,8 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             rows_by_variant.setdefault(row["variant"], []).append(row)
         if args.loo:
             loo_rows.extend(run_loo(prepared, seed=seed, C=args.C))
+        if shots is not None:
+            shots_rows.extend(shots_report(prepared, shots, seed=seed, C=args.C))
         if seed == args.seeds[0]:
             print(f"specs={args.specs} encoder={args.encoder} "
                   f"train={len(train)} val={len(val)} test={len(test)}")
@@ -608,6 +733,8 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     if args.loo:
         print_loo_report(loo_aggregated, len(args.seeds))
         print_loo_per_question(loo_rows)
+    if shots is not None:
+        print_shots_report(aggregate_shots(shots_rows), len(args.seeds))
 
     if args.out_dir is not None:
         args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -623,6 +750,8 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
             "aggregate": aggregated,
             "loo": aggregate_loo(loo_rows) if args.loo else None,
             "loo_per_question": loo_rows,
+            "shots": aggregate_shots(shots_rows) if shots is not None else None,
+            "shots_per_question": shots_rows or None,
         }
         (args.out_dir / "features.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
