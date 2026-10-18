@@ -48,7 +48,6 @@ checkpoints/
 AGENTS.md
 agents.md
 ROADMAP.md
-scripts/bootstrap.sh
 sudo-requests/
 
 # Сторонний код, скопированный для знакомства (не часть проекта)

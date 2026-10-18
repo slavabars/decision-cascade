@@ -366,8 +366,8 @@ class RiskAwareCascadeBackend(CascadeBackend):
         ``correct`` — факт корректности решения (1/True = верно), как в
         ``training.recipe.risk``. Возвращает переобученную модель, если порог
         достигнут (она сразу используется для этого вопроса), иначе ``None``.
-        Без ``reference`` переобучение идёт только на своих примерах; схема
-        ROADMAP — {others + own_N}.
+        Без ``reference`` переобучение идёт только на своих примерах; схема —
+        {others + own_N}.
         """
         if self.few_shot_n is None:
             return None
