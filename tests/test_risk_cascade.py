@@ -2,6 +2,7 @@
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
 from src.backends.base import BackendResult, Capabilities
 from src.backends.cascade import RiskAwareCascadeBackend
@@ -50,6 +51,14 @@ def np_error_weights():
     import numpy as np
 
     return np.array([-20.0, 0.0, 0.0])
+
+
+@pytest.fixture(scope="module")
+def client():
+    from api.server.main import app
+
+    with TestClient(app) as c:
+        yield c
 
 
 def test_risk_cascade_escalates_low_confidence():
@@ -378,3 +387,234 @@ def test_gate_delta_relaxes_rejected_certificate(monkeypatch, tmp_path):
     relaxed = create_cascade_backend(DecisionService(seed=0))
     assert not relaxed.gate_rejected
     assert relaxed.escalation_reason == "risk"
+
+
+# --- Few-shot: транспорт примеров (``POST /v1/feedback``) ---------------------
+
+
+def test_accepts_feedback_follows_few_shot_threshold():
+    disabled = RiskAwareCascadeBackend(
+        _StubBackend("local", {}), _StubBackend("remote", {}), _risk_model()
+    )
+    assert not disabled.capabilities.accepts_feedback
+
+    enabled = RiskAwareCascadeBackend(
+        _StubBackend("local", {}),
+        _StubBackend("remote", {}),
+        _risk_model(),
+        few_shot_n=2,
+    )
+    assert enabled.capabilities.accepts_feedback
+
+
+def test_example_counts_accumulate_by_question():
+    cascade = RiskAwareCascadeBackend(
+        _StubBackend("local", {}),
+        _StubBackend("remote", {}),
+        _risk_model(),
+        few_shot_n=3,
+    )
+    assert cascade.example_counts == {}
+
+    cascade.add_examples("b", [_noul(0.55), _noul(0.56)], [True, True])
+    assert cascade.example_counts == {"b": 2}
+
+
+def test_reference_rows_default_to_other_questions():
+    from src.risk import FEATURE_NAMES
+
+    cascade = RiskAwareCascadeBackend(
+        _StubBackend("local", {}),
+        _StubBackend("remote", {}),
+        _risk_model(),
+        few_shot_n=2,
+    )
+    cascade.add_examples("a", [_noul(0.9), _noul(0.1)], [True, False])
+
+    # для "b" чужие строки — примеры "a" (та же схема, что у ``others`` офлайна)
+    features, labels = cascade.reference_rows("b")
+    assert features.shape == (2, len(FEATURE_NAMES))
+    assert labels == [1, 0]
+    # у "a" своих чужих строк нет — переобучение идёт только на своих
+    assert cascade.reference_rows("a") == (None, None)
+
+
+def test_explicit_reference_wins_over_accumulated():
+    import numpy as np
+
+    cascade = RiskAwareCascadeBackend(
+        _StubBackend("local", {}),
+        _StubBackend("remote", {}),
+        _risk_model(),
+        few_shot_n=2,
+        reference=(np.zeros((2, 6)), [0, 1]),
+    )
+    cascade.add_examples("a", [_noul(0.9)], [True])
+
+    features, labels = cascade.reference_rows("b")
+    assert labels == [0, 1]
+    assert not features.any()
+
+
+def test_add_examples_retrains_on_reference_plus_own():
+    import numpy as np
+
+    from src.risk import features_matrix
+
+    cascade = RiskAwareCascadeBackend(
+        _StubBackend("local", {}),
+        _StubBackend("remote", {}),
+        _risk_model(),
+        risk_budget=0.5,
+        few_shot_n=2,
+    )
+    own = [_noul(0.55), _noul(0.60)]
+    cascade.add_examples("a", [_noul(0.9)], [True])
+
+    model = cascade.add_examples("b", own, [True, False])
+
+    expected = _risk_model().retrained_with(
+        features_matrix(own),
+        np.array([1, 0]),
+        reference_features=features_matrix([_noul(0.9)]),
+        reference_labels=np.array([1]),
+    )
+    assert model.weights == pytest.approx(expected.weights)
+    assert model.bias == pytest.approx(expected.bias)
+
+
+def test_add_examples_is_thread_safe():
+    from concurrent.futures import ThreadPoolExecutor
+
+    cascade = RiskAwareCascadeBackend(
+        _StubBackend("local", {}),
+        _StubBackend("remote", {}),
+        _risk_model(),
+        few_shot_n=5,
+    )
+
+    def feed(index: int) -> None:
+        cascade.add_examples("b", [_noul(0.5 + 0.001 * (index % 10))], [index % 2 == 0])
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(feed, range(40)))
+
+    assert cascade.example_counts == {"b": 40}
+    assert len(cascade._few_shot_models["b"].weights) == 3
+
+
+def _feedback_payload(question: str, noul: float, correct: bool) -> dict:
+    return {
+        "examples": [
+            {
+                "question": question,
+                "decision": {
+                    "type": "noul",
+                    "noul": noul,
+                    "confidence": abs(2 * noul - 1),
+                },
+                "correct": correct,
+            }
+        ]
+    }
+
+
+def test_feedback_endpoint_rejected_without_feedback_backend(client):
+    resp = client.post(
+        "/v1/feedback", json=_feedback_payload("b", 0.55, True)
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "FEEDBACK_UNSUPPORTED"
+    assert client.get("/info").json()["accepts_feedback"] is False
+
+
+def test_feedback_endpoint_rejects_malformed_decision(client):
+    resp = client.post("/v1/feedback", json=_feedback_payload("b", 1.5, True))
+    assert resp.status_code == 422  # вероятность вне [0, 1] не копится в модель
+
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "examples": [
+                {
+                    "question": "b",
+                    "decision": {
+                        "type": "choice",
+                        "choice": "вне_списка",
+                        "probabilities": {"a": 0.7, "b": 0.3},
+                        "confidence": 0.7,
+                    },
+                    "correct": True,
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_feedback_endpoint_feeds_few_shot(monkeypatch):
+    from api.server import main
+
+    cascade = RiskAwareCascadeBackend(
+        _StubBackend("local", {}),
+        _StubBackend("remote", {}),
+        _risk_model(),
+        risk_budget=0.5,
+        few_shot_n=3,
+    )
+    monkeypatch.setattr(main, "backend", cascade)
+
+    with TestClient(main.app) as tc:
+        first = tc.post(
+            "/v1/feedback",
+            json={
+                "examples": [
+                    {
+                        "question": "b",
+                        "decision": {"type": "noul", "noul": 0.55, "confidence": 0.1},
+                        "correct": True,
+                    },
+                    {
+                        "question": "b",
+                        "decision": {"type": "noul", "noul": 0.60, "confidence": 0.2},
+                        "correct": False,
+                    },
+                    {
+                        "question": "a",
+                        "decision": {"type": "noul", "noul": 0.90, "confidence": 0.8},
+                        "correct": True,
+                    },
+                ]
+            },
+        )
+        assert first.status_code == 200
+        body = first.json()
+        assert body["accepted"] == 3
+        # ``reference`` — чужие строки, реально взятые в обучение этого вопроса:
+        # "b" обработан первым, примеров "a" ещё нет, а вот "a" уже видит два
+        # примера "b"
+        by_question = {row["question"]: row for row in body["questions"]}
+        assert by_question["b"] == {
+            "question": "b",
+            "accepted": 2,
+            "examples": 2,
+            "reference": 0,
+            "retrained": False,
+        }
+        assert by_question["a"] == {
+            "question": "a",
+            "accepted": 1,
+            "examples": 1,
+            "reference": 2,  # чужие строки — примеры вопроса "b"
+            "retrained": False,
+        }
+        assert cascade.few_shot_questions == []
+
+        # порог достигнут для "b" — модель переобучена на чужих + своих строках
+        second = tc.post("/v1/feedback", json=_feedback_payload("b", 0.65, True))
+        row = second.json()["questions"][0]
+        assert row["examples"] == 3 and row["retrained"] is True
+        assert row["reference"] == 1  # чужие строки — пример вопроса "a"
+        assert cascade.few_shot_questions == ["b"]
+        assert tc.get("/info").json()["accepts_feedback"] is True

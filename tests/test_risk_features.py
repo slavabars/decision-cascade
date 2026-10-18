@@ -366,6 +366,25 @@ def test_shots_report_takes_nested_subsets_of_validation_only():
             assert row["shot_seed"] == 0
 
 
+def test_shots_report_without_others_trains_only_on_own():
+    """Режим первого вопроса в сервисе: чужих строк нет, точка n=0 пропущена."""
+    prepared = _prepared_fixture()
+    rows = shots_report(prepared, [0, 3], seed=0, include_others=False)
+    with_others = shots_report(prepared, [0, 3], seed=0)
+
+    for question in prepared.questions:
+        points = [row for row in rows if row["question"] == question]
+        # n=0 без чужих строк — обучать не на чем, поэтому точки нет
+        assert [row["shots"] for row in points] == [None, 3]
+        for row in points:
+            assert row["n_train"] == row["n_own"]
+    # выборка строк не меняется: те же n_own, что и с чужими строками, — кривые
+    # двух режимов сопоставимы попарно по (question, shots)
+    assert [row["n_own"] for row in rows] == [
+        row["n_own"] for row in with_others if row["shots"] != 0
+    ]
+
+
 def test_shots_report_shot_seeds_vary_the_order_only():
     """Разные shot_seed — те же строки, другой порядок; n=0 и «все» не зависят."""
     prepared = _prepared_fixture()

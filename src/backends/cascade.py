@@ -6,6 +6,7 @@ SystemOne-сервис. Так экономится основная часть 
 """
 from __future__ import annotations
 
+import threading
 from typing import Any, Self
 
 from src.backends.base import (
@@ -17,7 +18,7 @@ from src.backends.base import (
     requested_modalities,
 )
 from src.errors import UntrainedDecisionError
-from src.risk import gate_verdict
+from src.risk import features_matrix, gate_verdict
 from src.sampler.questions import QuestionSpec
 
 DEFAULT_THRESHOLD = 0.6
@@ -303,9 +304,21 @@ class RiskAwareCascadeBackend(CascadeBackend):
     (numpy, CPU-only — см. ``src.risk.fit_logistic``); переобученная модель
     сразу применяется к этому вопросу. Hard gate остаётся жёстким: он проверяется
     на уровне каскада, и few-shot его не обходит — если сертификат отклонён,
-    работает ``confidence`` и для переобученного вопроса. Транспорт примеров (как
-    они попадают в сервис) — отдельное решение; пока это программный шов
-    (не потокобезопасен: накапливать примеры нужно из одного потока).
+    работает ``confidence`` и для переобученного вопроса.
+
+    Транспорт примеров — ``POST /v1/feedback`` (см. ``api/server/main.py``):
+    клиент присылает решения, которые сервис ему отдал, с разметкой корректности.
+    Пример — это ``(вопрос, решение, корректность)``: признаки риск-модели
+    выводятся из одного решения (``src.risk.decision_features``), поэтому
+    достаточно повторить решение. Копилка — на экземпляре каскада, доступ к ней
+    закрыт блокировкой (``example_counts``/``add_examples``/``reference_rows``
+    потокобезопасны).
+
+    ``reference`` по умолчанию строится из **накопленных примеров других
+    вопросов** — тот же смысл, что у ``others`` в офлайновой кривой few-shot
+    (``eval.risk.features.shots_report``), то есть сервис воспроизводит
+    измеренную схему {чужие строки + свои}. Явно переданный ``reference`` имеет
+    приоритет над выводом из копилки.
     """
 
     def __init__(
@@ -345,7 +358,16 @@ class RiskAwareCascadeBackend(CascadeBackend):
         self.reference = reference
         self._examples: dict[str, list[tuple[Any, bool]]] = {}
         self._few_shot_models: dict[str, Any] = {}
+        # Копилка примеров и переобученные модели правятся из эндпоинта фидбэка,
+        # который FastAPI выполняет в threadpool, — общий доступ прикрываем.
+        self._lock = threading.RLock()
         self.name = f"risk-cascade[{primary.name}->{fallback.name}]"
+        # Фидбэк осмыслен, только когда few-shot включён: иначе примеры некуда
+        # применить (``add_examples`` — no-op).
+        self.capabilities = Capabilities(
+            modalities=self.capabilities.modalities,
+            accepts_feedback=self.few_shot_n is not None,
+        )
 
     @property
     def escalation_reason(self) -> str | None:
@@ -356,7 +378,17 @@ class RiskAwareCascadeBackend(CascadeBackend):
     @property
     def few_shot_questions(self) -> list[str]:
         """Вопросы, для которых уже переобучена few-shot модель."""
-        return sorted(self._few_shot_models)
+        with self._lock:
+            return sorted(self._few_shot_models)
+
+    @property
+    def example_counts(self) -> dict[str, int]:
+        """Сколько размеченных примеров накоплено по каждому вопросу."""
+        with self._lock:
+            return {
+                question: len(bucket)
+                for question, bucket in self._examples.items()
+            }
 
     def add_examples(
         self, question: str, decisions: list[Any], correct: list[Any]
@@ -366,8 +398,9 @@ class RiskAwareCascadeBackend(CascadeBackend):
         ``correct`` — факт корректности решения (1/True = верно), как в
         ``training.recipe.risk``. Возвращает переобученную модель, если порог
         достигнут (она сразу используется для этого вопроса), иначе ``None``.
-        Без ``reference`` переобучение идёт только на своих примерах; схема —
-        {others + own_N}.
+        Блокировка держится на всё тело метода: приём примеров и чтение копилки
+        идут из разных потоков (эндпоинт фидбэка против решений), поэтому
+        копить и обучать нужно во взаимно исключающем порядке.
         """
         if self.few_shot_n is None:
             return None
@@ -375,28 +408,60 @@ class RiskAwareCascadeBackend(CascadeBackend):
         correct = list(correct)
         if len(decisions) != len(correct):
             raise ValueError("decisions and correct must have the same length")
-        bucket = self._examples.setdefault(question, [])
-        bucket.extend(zip(decisions, correct))
-        if len(bucket) < self.few_shot_n:
-            return None
-        from src.risk import features_matrix
+        with self._lock:
+            bucket = self._examples.setdefault(question, [])
+            bucket.extend(zip(decisions, correct))
+            if len(bucket) < self.few_shot_n:
+                return None
+            own_features = features_matrix([decision for decision, _ in bucket])
+            own_labels = [1 if flag else 0 for _, flag in bucket]
+            reference_features, reference_labels = self.reference_rows(question)
+            model = self.risk_model.retrained_with(
+                own_features,
+                own_labels,
+                reference_features=reference_features,
+                reference_labels=reference_labels,
+            )
+            self._few_shot_models[question] = model
+            return model
 
-        own_features = features_matrix([decision for decision, _ in bucket])
-        own_labels = [1 if flag else 0 for _, flag in bucket]
-        reference_features = reference_labels = None
+    def reference_rows(self, question: str) -> tuple[Any, Any] | tuple[None, None]:
+        """Строки «чужих» вопросов под схему {``reference`` + свои}.
+
+        Явно переданный ``reference`` (матрица признаков и метки отложенного
+        набора, на которых обучена базовая модель) имеет приоритет. Иначе роль
+        чужих строк играют накопленные примеры **других** вопросов — тот же смысл,
+        что у ``others`` в офлайновой кривой few-shot
+        (``eval.risk.features.shots_report``), поэтому в сервисе воспроизводится
+        именно измеренная схема, а не упрощённая. Пока чужих примеров нет,
+        возвращается ``(None, None)`` и обучение идёт только на своих
+        (см. ``ErrorRiskModel.retrained_with``) — режим измерен отдельно
+        (см. ``docs/risk-aware-cascade.md``, «Нужны ли чужие строки»): он хуже,
+        пока своих примеров мало, поэтому эндпоинт фидбэка отдаёт размер
+        ``reference``, чтобы режим был виден клиенту.
+
+        Публичный: и ``add_examples`` (под блокировкой), и эндпоинт фидбэка
+        читают копилку — метод защищает её сам, ``RLock`` реентерабельна.
+        """
         if self.reference is not None:
-            reference_features, reference_labels = self.reference
-        model = self.risk_model.retrained_with(
-            own_features,
-            own_labels,
-            reference_features=reference_features,
-            reference_labels=reference_labels,
+            return self.reference
+        with self._lock:
+            others = [
+                (decision, flag)
+                for name, bucket in self._examples.items()
+                if name != question
+                for decision, flag in bucket
+            ]
+        if not others:
+            return None, None
+        return (
+            features_matrix([decision for decision, _ in others]),
+            [1 if flag else 0 for _, flag in others],
         )
-        self._few_shot_models[question] = model
-        return model
 
     def _model_for(self, question: str) -> Any:
-        return self._few_shot_models.get(question, self.risk_model)
+        with self._lock:
+            return self._few_shot_models.get(question, self.risk_model)
 
     def _escalate(self, model: Any, decision: Any) -> bool:
         if self.gate_rejected:

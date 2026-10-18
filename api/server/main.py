@@ -332,6 +332,63 @@ class BatchDecisionResponse(BaseModel):
     trained: bool | None = None
 
 
+class FeedbackExample(BaseModel):
+    """Размеченный пример: решение, которое отдал сервис, и его корректность."""
+
+    question: str = Field(..., min_length=1)
+    decision: Annotated[DecisionResult, Field(discriminator="type")]
+    correct: bool
+
+    @model_validator(mode="after")
+    def _decision_is_well_formed(self) -> FeedbackExample:
+        """Решение должно быть таким, какое ядро вправе выдать.
+
+        Примеры попадают в копилку риск-модели, поэтому негодное значение
+        (вероятность вне [0, 1], распределение, не суммирующееся в единицу,
+        исход вне списка вариантов) отклоняем сразу, а не учим на нём.
+        """
+        decision = self.decision
+        confidence = decision.confidence
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError(f"confidence must be in [0.0, 1.0], got {confidence}")
+        if decision.type == "noul" and not 0.0 <= decision.noul <= 1.0:
+            raise ValueError(f"noul must be in [0.0, 1.0], got {decision.noul}")
+        probabilities = getattr(decision, "probabilities", None)
+        if probabilities:
+            if any(value < 0.0 for value in probabilities.values()):
+                raise ValueError("probabilities must be non-negative")
+            total = sum(probabilities.values())
+            if abs(total - 1.0) > 1e-6:
+                raise ValueError(f"probabilities must sum to 1.0, got {total}")
+            if decision.type == "choice" and decision.choice not in probabilities:
+                raise ValueError(
+                    f"choice must be one of the probability keys, got {decision.choice!r}"
+                )
+        return self
+
+
+class FeedbackRequest(BaseModel):
+    examples: list[FeedbackExample] = Field(..., min_length=1, max_length=1024)
+
+
+class FeedbackQuestionReport(BaseModel):
+    question: str
+    #: примеров принято в этом запросе
+    accepted: int
+    #: всего примеров накоплено по вопросу (после этого запроса)
+    examples: int
+    #: чужих строк (примеров других вопросов), на которых дообучена модель;
+    #: 0 — обучение только на своих, см. docs/risk-aware-cascade.md
+    reference: int
+    #: порог few-shot достигнут и риск-модель по вопросу переобучена
+    retrained: bool
+
+
+class FeedbackResponse(BaseModel):
+    accepted: int
+    questions: list[FeedbackQuestionReport]
+
+
 def _batch_trained(usages: list[dict[str, Any]]) -> bool | None:
     """Сводный статус батча: ``False`` — если хоть где-то не обучены, иначе ``True``/``None``."""
     values = [usage.get("trained") for usage in usages]
@@ -352,6 +409,24 @@ def _untrained_response(exc: UntrainedDecisionError) -> JSONResponse:
                 "message": str(exc),
                 "signature": exc.signature,
                 "checkpoint_dir": exc.checkpoint_dir,
+            }
+        },
+    )
+
+
+def _feedback_unsupported() -> JSONResponse:
+    """409: бэкенд не принимает обратную связь — few-shot выключен или риск-модели нет."""
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": {
+                "code": "FEEDBACK_UNSUPPORTED",
+                "message": (
+                    "backend does not accept labelled examples; few-shot risk "
+                    "retraining requires a risk-aware cascade "
+                    "(DECISION_BACKEND=cascade with DECISION_CASCADE_RISK_BUDGET "
+                    "and DECISION_RISK_FEW_SHOT_N >= 2)"
+                ),
             }
         },
     )
@@ -437,6 +512,64 @@ def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse |
     )
 
 
+@app.post("/v1/feedback", response_model=FeedbackResponse)
+def submit_feedback(req: FeedbackRequest) -> FeedbackResponse | JSONResponse:
+    """Размеченные примеры решений -> few-shot дообучение риск-модели под вопрос.
+
+    Транспорт примеров для риск-модели (``add_examples`` риск-каскада): клиент
+    повторяет решение, которое отдал сервис, и говорит, было ли оно верным.
+    Пример относится к вопросу по его имени — тому же, что в запросе решений.
+    Достигнув ``DECISION_RISK_FEW_SHOT_N`` примеров, каскад переобучает
+    риск-модель вопроса (схема {чужие строки + свои}) и применяет её к нему же;
+    hard gate при этом не ослабляется.
+
+    В ответе по каждому вопросу: ``examples`` — сколько примеров накоплено после
+    запроса, ``reference`` — сколько чужих строк (примеров других вопросов)
+    ушло в обучение. ``reference = 0`` — вырожденный режим «только свои»: он
+    измерен и хуже, пока своих примеров мало (см. docs/risk-aware-cascade.md),
+    поэтому копить примеры лучше по нескольким вопросам.
+
+    Отвечает ``409 FEEDBACK_UNSUPPORTED``, если бэкенд не принимает обратную
+    связь: риск-каскад не выбран или few-shot выключен
+    (``DECISION_RISK_FEW_SHOT_N`` < 2).
+    """
+    if not backend.capabilities.accepts_feedback:
+        return _feedback_unsupported()
+    add_examples = getattr(backend, "add_examples", None)
+    if not callable(add_examples):
+        return _feedback_unsupported()
+    grouped: dict[str, list[FeedbackExample]] = {}
+    for example in req.examples:
+        grouped.setdefault(example.question, []).append(example)
+    # ``example_counts`` — снимок до этого запроса: из него и получаем «после»
+    counts = getattr(backend, "example_counts", {})
+    reference_rows = getattr(backend, "reference_rows", None)
+    reports: list[FeedbackQuestionReport] = []
+    for question, examples in grouped.items():
+        # чужие строки считаем до приёма примеров: ровно они уйдут в обучение
+        n_reference = 0
+        if callable(reference_rows):
+            features, _labels = reference_rows(question)
+            n_reference = 0 if features is None else len(features)
+        retrained = add_examples(
+            question,
+            [example.decision for example in examples],
+            [example.correct for example in examples],
+        )
+        reports.append(
+            FeedbackQuestionReport(
+                question=question,
+                accepted=len(examples),
+                examples=int(counts.get(question, 0)) + len(examples),
+                reference=n_reference,
+                retrained=retrained is not None,
+            )
+        )
+    return FeedbackResponse(
+        accepted=sum(report.accepted for report in reports), questions=reports
+    )
+
+
 @app.get("/info")
 def get_info() -> dict[str, Any]:
     """Конфигурация сервиса: бэкенд, модальности и статус локальных голов."""
@@ -444,6 +577,8 @@ def get_info() -> dict[str, Any]:
         "version": __version__,
         "backend": backend.name,
         "modalities": sorted(backend.capabilities.modalities),
+        # принимает ли бэкенд обратную связь (few-shot риск-модели, /v1/feedback)
+        "accepts_feedback": backend.capabilities.accepts_feedback,
         "engine": _engine_info(backend),
     }
 

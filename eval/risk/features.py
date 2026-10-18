@@ -615,6 +615,7 @@ def shots_report(
     variant: str = PRODUCTION_VARIANT,
     baseline: str = "confidence",
     shot_seeds: Sequence[int] = (0,),
+    include_others: bool = True,
 ) -> list[dict[str, Any]]:
     """Кривая «сколько строк нового вопроса нужно»: AURC на отложенном вопросе.
 
@@ -622,6 +623,13 @@ def shots_report(
     ``n`` строк валидации самого вопроса, оценка — на его тесте (тест не
     трогается). Точки вложены: одни и те же ``n`` строк берутся в одном порядке,
     поэтому рост кривой не объясняется случайной подменой примеров.
+
+    ``include_others=False`` убирает чужие строки: обучение только на своих
+    ``n`` строках. Это режим **первого** вопроса в сервисе, когда примеров других
+    вопросов ещё нет (см. ``RiskAwareCascadeBackend._reference_rows``); точка
+    ``n=0`` в этом режиме пропускается — обучать не на чем. Выборка строк при этом
+    не меняется, поэтому кривые двух режимов попарно сопоставимы по
+    ``(seed, shot_seed, вопрос, n)``.
 
     Для каждой точки считаются метрики и варианта ``variant``, и ``baseline`` —
     с ними потом работает hard gate (см. `gate_vs_baseline`,
@@ -651,7 +659,11 @@ def shots_report(
             order = np.random.default_rng([shot_seed, position]).permutation(len(own))
             for n in [None, *shots]:
                 picked = own if n is None else own[order[:n]]
-                train_rows = np.concatenate([others, picked])
+                if n == 0 and not include_others:
+                    continue  # без чужих строк n=0 — обучение на пустой выборке
+                train_rows = (
+                    picked if not include_others else np.concatenate([others, picked])
+                )
                 for name in candidates:
                     val_matrix, test_matrix = prepared.variants[name]
                     scores = _scores(
@@ -1163,6 +1175,11 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
     parser.add_argument("--shot-seeds", type=int, nargs="+", default=[0],
                         help="случайные порядки выбора своих строк: усредняем по "
                              "ним, чтобы кривая не зависела от удачного выбора")
+    parser.add_argument("--shots-no-others", action="store_true",
+                        help="кривая без чужих строк: обучать риск-модель только "
+                             "на своих n строках вопроса — режим первого вопроса "
+                             "в сервисе, когда примеров других вопросов ещё нет "
+                             "(точка n=0 в этом режиме не считается)")
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -1199,6 +1216,7 @@ def main(argv: list[str] | None = None) -> list[dict[str, Any]]:
                 shots_report(
                     prepared, shots, seed=seed, C=args.C,
                     shot_seeds=args.shot_seeds,
+                    include_others=not args.shots_no_others,
                 )
             )
         if seed == args.seeds[0]:

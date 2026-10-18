@@ -43,6 +43,19 @@ class _Response(BaseModel):
     decisions: dict[str, _Out]
 
 
+class _FeedbackQuestion(BaseModel):
+    question: str
+    accepted: int = Field(..., ge=0)
+    examples: int = Field(..., ge=0)
+    reference: int = Field(..., ge=0)
+    retrained: bool
+
+
+class _FeedbackResponse(BaseModel):
+    accepted: int = Field(..., ge=0)
+    questions: list[_FeedbackQuestion]
+
+
 def validate_response(payload: dict[str, Any]) -> list[str] | None:
     """Проверяет ответ API на соответствие типизированному контракту.
 
@@ -85,6 +98,23 @@ class DecisionClient:
         resp.raise_for_status()
         body = resp.json()
         validate_response(body)
+        return body
+
+    def feedback(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        """Прислать размеченные примеры решений (few-shot риск-модели).
+
+        ``examples`` — список вида
+        ``{"question": ..., "decision": <решение из decisions()>, "correct": bool}``:
+        повторяется именно решение, которое сервер уже отдавал, состояние кодировать
+        заново не нужно. В ответе — сколько примеров накоплено по вопросу и не
+        достигнут ли порог `DECISION_RISK_FEW_SHOT_N` (тогда риск-модель вопроса
+        переобучена). Если бэкенд обратную связь не принимает, сервер отвечает
+        ``409 FEEDBACK_UNSUPPORTED`` — это ``httpx.HTTPStatusError``.
+        """
+        resp = self._client.post("/v1/feedback", json={"examples": examples})
+        resp.raise_for_status()
+        body = resp.json()
+        _FeedbackResponse.model_validate(body)
         return body
 
     def close(self) -> None:

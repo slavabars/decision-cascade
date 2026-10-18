@@ -22,9 +22,13 @@ VIDEO = "video"
 
 @dataclass(frozen=True)
 class Capabilities:
-    """Поддерживаемые модальности входа; по умолчанию только текст."""
+    """Что умеет бэкенд: модальности входа и приём размеченных примеров."""
 
     modalities: frozenset[str] = field(default_factory=lambda: frozenset({TEXT}))
+    #: Принимает ли бэкенд обратную связь — размеченные примеры решений
+    #: (``POST /v1/feedback``) для few-shot дообучения риск-модели под вопрос.
+    #: ``False`` у всего, что не имеет риск-модели: примеры некуда применить.
+    accepts_feedback: bool = False
 
 
 @dataclass

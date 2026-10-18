@@ -128,3 +128,71 @@ def test_sdk_rejects_malformed_version():
     malformed["schema_version"] = "not-a-version"
     with pytest.raises(ValueError, match="schema_version"):
         validate_response(malformed)
+
+
+def test_sdk_feedback_request_and_validate():
+    import json
+
+    from api.sdk.client import DecisionClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/feedback"
+        sent = json.loads(request.content)
+        assert sent["examples"][0]["correct"] is False
+        return httpx.Response(
+            200,
+            json={
+                "accepted": 1,
+                "questions": [
+                    {
+                        "question": "c",
+                        "accepted": 1,
+                        "examples": 3,
+                        "reference": 12,
+                        "retrained": True,
+                    }
+                ],
+            },
+        )
+
+    client = DecisionClient(transport=httpx.MockTransport(handler))
+    body = client.feedback(
+        [
+            {
+                "question": "c",
+                "decision": {
+                    "type": "choice",
+                    "choice": "x",
+                    "probabilities": {"x": 0.6, "y": 0.4},
+                    "confidence": 0.6,
+                },
+                "correct": False,
+            }
+        ]
+    )
+    assert body["accepted"] == 1
+    assert body["questions"][0]["retrained"] is True
+    client.close()
+
+
+def test_sdk_feedback_surfaces_unsupported_backend():
+    import json
+
+    from api.sdk.client import DecisionClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["examples"]
+        return httpx.Response(
+            409, json={"error": {"code": "FEEDBACK_UNSUPPORTED", "message": "…"}}
+        )
+
+    client = DecisionClient(transport=httpx.MockTransport(handler))
+    example = {
+        "question": "u",
+        "decision": {"type": "noul", "noul": 0.5, "confidence": 0.0},
+        "correct": True,
+    }
+    with pytest.raises(httpx.HTTPStatusError) as exc:
+        client.feedback([example])
+    assert exc.value.response.status_code == 409
+    client.close()

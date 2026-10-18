@@ -9,6 +9,9 @@
 Оценщик риска обучается на синтетическом отложенном наборе прямо в примере —
 чтобы пример был полностью офлайн и без скачивания весов.
 
+В конце пример показывает few-shot: как размеченные примеры подключают риск-модель
+к конкретному вопросу (в сервисе это ``POST /v1/feedback``).
+
 Запуск:
 
     .venv/bin/python examples/cascade/risk_aware.py --budget 0.3
@@ -21,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.backends.base import BackendResult, Capabilities
 from src.backends.cascade import CascadeBackend, RiskAwareCascadeBackend
+from src.risk import ErrorRiskModel
 from src.sampler.questions import NoulSpec
 from src.schemas import NoulResult
 from training.recipe.risk import fit_error_risk_model
@@ -132,6 +136,37 @@ def main() -> None:
         f"бюджет {args.budget}: эскалировано "
         f"{risk_result.usage['escalated']} из {len(questions)} "
         f"(P(ошибка) > {args.budget}, reason={risk_result.usage.get('reason')})"
+    )
+
+    _few_shot_demo(primary, model)
+
+
+def _few_shot_demo(primary: StubPrimary, model: ErrorRiskModel) -> None:
+    """Разметка новых примеров -> риск-модель вопроса переобучается.
+
+    Тот же шов, что в сервисе: примеры приходят через ``POST /v1/feedback``,
+    здесь — программно через ``add_examples``. Набрав порог примеров, каскад
+    переобучает риск-модель по схеме {чужие строки + свои} и применяет её только
+    к своему вопросу. Hard gate при этом не ослабляется (см. docs).
+    """
+    decisions, correct = _training_set()
+    few_shot = RiskAwareCascadeBackend(
+        primary, StubFallback(), model, risk_budget=0.3, few_shot_n=2
+    )
+    print(f"\nразмеченные примеры (порог few_shot_n={few_shot.few_shot_n}):")
+    for question in ("q4-спорный", "q3-спорный"):
+        for decision, is_correct in zip(decisions[:2], correct[:2]):
+            model_q = few_shot.add_examples(question, [decision], [is_correct])
+            counts = few_shot.example_counts
+            rows, _labels = few_shot.reference_rows(question)
+            reference = 0 if rows is None else len(rows)
+            print(
+                f"  {question}: примеров {counts[question]}, чужих строк "
+                f"{reference}, модель {'переобучена' if model_q else 'базовая'}"
+            )
+    print(
+        "  первая пачка шла без чужих строк — обучение только на своих: "
+        "измеримо хуже, пока примеров мало (см. docs/risk-aware-cascade.md)"
     )
 
 
