@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-28
+
+### Added
+
+- **Обновление `q` по обратной связи**: `POST /v1/feedback` для benefit-каскада
+  уточняет точность внешней модели по вопросу. Каскад помнит отпечатки решений,
+  ушедших наружу, и учитывает только их; оценка сдвигается байесовски с весом
+  `DECISION_CASCADE_FEEDBACK_SHRINKAGE` (50 псевдонаблюдений), новое `q`
+  приходит в ответе полем `remote_accuracy`. Ответы локальных голов оценку не
+  меняют, переобучения нет (`retrained = false`).
+
+### Fixed
+
+- **Нормализация вероятностей внешнего сервиса** (`answer_to_result`): Laya
+  отдаёт распределение, округлённое до четырёх знаков (сумма 1.0001). Сервис
+  принимал такое решение, а собственный `/v1/feedback` отклонял его с 422 —
+  клиент не мог вернуть нам решение, которое мы же ему отдали. Теперь
+  `choice`/`score` нормализуются на входе.
+
 ## [0.9.0] — 2026-10-28
 
 ### Added
@@ -20,12 +39,6 @@
   RouterBench эскалировал 33% решений, теряя 2.7 п.п.; с границей он не
   эскалирует вовсе. На AG News benefit обходит лучший порог уверенности
   (0.910–0.915 против 0.890).
-- **Обновление `q` по обратной связи**: `POST /v1/feedback` для benefit-каскада
-  уточняет точность внешней модели по вопросу. Каскад помнит отпечатки решений,
-  ушедших наружу, и учитывает только их; оценка сдвигается байесовски с весом
-  `DECISION_CASCADE_FEEDBACK_SHRINKAGE` (50 псевдонаблюдений), новое `q`
-  приходит в ответе полем `remote_accuracy`. Ответы локальных голов оценку не
-  меняют, переобучения нет (`retrained = false`).
 - **Измерение точности внешней модели по вопросам**
   (`eval/competitors/fit_remote_accuracy.py`): гоняет внешний сервис по
   train-срезу домена и пишет `accuracy`, `per_question` и их нижние границы
@@ -492,7 +505,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/slavabars/decision-cascade/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/slavabars/decision-cascade/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/slavabars/decision-cascade/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.7.0
