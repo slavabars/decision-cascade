@@ -146,6 +146,11 @@ def main(argv: list[str] | None = None) -> dict:
     heads.cpu()
     encoder_dir = encoder.save_pretrained(out_dir / "encoder")
     heads_path = heads.save_checkpoint(out_dir / "heads.pt")
+    # Сервис ищет головы по подписи вопросов (``<signature>.pt``), как в паках
+    # ``train_heads``: без копии каталог дообучения не поднимается сервером.
+    signature_path = heads.save_checkpoint(
+        out_dir / f"{questions_signature(specs)}.pt"
+    )
     if trainer.error_head is not None:
         torch.save(
             trainer.error_head.state_dict(), out_dir / "error_head.pt"
@@ -190,6 +195,7 @@ def main(argv: list[str] | None = None) -> dict:
 
     print(f"encoder  -> {encoder_dir}")
     print(f"heads    -> {heads_path}")
+    print(f"signature-> {signature_path}")
     print(f"metadata -> {meta_path}")
     for name, report in metrics.items():
         n_examples = len(test) if name == "test" else len(splits[name])
