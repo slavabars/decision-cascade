@@ -24,7 +24,7 @@
   тогда остаётся `T = 1.0`). Замер: ECE на
   test падает с 0.547 до 0.024 (`route`, RouterBench) и с 0.144 до 0.024
   (`topic`, AG News); каскад после калибровки даёт +3.4 п.п. на `support` и
-  +2.3 п.п. на `public` (см. `docs/competitor-benchmark.md`).
+  +1.7 п.п. на `public` (см. `docs/competitor-benchmark.md`).
 - **Пак `routerbench-gpt2` и `--specs routerbench` в рецептах**:
   `training/recipe/train_heads.py` и `calibrate_rlcd.py` принимают RouterBench
   (`--shot 0shot|5shot`), `train_weight_packs.sh` обучает матрицу
