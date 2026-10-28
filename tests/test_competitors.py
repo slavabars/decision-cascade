@@ -183,3 +183,51 @@ def test_choice_probabilities_feed_brier_and_ece():
     assert report["questions"]["c"]["accuracy"] == 1.0
     assert report["questions"]["c"]["brier"] == pytest.approx(0.0, abs=1e-9)
     assert report["questions"]["c"]["ece"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_run_benefit_policy_writes_policy_and_cascade(tmp_path):
+    import json
+
+    from eval.competitors.run import main
+
+    out = tmp_path / "benefit.json"
+    main(
+        [
+            "--specs",
+            "support",
+            "--limit",
+            "8",
+            "--mock",
+            "--policy",
+            "benefit",
+            "--remote-accuracy",
+            "0.9",
+            "--out",
+            str(out),
+        ]
+    )
+
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["policy"] == "benefit"
+    assert payload["escalation_cost"] == pytest.approx(0.05)
+    names = [report["name"] for report in payload["reports"]]
+    assert any(name.startswith("benefit-cascade[") for name in names)
+
+
+def test_run_benefit_policy_requires_remote_accuracy(tmp_path):
+    from eval.competitors.run import main
+
+    with pytest.raises(SystemExit, match="remote-accuracy"):
+        main(
+            [
+                "--specs",
+                "support",
+                "--limit",
+                "4",
+                "--mock",
+                "--policy",
+                "benefit",
+                "--out",
+                str(tmp_path / "x.json"),
+            ]
+        )

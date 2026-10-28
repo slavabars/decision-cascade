@@ -19,6 +19,8 @@
 #   ENCODER=openai-community/gpt2, DIM=768, DEVICE=cuda, MAX_LENGTH=256
 #   SKIP_TRAIN=1                     не обучать/не калибровать паки
 #   SKIP_CLEF=1 | SKIP_LAYA=1        не поднимать участника
+#   BENEFIT=1                        ещё и benefit-aware каскад (q на train-срезе)
+#   FIT_N=200                         размер среза для измерения q
 #
 # Пример:
 #   CLEF_GGUF=/tmp/opencode/competitors/llama/clef-q4km.gguf \
@@ -196,6 +198,31 @@ for spec in "${spec_list[@]}"; do
     --checkpoint-dir "$(pack_for "$spec")" --device "$device" --sweep \
     --out "$out/${spec}_pack_${name}_sweep.json"
 done
+
+# Benefit-aware политика: q (точность внешней модели по вопросам) снимается на
+# train-срезе домена, каскад эскалирует только там, где выгода больше цены.
+if [[ "${BENEFIT:-0}" == "1" ]]; then
+  echo "== benefit-aware каскад (q на train, нижняя граница Уилсона)"
+  fit_n="${FIT_N:-200}"
+  for spec in "${spec_list[@]}"; do
+    ckpt="$(pack_for "$spec")"
+    lim="$(limit_for "$spec")"
+    for r in "${remotes[@]}"; do
+      name="${r%%=*}"
+      echo "▶ q $spec vs $name (n=$fit_n)"
+      "$python_bin" -m eval.competitors.fit_remote_accuracy --specs "$spec" \
+        --limit "$fit_n" --remote "$r" \
+        --out "$out/${spec}_${name}_accuracy.json"
+      echo "▶ benefit $spec vs $name"
+      "$python_bin" -m eval.competitors.run --specs "$spec" --limit "$lim" \
+        --remote "$r" --encoder "$encoder" --dim "$dim" \
+        --checkpoint-dir "$ckpt" --device "$device" \
+        --policy benefit --remote-accuracy "$out/${spec}_${name}_accuracy.json" \
+        --remote-accuracy-bound lower \
+        --out "$out/${spec}_pack_${name}_benefit.json"
+    done
+  done
+fi
 
 echo
 echo "Готово. Отчёты:"

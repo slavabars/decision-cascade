@@ -34,6 +34,7 @@ from eval.datasets.routerbench import ROUTERBENCH_FILES
 from eval.datasets.text_dataset import QUESTIONS as SUPPORT_QUESTIONS
 from eval.datasets.text_dataset import generate_examples, spec_from_api
 from src.backends.base import Backend
+from src.backends.benefit import BenefitAwareCascadeBackend, load_remote_accuracy
 from src.backends.cascade import CascadeBackend
 from src.backends.http import HttpSystemOneBackend
 from src.backends.local import LocalHeadsBackend
@@ -119,6 +120,42 @@ def _threshold_grid(points: int) -> list[float]:
     return [i / (points - 1) for i in range(points)]
 
 
+def _remote_accuracy(args) -> float | dict[str, float]:
+    """Кэшированный ``q`` для benefit-политики (число или JSON от fit-скрипта)."""
+    if getattr(args, "_remote_accuracy", None) is None:
+        if not args.remote_accuracy:
+            raise SystemExit(
+                "--policy benefit requires --remote-accuracy "
+                "(число или JSON из eval.competitors.fit_remote_accuracy)"
+            )
+        args._remote_accuracy = load_remote_accuracy(
+            args.remote_accuracy,
+            conservative=args.remote_accuracy_bound == "lower",
+        )
+    return args._remote_accuracy
+
+
+def _build_cascade(
+    args, local: Backend, fallback: Backend, parameter: float | None = None
+) -> CascadeBackend:
+    """Каскад заданной политики; ``parameter`` — порог или цена эскалации."""
+    if args.policy == "benefit":
+        return BenefitAwareCascadeBackend(
+            local,
+            fallback,
+            _remote_accuracy(args),
+            escalation_cost=(
+                args.escalation_cost if parameter is None else parameter
+            ),
+            error_cost=args.error_cost,
+        )
+    return CascadeBackend(
+        local,
+        fallback,
+        threshold=args.threshold if parameter is None else parameter,
+    )
+
+
 def _sweep_cascade(
     args,
     local: Backend,
@@ -126,16 +163,20 @@ def _sweep_cascade(
     specs: dict[str, QuestionSpec],
     examples: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Кривая «качество против доли эскалаций»: порог от 0.0 до 1.0."""
+    """Кривая «качество против доли эскалаций».
+
+    Для ``--policy confidence`` параметр — порог уверенности, для
+    ``--policy benefit`` — цена эскалации (в единицах «верный ответ = 1»).
+    """
     rows: list[dict[str, Any]] = []
-    for threshold in _threshold_grid(args.sweep_points):
-        cascade = CascadeBackend(local, fallback, threshold=threshold)
+    for parameter in _threshold_grid(args.sweep_points):
+        cascade = _build_cascade(args, local, fallback, parameter)
         report = evaluate_backend(
             specs, examples, cascade.decide, name=cascade.name, warmup=0
         )
         rows.append(
             {
-                "threshold": threshold,
+                "threshold": parameter,
                 "overall_accuracy": report["overall_accuracy"],
                 "escalation_rate": report["escalation_rate"],
                 "requests_with_escalation": report["requests_with_escalation"],
@@ -159,9 +200,10 @@ def _print_table(reports: list[dict[str, Any]]) -> None:
         )
 
 
-def _print_sweep(fallback_name: str, rows: list[dict[str, Any]]) -> None:
-    print(f"cascade sweep -> {fallback_name}")
-    print(f"{'threshold':>9} {'acc':>7} {'esc%':>7} {'p50ms':>8}")
+def _print_sweep(fallback_name: str, rows: list[dict[str, Any]], policy: str) -> None:
+    parameter = "cost" if policy == "benefit" else "threshold"
+    print(f"cascade sweep -> {fallback_name} ({policy})")
+    print(f"{parameter:>9} {'acc':>7} {'esc%':>7} {'p50ms':>8}")
     for row in rows:
         print(
             f"{row['threshold']:>9.2f} {row['overall_accuracy']:>7.3f} "
@@ -178,6 +220,44 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--threshold", type=float, default=0.6)
+    parser.add_argument(
+        "--policy",
+        choices=["confidence", "benefit"],
+        default="confidence",
+        help=(
+            "правило эскалации: порог уверенности или ожидаемая выгода "
+            "(нужен --remote-accuracy)"
+        ),
+    )
+    parser.add_argument(
+        "--remote-accuracy",
+        default="",
+        help=(
+            "точность внешней модели q: число или JSON из "
+            "eval.competitors.fit_remote_accuracy (per_question)"
+        ),
+    )
+    parser.add_argument(
+        "--remote-accuracy-bound",
+        choices=["point", "lower"],
+        default="point",
+        help=(
+            "точечная q или её нижняя граница Уилсона (консервативно: "
+            "меньше вредных эскалаций на шумной оценке)"
+        ),
+    )
+    parser.add_argument(
+        "--escalation-cost",
+        type=float,
+        default=0.05,
+        help="цена эскалации C в единицах «верный ответ = 1»",
+    )
+    parser.add_argument(
+        "--error-cost",
+        type=float,
+        default=1.0,
+        help="цена ошибки D относительно верного ответа",
+    )
     parser.add_argument("--mock", action="store_true", help="добавить mock-конкурента")
     parser.add_argument("--mock-latency-ms", type=float, default=0.0)
     parser.add_argument(
@@ -213,7 +293,12 @@ def main(argv: list[str] | None = None) -> None:
     examples = _examples(args.specs, args.limit, args.seed, args.shot)
     print(
         f"specs={args.specs} n={len(examples)} questions={len(specs)} "
-        f"threshold={args.threshold}"
+        f"policy={args.policy} "
+        + (
+            f"escalation_cost={args.escalation_cost} "
+            if args.policy == "benefit"
+            else f"threshold={args.threshold} "
+        )
     )
 
     local = _local_backend(args)
@@ -221,9 +306,10 @@ def main(argv: list[str] | None = None) -> None:
     targets: list[Backend] = [local, *fallbacks]
     primary_fallback = fallbacks[0] if fallbacks else None
     if primary_fallback is not None and not args.sweep:
-        targets.append(
-            CascadeBackend(local, primary_fallback, threshold=args.threshold)
-        )
+        targets.append(_build_cascade(args, local, primary_fallback))
+    if args.policy == "benefit":
+        # q нужен и для отчёта, и для sweep — падаем сразу, а не после прогона
+        _remote_accuracy(args)
 
     reports = []
     sweep_rows: list[dict[str, Any]] = []
@@ -245,15 +331,20 @@ def main(argv: list[str] | None = None) -> None:
 
     _print_table(reports)
     if sweep_rows:
-        _print_sweep(primary_fallback.name, sweep_rows)
+        _print_sweep(primary_fallback.name, sweep_rows, args.policy)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "specs": args.specs,
         "n": len(examples),
+        "policy": args.policy,
         "threshold": args.threshold,
         "reports": reports,
     }
+    if args.policy == "benefit":
+        payload["escalation_cost"] = args.escalation_cost
+        payload["error_cost"] = args.error_cost
+        payload["remote_accuracy"] = _remote_accuracy(args)
     if sweep_rows:
         payload["cascade_sweep"] = {
             "fallback": primary_fallback.name,
