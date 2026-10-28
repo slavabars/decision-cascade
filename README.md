@@ -363,6 +363,35 @@ DECISION_CASCADE_FALLBACK_URL=http://127.0.0.1:30000 \
 эскалации, которые ухудшают ответ (см. `docs/competitor-benchmark.md`).
 Причина эскалации в `usage` — `"benefit"`.
 
+**Обновление `q` по обратной связи.** Срез, снятый при развёртывании, стареет,
+поэтому `q` уточняется реальными ответами внешней модели через тот же
+`POST /v1/feedback`. Каскад помнит отпечатки решений, которые ушли наружу, и
+учитывает фидбэк только по ним (ответы локальных голов качество внешней модели не
+характеризуют). Оценка сдвигается плавно:
+
+```text
+q_new = (q_prior * W + верных) / (W + всего),  W = DECISION_CASCADE_FEEDBACK_SHRINKAGE (50)
+```
+
+```bash
+DECISION_BACKEND=cascade DECISION_CASCADE_POLICY=benefit DECISION_CASCADE_REMOTE_ACCURACY=data/public_laya_accuracy.json DECISION_CASCADE_FEEDBACK_SHRINKAGE=50 DECISION_CASCADE_FALLBACK_URL=http://127.0.0.1:30000   uvicorn api.server.main:app --port 8000
+
+curl -s -X POST http://127.0.0.1:8000/v1/feedback -H 'Content-Type: application/json' \
+  -d '{"examples": [{"question": "topic",
+        "decision": {"type": "choice", "choice": "Business",
+                     "probabilities": {"World": 0.02, "Sports": 0.01,
+                                       "Business": 0.93, "Sci/Tech": 0.04},
+                     "confidence": 0.93},
+        "correct": true}]}'
+# -> {"questions": [{"question": "topic", "examples": 1,
+#                    "retrained": false, "remote_accuracy": 0.9577, ...}]}
+```
+
+`retrained = false` — модель не переобучается, меняется только оценка качества
+внешней модели; новое `q` сразу применяется к следующим решениям. `W` — это
+сколько наблюдений нужно, чтобы сдвинуть оценку: 50 (по умолчанию) — поток
+фидбэка меняет политику за десятки ответов, пара случайных — нет.
+
 **Подстройка под новый вопрос (`POST /v1/feedback`).** На новом вопросе
 коэффициенты, снятые с других вопросов, работают хуже — модель нужно переобучать
 на примерах этого вопроса. Сервис принимает обратную связь: вы повторяете решение,
