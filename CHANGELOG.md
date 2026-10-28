@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-29
+
 ### Added
 
 - **Отчёт по test-сплиту в `finetune_encoder`**: рецепт дообучения энкодера
@@ -520,7 +522,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/slavabars/decision-cascade/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/slavabars/decision-cascade/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/slavabars/decision-cascade/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/slavabars/decision-cascade/compare/v0.7.0...v0.8.0
