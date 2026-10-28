@@ -6,8 +6,41 @@
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-28
+
 ### Added
 
+- **Температурная калибровка голов** (`training/recipe/calibrate_temperature.py`):
+  `T` подбирается по NLL на отложенном val и делит логиты перед
+  softmax/sigmoid. Argmax не меняется, поэтому accuracy остаётся прежней, а
+  вероятности становятся честными; без этого головы переуверены
+  (`confidence ≈ 1.0`) и каскад не эскалирует вовсе. Температура хранится в
+  чекпоинте полем `"temperature"` рядом с `state_dict`, применяется сервером и
+  замерным харнессом автоматически, старые чекпоинты без поля читаются как
+  `T = 1.0`. Нижняя граница сетки — `T = 1.0`: калибровка только смягчает, иначе
+  идеальное разделение на маленьком val даёт уверенность 1.0. Замер: ECE на
+  test падает с 0.547 до 0.024 (`route`, RouterBench) и с 0.144 до 0.024
+  (`topic`, AG News); каскад после калибровки даёт +3.4 п.п. на `support` и
+  +2.5 п.п. на `public` (см. `docs/competitor-benchmark.md`).
+- **Пак `routerbench-gpt2` и `--specs routerbench` в рецептах**:
+  `training/recipe/train_heads.py` и `calibrate_rlcd.py` принимают RouterBench
+  (`--shot 0shot|5shot`), `train_weight_packs.sh` обучает матрицу
+  `{support, public, routerbench} × {gpt2, distilgpt2, gpt2-medium}`. Пак
+  RouterBench 0-shot, gpt2, n=4000: test acc 0.548.
+- **Фасад под реальные релизы конкурентов** (`eval/competitors/release.py`):
+  Laya (`Router.predict`), Clef-Flash в transformers (`joint_schema_model`) и
+  Clef-Flash в llama.cpp (`--base-url` к `llama-server`) поднимаются как
+  `POST /v1/systemone`, поэтому `eval.competitors.run --remote` меряет их теми
+  же метриками, что и наши головы. Фасад переводит `options`/`levels` в
+  `criteria` и возвращает `score`-вероятности по названиям уровней. В
+  `docs/competitor-benchmark.md` — зафиксированные прогоны на `support`,
+  AG News и RouterBench (Clef-Flash 0.855 и Laya 0.662 против 0.857 у наших
+  голов, обученных на AG News).
+- **Скрипт воспроизведения сравнения** (`eval/competitors/reproduce_real.sh`):
+  поднимает `llama-server` с GGUF Clef-Flash, фасад Clef и Laya, при
+  необходимости обучает и калибрует паки, гоняет три набора и три `--sweep`,
+  складывает JSON в `OUT` и гасит участников по `trap`. Числа из
+  `docs/competitor-benchmark.md` воспроизводятся этой командой.
 - **Дообучение энкодера состояния** (`training/finetune/`, рецепт
   `training/recipe/finetune_encoder.py`): энкодеры получили путь с градиентом
   (`encode_trainable`, `set_trainable`, `trainable_parameters`,
@@ -426,7 +459,9 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/slavabars/decision-cascade/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.7.0
 [0.6.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.6.0
 [0.4.0]: https://github.com/slavabars/decision-cascade/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/slavabars/decision-cascade/compare/v0.2.0...v0.3.0
