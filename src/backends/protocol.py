@@ -8,7 +8,13 @@ from __future__ import annotations
 from typing import Any
 
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
-from src.schemas import ChoiceResult, DecisionResult, NoulResult, ScoreResult
+from src.schemas import (
+    ChoiceResult,
+    DecisionResult,
+    NoulResult,
+    ScoreResult,
+    normalize_probabilities,
+)
 
 
 def result_to_answer(result: DecisionResult) -> dict[str, Any]:
@@ -49,15 +55,18 @@ def answer_to_result(answer: dict[str, Any]) -> DecisionResult:
             confidence = abs(2.0 * float(probability) - 1.0)
         return NoulResult(noul=float(probability), confidence=float(confidence))
     if kind == "choice":
+        # Внешний сервис может прислать вероятности, округлённые до 4 знаков
+        # (сумма 1.0001): нормализуем сразу, иначе собственный /v1/feedback
+        # отклонит решение, которое клиент нам же и вернул.
         return ChoiceResult(
             choice=answer["choice"],
-            probabilities=dict(answer["probabilities"]),
+            probabilities=normalize_probabilities(dict(answer["probabilities"])),
             confidence=float(answer["confidence"]),
         )
     if kind == "score":
         return ScoreResult(
             score=float(answer["score"]),
-            probabilities=dict(answer["probabilities"]),
+            probabilities=normalize_probabilities(dict(answer["probabilities"])),
             confidence=float(answer["confidence"]),
             legend=tuple(answer["legend"]),
         )

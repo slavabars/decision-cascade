@@ -236,3 +236,38 @@ def test_create_backend_selects_http(monkeypatch):
     backend = main.create_backend()
     assert isinstance(backend, HttpSystemOneBackend)
     assert "video" in backend.capabilities.modalities
+
+
+def test_answer_to_result_normalizes_rounded_probabilities():
+    from src.backends.protocol import answer_to_result
+
+    choice = answer_to_result(
+        {
+            "type": "choice",
+            "choice": "Business",
+            "probabilities": {
+                "World": 0.0016,
+                "Sports": 0.0003,
+                "Business": 0.8241,
+                "Sci/Tech": 0.1741,
+            },
+            "confidence": 0.8241,
+        }
+    )
+    assert sum(choice.probabilities.values()) == pytest.approx(1.0)
+    assert choice.probabilities["Business"] == pytest.approx(0.8241, abs=1e-3)
+
+
+def test_answer_to_result_normalizes_score_probabilities():
+    from src.backends.protocol import answer_to_result
+
+    score = answer_to_result(
+        {
+            "type": "score",
+            "score": 1.0,
+            "probabilities": {"low": 0.0016, "medium": 0.8241, "high": 0.1741},
+            "confidence": 0.8241,
+            "legend": ["low", "medium", "high"],
+        }
+    )
+    assert sum(score.probabilities.values()) == pytest.approx(1.0)
