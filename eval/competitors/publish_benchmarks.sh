@@ -36,11 +36,28 @@ root="$stage/${tag}-benchmarks"
 mkdir -p "$root/benchmarks" "$root/calibration"
 
 count=0
+# В data/ остаются прогоны прошлых итераций; в артефакт берём только файлы
+# текущих участников, чтобы числа в архиве совпадали с docs/competitor-benchmark.md.
+IFS=',' read -r -a participants <<< "${PARTICIPANTS:-clef-flash,laya}"
 for f in "$data_dir"/*.json; do
   [[ -f "$f" ]] || continue
+  name="$(basename "$f")"
+  keep=1
+  for p in "${participants[@]}"; do
+    [[ "$name" == *_pack_"$p"* ]] && { keep=0; break; }
+  done
+  [[ "$keep" == "1" ]] && continue
   cp "$f" "$root/benchmarks/"
   count=$((count + 1))
 done
+if [[ "$count" -eq 0 ]]; then
+  echo "не нашёл прогонов участников (${participants[*]}) в $data_dir, беру все" >&2
+  for f in "$data_dir"/*.json; do
+    [[ -f "$f" ]] || continue
+    cp "$f" "$root/benchmarks/"
+    count=$((count + 1))
+  done
+fi
 [[ "$count" -gt 0 ]] || {
   echo "в $data_dir нет json-отчётов" >&2
   exit 1
