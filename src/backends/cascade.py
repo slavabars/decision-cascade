@@ -97,6 +97,14 @@ class CascadeBackend:
     def _uncertain_names(self, decisions: dict) -> list[str]:
         return [name for name, d in decisions.items() if self._uncertain(d)]
 
+    def _on_escalated(self, decisions: dict) -> None:
+        """Хук после ответа внешней модели: что именно ушло наружу.
+
+        Базовому каскаду учитывать нечего; benefit-aware политике это нужно,
+        чтобы связать пришедшую позже обратную связь с ответом fallback
+        (``add_examples`` в ``src/backends/benefit.py``).
+        """
+
     @property
     def escalation_reason(self) -> str | None:
         """Причина эскалации для ``usage`` (у базового каскада — не фиксируется)."""
@@ -120,6 +128,7 @@ class CascadeBackend:
                 videos=videos,
                 media_kwargs=media_kwargs,
             )
+            self._on_escalated(result.decisions)
             usage = self._merge_usage({}, result.usage, len(questions), reason="modality")
             return BackendResult(decisions=dict(result.decisions), usage=usage)
 
@@ -137,6 +146,7 @@ class CascadeBackend:
                 videos=videos,
                 media_kwargs=media_kwargs,
             )
+            self._on_escalated(result.decisions)
             usage = self._merge_usage(
                 {}, result.usage, len(questions), reason="untrained"
             )
@@ -153,6 +163,7 @@ class CascadeBackend:
         fallback_result = self.fallback.decide(
             state, subset, images=images, videos=videos, media_kwargs=media_kwargs
         )
+        self._on_escalated(fallback_result.decisions)
         merged = dict(primary_result.decisions)
         merged.update(fallback_result.decisions)
         usage = self._merge_usage(
@@ -192,7 +203,7 @@ class CascadeBackend:
                         {}, result.usage, len(questions), reason="modality"
                     ),
                 )
-                for result in fallback_results
+                for result in self._record_many(fallback_results)
             ]
 
         try:
@@ -222,7 +233,7 @@ class CascadeBackend:
                         {}, result.usage, len(questions), reason="untrained"
                     ),
                 )
-                for result in fallback_results
+                for result in self._record_many(fallback_results)
             ]
         results: list[BackendResult] = []
         for state, primary_result in zip(states, primary_results):
@@ -238,6 +249,7 @@ class CascadeBackend:
             fallback_result = self.fallback.decide(
                 state, subset, images=images, videos=videos, media_kwargs=media_kwargs
             )
+            self._on_escalated(fallback_result.decisions)
             merged = dict(primary_result.decisions)
             merged.update(fallback_result.decisions)
             results.append(
@@ -251,6 +263,12 @@ class CascadeBackend:
                     ),
                 )
             )
+        return results
+
+    def _record_many(self, results: list[BackendResult]) -> list[BackendResult]:
+        """Отметить решения батча, ушедшие наружу целиком."""
+        for result in results:
+            self._on_escalated(result.decisions)
         return results
 
     @staticmethod

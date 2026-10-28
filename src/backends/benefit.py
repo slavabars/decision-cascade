@@ -26,13 +26,32 @@
 from __future__ import annotations
 
 import json
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Any
 
+from src.backends.base import Capabilities
 from src.backends.cascade import CascadeBackend
 
 DEFAULT_ESCALATION_COST = 0.05
 DEFAULT_ERROR_COST = 1.0
+#: Вес априорной ``q`` в псевдонаблюдениях: обратная связь сдвигает её плавно.
+DEFAULT_FEEDBACK_SHRINKAGE = 50.0
+#: Сколько последних эскалаций на вопрос помнить для сопоставления с фидбэком.
+DEFAULT_LEDGER_SIZE = 4096
+
+
+def decision_fingerprint(decision: Any) -> tuple[str, Any, float]:
+    """Отпечаток решения: по нему фидбэк сопоставляется с ответом fallback."""
+    kind = decision.type
+    if kind == "noul":
+        value: Any = round(float(decision.noul), 6)
+    elif kind == "choice":
+        value = decision.choice
+    else:
+        value = round(float(decision.score), 6)
+    return (kind, value, round(float(decision.confidence), 6))
 
 
 def load_remote_accuracy(
@@ -100,6 +119,8 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         *,
         escalation_cost: float = DEFAULT_ESCALATION_COST,
         error_cost: float = DEFAULT_ERROR_COST,
+        feedback_shrinkage: float = DEFAULT_FEEDBACK_SHRINKAGE,
+        ledger_size: int = DEFAULT_LEDGER_SIZE,
     ):
         if escalation_cost < 0.0:
             raise ValueError(
@@ -107,6 +128,12 @@ class BenefitAwareCascadeBackend(CascadeBackend):
             )
         if error_cost < 0.0:
             raise ValueError(f"error_cost must be >= 0, got {error_cost}")
+        if feedback_shrinkage <= 0.0:
+            raise ValueError(
+                f"feedback_shrinkage must be > 0, got {feedback_shrinkage}"
+            )
+        if ledger_size <= 0:
+            raise ValueError(f"ledger_size must be > 0, got {ledger_size}")
         if isinstance(remote_accuracy, dict):
             if not remote_accuracy:
                 raise ValueError("remote_accuracy dict must not be empty")
@@ -130,14 +157,81 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         super().__init__(primary, fallback, threshold=0.0)
         self.escalation_cost = float(escalation_cost)
         self.error_cost = float(error_cost)
+        self.feedback_shrinkage = float(feedback_shrinkage)
+        self.ledger_size = int(ledger_size)
         self.name = f"benefit-cascade[{primary.name}->{fallback.name}]"
+        # Обратная связь по ответам внешней модели: отпечатки выданных наружу
+        # решений (чтобы связать фидбэк с fallback) и счётчики «верно/всего».
+        self._remote_log: dict[str, deque[tuple[str, Any, float]]] = {}
+        self._observed: dict[str, list[int]] = {}
+        self._lock = threading.RLock()
+        self.capabilities = Capabilities(
+            modalities=self.capabilities.modalities, accepts_feedback=True
+        )
 
     @property
     def escalation_reason(self) -> str | None:
         return "benefit"
 
     def remote_accuracy_for(self, question: str) -> float:
-        return self.remote_accuracy.get(question, self.default_remote_accuracy)
+        """``q`` для вопроса: априорная точность, сдвинутая обратной связью.
+
+        Сдвиг байесовский: априорная ``q`` весит ``feedback_shrinkage``
+        псевдонаблюдений, поэтому пара случайных ответов политику не меняет, а
+        поток фидбэка — меняет. Так политика перестаёт опираться на срез,
+        снятый один раз при развёртывании.
+        """
+        prior = self.remote_accuracy.get(question, self.default_remote_accuracy)
+        with self._lock:
+            correct, total = self._observed.get(question, [0, 0])
+        if total == 0:
+            return prior
+        weight = self.feedback_shrinkage
+        return (prior * weight + correct) / (weight + total)
+
+    @property
+    def example_counts(self) -> dict[str, int]:
+        """Сколько размеченных ответов внешней модели накоплено по вопросам."""
+        with self._lock:
+            return {name: stats[1] for name, stats in self._observed.items()}
+
+    def add_examples(
+        self, question: str, decisions: list[Any], correct: list[Any]
+    ) -> None:
+        """Учесть корректность ответов, которые отдала внешняя модель.
+
+        Фидбэк относится к решению, которое сервис вернул клиенту. Внешним оно
+        было, только если отпечаток решения есть в журнале эскалаций: ответы
+        локальных голов ``q`` не обновляют (они не про качество внешней модели).
+        Каждое выданное решение учитывается один раз — отпечаток из журнала
+        удаляется.
+        """
+        decisions = list(decisions)
+        correct = list(correct)
+        if len(decisions) != len(correct):
+            raise ValueError("decisions and correct must have the same length")
+        with self._lock:
+            ledger = self._remote_log.get(question)
+            if not ledger:
+                return
+            for decision, flag in zip(decisions, correct):
+                fingerprint = decision_fingerprint(decision)
+                try:
+                    ledger.remove(fingerprint)
+                except ValueError:
+                    continue
+                stats = self._observed.setdefault(question, [0, 0])
+                stats[0] += 1 if flag else 0
+                stats[1] += 1
+
+    def _on_escalated(self, decisions: dict) -> None:
+        with self._lock:
+            for name, decision in decisions.items():
+                ledger = self._remote_log.get(name)
+                if ledger is None:
+                    ledger = deque(maxlen=self.ledger_size)
+                    self._remote_log[name] = ledger
+                ledger.append(decision_fingerprint(decision))
 
     def threshold_for(self, question: str) -> float:
         """``p``, ниже которого эскалация выгодна: ``q - C / (1 + D)``."""

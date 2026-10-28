@@ -200,7 +200,10 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     ``DECISION_CASCADE_REMOTE_ACCURACY`` (число или JSON, снятый
     ``python -m eval.competitors.fit_remote_accuracy``), цена эскалации — из
     ``DECISION_CASCADE_ESCALATION_COST`` (0.05), цена ошибки — из
-    ``DECISION_CASCADE_ERROR_COST`` (1.0). Политика benefit важнее risk-бюджета.
+    ``DECISION_CASCADE_ERROR_COST`` (1.0). Обратная связь (``POST /v1/feedback``)
+    уточняет ``q`` по реальным ответам внешней модели: вес априорной оценки в
+    псевдонаблюдениях — ``DECISION_CASCADE_FEEDBACK_SHRINKAGE`` (50). Политика
+    benefit важнее risk-бюджета.
     """
     url = os.environ.get("DECISION_CASCADE_FALLBACK_URL")
     if not url:
@@ -244,6 +247,9 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
                 os.environ.get("DECISION_CASCADE_ESCALATION_COST", "0.05")
             ),
             error_cost=float(os.environ.get("DECISION_CASCADE_ERROR_COST", "1.0")),
+            feedback_shrinkage=float(
+                os.environ.get("DECISION_CASCADE_FEEDBACK_SHRINKAGE", "50")
+            ),
         )
     risk_budget = os.environ.get("DECISION_CASCADE_RISK_BUDGET")
     if risk_budget is not None:
@@ -419,6 +425,9 @@ class FeedbackQuestionReport(BaseModel):
     reference: int
     #: порог few-shot достигнут и риск-модель по вопросу переобучена
     retrained: bool
+    #: обновлённая точность внешней модели по вопросу (benefit-каскад);
+    #: ``None``, если бэкенд не ведёт такую оценку
+    remote_accuracy: float | None = None
 
 
 class FeedbackResponse(BaseModel):
@@ -549,7 +558,9 @@ def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse |
     )
 
 
-@app.post("/v1/feedback", response_model=FeedbackResponse)
+@app.post(
+    "/v1/feedback", response_model=FeedbackResponse, response_model_exclude_none=True
+)
 def submit_feedback(req: FeedbackRequest) -> FeedbackResponse | JSONResponse:
     """Размеченные примеры решений -> few-shot дообучение риск-модели под вопрос.
 
@@ -566,9 +577,15 @@ def submit_feedback(req: FeedbackRequest) -> FeedbackResponse | JSONResponse:
     измерен и хуже, пока своих примеров мало (см. docs/risk-aware-cascade.md),
     поэтому копить примеры лучше по нескольким вопросам.
 
+    Benefit-каскад (``DECISION_CASCADE_POLICY=benefit``) использует тот же
+    транспорт иначе: он не переобучает модель, а уточняет точность внешней
+    модели по вопросу ``q`` — только для решений, которые действительно ушли
+    наружу (ответы локальных голов ``q`` не меняют). По вопросу в ответе
+    приходит обновлённая ``remote_accuracy``.
+
     Отвечает ``409 FEEDBACK_UNSUPPORTED``, если бэкенд не принимает обратную
-    связь: риск-каскад не выбран или few-shot выключен
-    (``DECISION_RISK_FEW_SHOT_N`` < 2).
+    связь: каскад не выбран, риск-вариант с few-shot выключен
+    (``DECISION_RISK_FEW_SHOT_N`` < 2) или это обычный порог уверенности.
     """
     if not backend.capabilities.accepts_feedback:
         return _feedback_unsupported()
@@ -581,6 +598,7 @@ def submit_feedback(req: FeedbackRequest) -> FeedbackResponse | JSONResponse:
     # ``example_counts`` — снимок до этого запроса: из него и получаем «после»
     counts = getattr(backend, "example_counts", {})
     reference_rows = getattr(backend, "reference_rows", None)
+    remote_accuracy_for = getattr(backend, "remote_accuracy_for", None)
     reports: list[FeedbackQuestionReport] = []
     for question, examples in grouped.items():
         # чужие строки считаем до приёма примеров: ровно они уйдут в обучение
@@ -593,13 +611,23 @@ def submit_feedback(req: FeedbackRequest) -> FeedbackResponse | JSONResponse:
             [example.decision for example in examples],
             [example.correct for example in examples],
         )
+        # Копилку читаем после приёма: benefit-каскад считает не все присланные
+        # примеры, а только те, что относятся к ответам внешней модели.
+        after_counts = getattr(backend, "example_counts", {})
         reports.append(
             FeedbackQuestionReport(
                 question=question,
                 accepted=len(examples),
-                examples=int(counts.get(question, 0)) + len(examples),
+                examples=int(
+                    after_counts.get(question, int(counts.get(question, 0)) + len(examples))
+                ),
                 reference=n_reference,
                 retrained=retrained is not None,
+                remote_accuracy=(
+                    float(remote_accuracy_for(question))
+                    if callable(remote_accuracy_for)
+                    else None
+                ),
             )
         )
     return FeedbackResponse(

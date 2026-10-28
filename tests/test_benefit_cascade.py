@@ -205,3 +205,80 @@ def test_load_remote_accuracy_conservative_uses_lower_bound(tmp_path):
         "business": pytest.approx(0.40),
     }
     assert load_remote_accuracy(str(path))["topic"] == pytest.approx(0.86)
+
+
+def test_benefit_feedback_updates_q_only_for_escalated_answers():
+    primary = _StubBackend("local", {"a": 0.95, "b": 0.40})
+    fallback = _StubBackend("remote", {"a": 0.0, "b": 0.99})
+    cascade = BenefitAwareCascadeBackend(primary, fallback, 0.9, escalation_cost=0.05)
+
+    assert cascade.capabilities.accepts_feedback is True
+    result = cascade.decide("s", _questions(["a", "b"]))
+    assert cascade.example_counts == {}
+
+    remote_decision = result.decisions["b"]
+    cascade.add_examples("b", [remote_decision], [True])
+
+    assert cascade.example_counts == {"b": 1}
+    prior, weight = 0.9, cascade.feedback_shrinkage
+    assert cascade.remote_accuracy_for("b") == pytest.approx(
+        (prior * weight + 1) / (weight + 1)
+    )
+    # ответ локальной головы качество внешней модели не характеризует
+    cascade.add_examples("a", [result.decisions["a"]], [False])
+    assert cascade.example_counts == {"b": 1}
+    # повторный фидбэк по тому же выданному решению не считается дважды
+    cascade.add_examples("b", [remote_decision], [True])
+    assert cascade.example_counts == {"b": 1}
+    # у вопроса без наблюдений q остаётся априорной
+    assert cascade.remote_accuracy_for("c") == pytest.approx(0.9)
+
+
+def test_benefit_feedback_can_stop_escalation():
+    # q падает ниже локальной уверенности -> политика перестаёт платить за вызов
+    primary = _StubBackend("local", {"a": 0.5})
+    fallback = _StubBackend("remote", {"a": 0.99})
+    cascade = BenefitAwareCascadeBackend(
+        primary, fallback, 0.9, escalation_cost=0.0, feedback_shrinkage=1.0
+    )
+    assert cascade.decide("s", _questions(["a"])).usage["escalated"] == 1
+
+    cascade.add_examples("a", [fallback.decide("s", _questions(["a"])).decisions["a"]], [False])
+
+    assert cascade.remote_accuracy_for("a") == pytest.approx(0.45)
+    assert cascade.decide("s", _questions(["a"])).usage["escalated"] == 0
+
+
+def test_feedback_endpoint_reports_remote_accuracy(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api.server import main
+
+    primary = _StubBackend("local", {"a": 0.40})
+    fallback = _StubBackend("remote", {"a": 0.99})
+    cascade = BenefitAwareCascadeBackend(primary, fallback, 0.9, escalation_cost=0.05)
+    result = cascade.decide("s", _questions(["a"]))
+    monkeypatch.setattr(main, "backend", cascade)
+
+    payload = {
+        "examples": [
+            {
+                "question": "a",
+                "decision": {"type": "noul", "noul": 0.99, "confidence": 0.99},
+                "correct": True,
+            }
+        ]
+    }
+    with TestClient(main.app) as tc:
+        response = tc.post("/v1/feedback", json=payload)
+        # повтор того же фидбэка не должен раздувать счётчик принятых ответов
+        again = tc.post("/v1/feedback", json=payload)
+
+    assert response.status_code == 200
+    row = response.json()["questions"][0]
+    assert row["question"] == "a"
+    assert row["examples"] == 1
+    assert row["retrained"] is False
+    assert row["remote_accuracy"] == pytest.approx(cascade.remote_accuracy_for("a"))
+    assert again.json()["questions"][0]["examples"] == 1
+    assert result.usage["escalated"] == 1
