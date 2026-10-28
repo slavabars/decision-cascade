@@ -814,8 +814,9 @@ SFTTrainer(heads, lr=0.1).fit(
 `checkpoints/packs/<dataset>-<model>/`, пригодный как `DECISION_CHECKPOINT_DIR`:
 
 ```bash
-# {support, public} x {gpt2, distilgpt2, gpt2-medium}. Переопределяется окружением:
-# SUPPORT_N/SUPPORT_STEPS/SUPPORT_RLCD, PUBLIC_LIMIT/PUBLIC_STEPS/PUBLIC_RLCD,
+# {support, public, routerbench} x {gpt2, distilgpt2, gpt2-medium}. Переопределяется
+# окружением: SUPPORT_N/SUPPORT_STEPS/SUPPORT_RLCD, PUBLIC_LIMIT/PUBLIC_STEPS/PUBLIC_RLCD,
+# ROUTERBENCH_LIMIT/ROUTERBENCH_STEPS/ROUTERBENCH_RLCD/ROUTERBENCH_SHOT,
 # PACKS_ROOT, DECISION_DEVICE, DECISION_DTYPE.
 bash training/recipe/train_weight_packs.sh
 ```
@@ -852,6 +853,37 @@ RLCD-калибровка `noul`-голов на реальных признак
 | `public-gpt2` | gpt2 | 768 | AG News, n=4000 | 0.880 |
 | `public-distilgpt2` | distilgpt2 | 768 | AG News, n=4000 | 0.879 |
 | `public-gpt2-medium` | gpt2-medium | 1024 | AG News, n=4000 | 0.873 |
+| `routerbench-gpt2` | gpt2 | 768 | RouterBench 0-shot, n=4000 | 0.548 |
+
+Пак `routerbench-gpt2` собирается тем же рецептом
+(`--specs routerbench --limit 4000 --train-steps 500 --rlcd-steps 200`) и в
+архив `v0.2.0` не входит — это следующий релиз. На нём же снято сравнение с
+Clef-Flash и Laya: 0.542 против 0.442 и 0.312 (n=200, см.
+`docs/competitor-benchmark.md`). Метка `escalate` в RouterBench
+контрфактическая, поэтому абсолютные числа низкие у всех участников: 0.775 —
+тривиальная константа «всегда да».
+
+После обучения пак калибруется по температуре (`--specs` и тот же
+`--checkpoint-dir`): `T` подбирается по NLL на val, делит логиты перед
+softmax/sigmoid и **не меняет** argmax, то есть accuracy остаётся прежней, а
+вероятности становятся честными. Без этого головы переуверены (`confidence ≈
+1.0`), и каскад не эскалирует вовсе.
+
+```bash
+.venv/bin/python -m training.recipe.calibrate_temperature --specs routerbench \
+  --encoder openai-community/gpt2 --dim 768 --limit 4000 \
+  --checkpoint-dir checkpoints/packs/routerbench-gpt2
+# -> temperature.json + heads.pt с полем temperature
+```
+
+Температура хранится в чекпоинте (`"temperature"` рядом с `state_dict`),
+поэтому сервер и замерный харнесс применяют её автоматически; старые
+чекпоинты без этого поля читаются как `T = 1.0`. Значение никогда не
+опускается ниже 1.0 — калибровка только смягчает вероятности. На
+`routerbench-gpt2` это снижает ECE с 0.547 до 0.024 (`route`), на
+`public-gpt2` — с 0.144 до 0.024 (`topic`); после неё каскад даёт +3.4 п.п. на
+`support` и +2.5 п.п. на `public` (подробности — в
+`docs/competitor-benchmark.md`).
 
 ```bash
 tar -xzf v0.2.0-weights.tar.gz               # -> v0.2.0-weights/<pack>/
