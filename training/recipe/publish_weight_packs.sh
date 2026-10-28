@@ -49,6 +49,7 @@ for meta_path in sorted(root.glob("*/metadata.json")):
         "specs": meta.get("specs"),
         "dataset_name": meta.get("dataset_name"),
         "questions_signature": meta.get("questions_signature"),
+        "temperature": meta.get("temperature"),
         "metrics": {
             name: report.get("overall_accuracy")
             for name, report in meta.get("metrics", {}).items()

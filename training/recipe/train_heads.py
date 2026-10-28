@@ -73,12 +73,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--specs",
-        choices=["support", "public"],
+        choices=["support", "public", "routerbench"],
         default="support",
-        help="набор вопросов: синтетические тикеты или публичный AG News",
+        help="набор вопросов: синтетические тикеты, публичный AG News или RouterBench",
     )
     parser.add_argument(
         "--limit", type=int, default=0, help="для public: ограничение train-сплита"
+    )
+    parser.add_argument(
+        "--shot",
+        choices=["0shot", "5shot"],
+        default="0shot",
+        help="RouterBench: версия промптов (0-shot или 5-shot)",
     )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--encoder", default="hash", help="'hash' или model_id")
@@ -109,7 +115,8 @@ def _load_data(
     """Готовит (спецификации, сплиты, путь датасета, имя датасета).
 
     ``support`` — синтетические тикеты (train/val/test режутся из одного набора),
-    ``public`` — публичный AG News с настоящим train/test-сплитом.
+    ``public`` — публичный AG News с настоящим train/test-сплитом,
+    ``routerbench`` — RouterBench с детерминированным разбиением по ``seed``.
     """
     if args.specs == "public":
         from eval.datasets.public_dataset import PUBLIC_SPECS, load_ag_news
@@ -130,6 +137,29 @@ def _load_data(
         dataset_path = out_dir / "dataset.jsonl"
         write_jsonl(dataset_path, examples)
         return PUBLIC_SPECS, splits, dataset_path, "ag_news"
+
+    if args.specs == "routerbench":
+        from eval.datasets.routerbench import ROUTERBENCH_QUESTIONS, load_routerbench
+
+        base = load_routerbench(args.limit or None, shot=args.shot)
+        carved = split_examples(
+            base["train"],
+            val_fraction=args.val_fraction,
+            test_fraction=0.0,
+            seed=args.seed,
+        )
+        splits = {
+            "train": carved["train"],
+            "val": carved["val"],
+            "test": base["test"],
+        }
+        examples = splits["train"] + splits["test"]
+        dataset_path = out_dir / "dataset.jsonl"
+        write_jsonl(dataset_path, examples)
+        specs = {
+            name: spec_from_api(data) for name, data in ROUTERBENCH_QUESTIONS.items()
+        }
+        return specs, splits, dataset_path, f"routerbench_{args.shot}"
 
     specs = {name: spec_from_api(data) for name, data in QUESTIONS.items()}
     if args.dataset is not None:

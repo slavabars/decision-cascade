@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Обучает матрицу паков весов: {support,public} x {gpt2,distilgpt2,gpt2-medium}.
+# Обучает матрицу паков весов: {support,public,routerbench} x
+# {gpt2,distilgpt2,gpt2-medium}.
 #
 # Каждый пак — отдельный каталог $PACKS_ROOT/<dataset>-<label>/ с heads.pt,
 # копией под подписью вопросов (drop-in для DECISION_CHECKPOINT_DIR) и
@@ -7,7 +8,8 @@
 # (training/recipe/publish_weight_packs.sh).
 #
 # Переопределяется окружением: PACKS_ROOT, PYTHON, DECISION_DEVICE,
-# DECISION_DTYPE, SUPPORT_N/STEPS/RLCD, PUBLIC_LIMIT/STEPS/RLCD.
+# DECISION_DTYPE, SUPPORT_N/STEPS/RLCD, PUBLIC_LIMIT/STEPS/RLCD,
+# ROUTERBENCH_LIMIT/STEPS/RLCD/SHOT.
 set -euo pipefail
 
 python_bin="${PYTHON:-}"
@@ -27,6 +29,11 @@ public_limit="${PUBLIC_LIMIT:-4000}"
 public_steps="${PUBLIC_STEPS:-500}"
 public_rlcd="${PUBLIC_RLCD:-0}"
 
+routerbench_limit="${ROUTERBENCH_LIMIT:-4000}"
+routerbench_steps="${ROUTERBENCH_STEPS:-500}"
+routerbench_rlcd="${ROUTERBENCH_RLCD:-200}"
+routerbench_shot="${ROUTERBENCH_SHOT:-0shot}"
+
 # "<label>:<encoder>:<dim>"
 encoders=(
   "gpt2:openai-community/gpt2:768"
@@ -41,10 +48,13 @@ train_pack() {
   echo "▶ $dataset / $label ($encoder, dim=$dim, n=$n, steps=$steps, rlcd=$rlcd)"
   local args=(--specs "$dataset" --out-dir "$out" --encoder "$encoder"
               --dim "$dim" --train-steps "$steps" --rlcd-steps "$rlcd" --seed 0)
-  if [[ "$dataset" == "public" ]]; then
-    args+=(--limit "$n")
-  else
+  if [[ "$dataset" == "support" ]]; then
     args+=(--generate "$n")
+  else
+    args+=(--limit "$n")
+  fi
+  if [[ "$dataset" == "routerbench" ]]; then
+    args+=(--shot "$routerbench_shot")
   fi
   DECISION_DEVICE="$device" DECISION_DTYPE="$dtype" \
     "$python_bin" -m training.recipe.train_heads "${args[@]}"
@@ -56,6 +66,8 @@ for spec in "${encoders[@]}"; do
     "$support_n" "$support_steps" "$support_rlcd"
   train_pack public "$label" "$encoder" "$dim" \
     "$public_limit" "$public_steps" "$public_rlcd"
+  train_pack routerbench "$label" "$encoder" "$dim" \
+    "$routerbench_limit" "$routerbench_steps" "$routerbench_rlcd"
 done
 
 echo

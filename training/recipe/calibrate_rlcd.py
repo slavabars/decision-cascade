@@ -23,7 +23,15 @@ from training.recipe.train_heads import _make_encoder
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="RLCD calibration of noul heads")
-    parser.add_argument("--specs", choices=["support", "public"], default="support")
+    parser.add_argument(
+        "--specs", choices=["support", "public", "routerbench"], default="support"
+    )
+    parser.add_argument(
+        "--shot",
+        choices=["0shot", "5shot"],
+        default="0shot",
+        help="RouterBench: версия промптов (0-shot или 5-shot)",
+    )
     parser.add_argument("--encoder", default="hash", help="'hash' или model_id")
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--limit", type=int, default=0, help="размер датасета")
@@ -52,6 +60,18 @@ def _load_splits(args):
             base["train"], val_fraction=0.2, test_fraction=0.0, seed=args.seed
         )
         return PUBLIC_SPECS, carved["train"], carved["val"]
+
+    if args.specs == "routerbench":
+        from eval.datasets.routerbench import ROUTERBENCH_QUESTIONS, load_routerbench
+
+        base = load_routerbench(args.limit or None, shot=args.shot)
+        carved = split_examples(
+            base["train"], val_fraction=0.2, test_fraction=0.0, seed=args.seed
+        )
+        specs = {
+            name: spec_from_api(data) for name, data in ROUTERBENCH_QUESTIONS.items()
+        }
+        return specs, carved["train"], carved["val"]
 
     specs = {name: spec_from_api(data) for name, data in QUESTIONS.items()}
     examples = generate_examples(n=args.limit or 1000, seed=args.seed)
