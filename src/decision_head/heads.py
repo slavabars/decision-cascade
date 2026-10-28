@@ -52,7 +52,34 @@ def _choice_result(logits: Tensor, options: tuple[str, ...]) -> ChoiceResult:
     )
 
 
-class NoulHead(nn.Module):
+class _TemperedHead(nn.Module):
+    """Температурное масштабирование логитов при инференсе.
+
+    ``temperature`` подбирается на отложенном val (см.
+    ``training/recipe/calibrate_temperature.py``) и по умолчанию равна ``1.0``,
+    то есть поведение не меняется. Масштаб применяется только в ``forward`` и
+    ``scaled_logits``: обучение и функции потерь работают с «сырыми» ``logits``,
+    поэтому температура не влияет на градиенты и не путает оптимизатор.
+
+    Значение — обычный ``float``, а не буфер: ``state_dict`` остаётся прежним
+    (старые чекпоинты читаются без изменений), а сама температура сохраняется в
+    чекпоинте отдельным полем ``temperature``.
+    """
+
+    temperature: float = 1.0
+
+    def set_temperature(self, value: float) -> None:
+        value = float(value)
+        if not value > 0.0:
+            raise ValueError(f"temperature must be > 0, got {value}")
+        self.temperature = value
+
+    def scaled_logits(self, features: Tensor) -> Tensor:
+        """Логиты, делённые на температуру — то, что видит потребитель."""
+        return self.logits(features) / self.temperature
+
+
+class NoulHead(_TemperedHead):
     def __init__(self, dim: int):
         super().__init__()
         self.linear = nn.Linear(dim, 1)
@@ -61,12 +88,12 @@ class NoulHead(nn.Module):
         return self.linear(features).squeeze(-1)
 
     def forward(self, features: Tensor) -> NoulResult:
-        logit = torch.sigmoid(self.logits(features))
+        logit = torch.sigmoid(self.scaled_logits(features))
         p = float(logit.item())
         return NoulResult(noul=p, confidence=confidence_noul(p))
 
 
-class ChoiceHead(nn.Module):
+class ChoiceHead(_TemperedHead):
     def __init__(self, dim: int, options: tuple[str, ...]):
         super().__init__()
         self.options = tuple(options)
@@ -76,10 +103,10 @@ class ChoiceHead(nn.Module):
         return self.linear(features)
 
     def forward(self, features: Tensor) -> ChoiceResult:
-        return _choice_result(self.logits(features), self.options)
+        return _choice_result(self.scaled_logits(features), self.options)
 
 
-class OptionScoringChoiceHead(nn.Module):
+class OptionScoringChoiceHead(_TemperedHead):
     """Голова выбора, оценивающая каждый вариант по его текстовому эмбеддингу.
 
     В отличие от :class:`ChoiceHead` (``Linear(dim, k)`` с отдельным весом на
@@ -133,7 +160,7 @@ class OptionScoringChoiceHead(nn.Module):
         return (state @ options.t()) * self.scale
 
     def forward(self, features: Tensor) -> ChoiceResult:
-        return _choice_result(self.logits(features), self.options)
+        return _choice_result(self.scaled_logits(features), self.options)
 
 
 def build_option_embeddings(
@@ -153,7 +180,7 @@ def build_option_embeddings(
     return result
 
 
-class ScoreHead(nn.Module):
+class ScoreHead(_TemperedHead):
     def __init__(self, dim: int, levels: tuple[str, ...]):
         super().__init__()
         self.levels = tuple(levels)
@@ -163,7 +190,9 @@ class ScoreHead(nn.Module):
         return self.linear(features)
 
     def forward(self, features: Tensor) -> ScoreResult:
-        probs_list = torch.softmax(self.logits(features).squeeze(0), dim=-1).tolist()
+        probs_list = torch.softmax(
+            self.scaled_logits(features).squeeze(0), dim=-1
+        ).tolist()
         probs_dict = {lvl: float(p) for lvl, p in zip(self.levels, probs_list)}
         validate_distribution(probs_dict, self.levels)
         score = float(sum(i * p for i, p in enumerate(probs_list)))
@@ -234,6 +263,20 @@ class DecisionHeads(nn.Module):
             results[name] = head(features[i].unsqueeze(0))
         return results
 
+    def temperatures(self) -> dict[str, float]:
+        """Температуры логитов по вопросам (``1.0`` — без масштабирования)."""
+        return {name: float(head.temperature) for name, head in self.heads.items()}
+
+    def set_temperatures(self, values: dict[str, float]) -> None:
+        """Применяет температуры из чекпоинта; неизвестные вопросы — ошибка."""
+        unknown = set(values) - set(self.heads)
+        if unknown:
+            raise ValueError(
+                f"temperature for unknown questions: {sorted(unknown)}"
+            )
+        for name, value in values.items():
+            self.heads[name].set_temperature(value)
+
     def save_checkpoint(self, path: str | Path) -> Path:
         """Сохраняет веса голов вместе со спецификациями вопросов для восстановления."""
         path = Path(path)
@@ -246,6 +289,7 @@ class DecisionHeads(nn.Module):
                 "questions": {
                     name: spec_to_dict(spec) for name, spec in self.questions.items()
                 },
+                "temperature": self.temperatures(),
                 "state_dict": self.state_dict(),
             },
             path,
@@ -283,4 +327,5 @@ class DecisionHeads(nn.Module):
             option_embeddings=option_embeddings,
         )
         heads.load_state_dict(payload["state_dict"])
+        heads.set_temperatures(payload.get("temperature") or {})
         return heads

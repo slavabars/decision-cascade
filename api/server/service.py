@@ -241,6 +241,7 @@ class DecisionService:
             )
             return False
         heads.load_state_dict(payload["state_dict"])
+        heads.set_temperatures(payload.get("temperature") or {})
         return True
 
     def _check_trained(

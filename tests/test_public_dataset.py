@@ -55,10 +55,16 @@ class _FakeNoulHead:
     def logits(self, features):
         return features[:, 0]
 
+    def scaled_logits(self, features):
+        return self.logits(features)
+
 
 class _FakeChoiceHead:
     def logits(self, features):
         return features[:, :3]
+
+    def scaled_logits(self, features):
+        return self.logits(features)
 
 
 def test_report_labels_for_each_type():

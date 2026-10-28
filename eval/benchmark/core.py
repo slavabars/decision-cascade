@@ -84,7 +84,7 @@ def _evaluate_head(
     head, features: torch.Tensor, spec, labels: list[Any]
 ) -> dict[str, float]:
     with torch.no_grad():
-        logits = head.logits(features)
+        logits = head.scaled_logits(features)
         if isinstance(spec, NoulSpec):
             probs = torch.sigmoid(logits).numpy()
             return noul_metrics(probs, np.asarray(labels, dtype=float))

@@ -118,7 +118,7 @@ def _confidence_and_correct(
     spec: QuestionSpec, head, features: torch.Tensor, labels: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     with torch.no_grad():
-        logits = head.logits(features)
+        logits = head.scaled_logits(features)
         if isinstance(spec, NoulSpec):
             probs = torch.sigmoid(logits).numpy()
             return probs, (probs >= 0.5).astype(float)
