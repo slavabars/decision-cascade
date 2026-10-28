@@ -327,6 +327,42 @@ python -m eval.risk.run --specs routerbench --encoder openai-community/gpt2 \
     --dim 768 --train-steps 500 --limit 4000 --out-dir data/risk_routerbench
 ```
 
+**Benefit-aware эскалация (цена вызова).** Порог уверенности и бюджет ошибок
+отвечают на вопрос «насколько модель уверена / какова вероятность ошибки», но не
+на вопрос «стоит ли платить за внешнюю модель». Benefit-политика сравнивает
+ожидаемую полезность двух действий: при `p` — вероятности, что локальное решение
+верно, `q` — точности внешней модели на этом вопросе, `D` — цене ошибки и `C` —
+цене эскалации (в единицах «верный ответ = 1») эскалация выгодна, когда
+`p < q - C / (1 + D)`. Порог получается из измеренной точности внешней модели, а
+не из константы; если внешняя модель на вопросе слабее локальной, каскад не
+эскалирует вовсе.
+
+`q` меряют **на отложенном срезе домена**, а не на том же test, где считается
+выигрыш:
+
+```bash
+# точность внешней модели по вопросам на train-срезе (n=200)
+python -m eval.competitors.fit_remote_accuracy --specs public --limit 200 \
+    --remote clef-flash=http://127.0.0.1:8091 \
+    --out data/competitors_real/public_clef-flash_accuracy.json
+```
+
+```bash
+DECISION_BACKEND=cascade \
+DECISION_CASCADE_POLICY=benefit \
+DECISION_CASCADE_REMOTE_ACCURACY=data/competitors_real/public_clef-flash_accuracy.json \
+DECISION_CASCADE_REMOTE_ACCURACY_BOUND=lower \
+DECISION_CASCADE_ESCALATION_COST=0.05 \
+DECISION_CASCADE_ERROR_COST=1.0 \
+DECISION_CASCADE_FALLBACK_URL=http://127.0.0.1:30000 \
+  uvicorn api.server.main:app --port 8000
+```
+
+`REMOTE_ACCURACY_BOUND=lower` берёт нижнюю границу Уилсона: на срезе в 200
+примеров точечная точность гуляет на ±0.07, и завышенная `q` гонит каскад в
+эскалации, которые ухудшают ответ (см. `docs/competitor-benchmark.md`).
+Причина эскалации в `usage` — `"benefit"`.
+
 **Подстройка под новый вопрос (`POST /v1/feedback`).** На новом вопросе
 коэффициенты, снятые с других вопросов, работают хуже — модель нужно переобучать
 на примерах этого вопроса. Сервис принимает обратную связь: вы повторяете решение,
