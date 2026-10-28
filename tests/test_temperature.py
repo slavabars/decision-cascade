@@ -153,6 +153,17 @@ def test_fit_temperature_for_choice_keeps_argmax():
     assert torch.equal((logits / t).argmax(-1), logits.argmax(-1))
 
 
+def test_accept_gate_requires_ece_and_brier_to_improve():
+    from training.recipe.calibrate_temperature import _accept
+
+    # Оба улучшились — принимаем.
+    assert _accept({"ece": 0.2, "brier": 0.2}, {"ece": 0.05, "brier": 0.18})
+    # Brier лучше, ECE хуже — отклоняем (типичный бинарный noul).
+    assert not _accept({"ece": 0.10, "brier": 0.10}, {"ece": 0.11, "brier": 0.09})
+    # ECE лучше, Brier хуже — тоже отклоняем.
+    assert not _accept({"ece": 0.10, "brier": 0.10}, {"ece": 0.05, "brier": 0.12})
+
+
 def test_refresh_metadata_describes_calibrated_checkpoint(tmp_path):
     import json
 

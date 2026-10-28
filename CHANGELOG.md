@@ -18,10 +18,13 @@
   чекпоинте полем `"temperature"` рядом с `state_dict`, применяется сервером и
   замерным харнессом автоматически, старые чекпоинты без поля читаются как
   `T = 1.0`. Нижняя граница сетки — `T = 1.0`: калибровка только смягчает, иначе
-  идеальное разделение на маленьком val даёт уверенность 1.0. Замер: ECE на
+  идеальное разделение на маленьком val даёт уверенность 1.0. Перед сохранением
+  работает гейт «не навреди»: `T` применяется, только если ECE на val улучшился
+  **и** Brier не ухудшился (для бинарного `noul` NLL-оптимум иногда портит ECE —
+  тогда остаётся `T = 1.0`). Замер: ECE на
   test падает с 0.547 до 0.024 (`route`, RouterBench) и с 0.144 до 0.024
   (`topic`, AG News); каскад после калибровки даёт +3.4 п.п. на `support` и
-  +2.5 п.п. на `public` (см. `docs/competitor-benchmark.md`).
+  +2.3 п.п. на `public` (см. `docs/competitor-benchmark.md`).
 - **Пак `routerbench-gpt2` и `--specs routerbench` в рецептах**:
   `training/recipe/train_heads.py` и `calibrate_rlcd.py` принимают RouterBench
   (`--shot 0shot|5shot`), `train_weight_packs.sh` обучает матрицу
@@ -41,6 +44,10 @@
   необходимости обучает и калибрует паки, гоняет три набора и три `--sweep`,
   складывает JSON в `OUT` и гасит участников по `trap`. Числа из
   `docs/competitor-benchmark.md` воспроизводятся этой командой.
+- **Артефакт прогонов** (`eval/competitors/publish_benchmarks.sh`): пакует
+  сырые JSON, сводки калибровки и `manifest.json` с sha256 в
+  `dist/<tag>-benchmarks.tar.gz` — прикладывается к релизу, потому что
+  `data/` в git не попадает.
 - **Дообучение энкодера состояния** (`training/finetune/`, рецепт
   `training/recipe/finetune_encoder.py`): энкодеры получили путь с градиентом
   (`encode_trainable`, `set_trainable`, `trainable_parameters`,

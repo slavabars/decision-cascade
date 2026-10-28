@@ -128,6 +128,17 @@ def _report(specs, examples, features, heads) -> dict:
     return _metrics_report(specs, examples, features, heads)
 
 
+def _accept(before: dict, after: dict) -> bool:
+    """Гейт «не навреди»: ECE на val должен улучшиться, Brier — не ухудшиться.
+
+    NLL-оптимум температуры иногда смягчает голову, которая уже была
+    откалибрована (типичный случай — бинарный `noul` с малой долей класса):
+    Brier выигрывает, а ECE по вероятности положительного класса растёт.
+    Такую температуру не применяем — оставляем ``T = 1.0``.
+    """
+    return after["ece"] < before["ece"] and after["brier"] <= before["brier"]
+
+
 def main(argv: list[str] | None = None) -> dict:
     from eval.benchmark.core import _build_targets, encode_examples
     from src.decision_head.heads import DecisionHeads, build_option_embeddings
@@ -167,7 +178,20 @@ def main(argv: list[str] | None = None) -> dict:
     heads.set_temperatures(fitted)
 
     after_val = _report(specs, val, val_features, heads)
+    # Если подбор и так дал T = 1.0, отклонять нечего — метрики не менялись.
+    rejected = [
+        name
+        for name in specs
+        if fitted[name] != 1.0
+        and not _accept(before_val["questions"][name], after_val["questions"][name])
+    ]
+    if rejected:
+        heads.set_temperatures({name: 1.0 for name in rejected})
+        after_val = _report(specs, val, val_features, heads)
+
     after_test = _report(specs, test, test_features, heads) if test else None
+
+    applied = {name: 1.0 if name in rejected else t for name, t in fitted.items()}
 
     print(
         f"Температуры (specs={args.specs}, encoder={args.encoder}, "
@@ -175,10 +199,11 @@ def main(argv: list[str] | None = None) -> dict:
     )
     for name, t in fitted.items():
         b0, b1 = before_val["questions"][name], after_val["questions"][name]
+        mark = "  (отклонена гейтом)" if name in rejected else ""
         print(
             f"  {name:<12} T={t:5.2f}  val brier {b0['brier']:.4f}->{b1['brier']:.4f}"
             f"  ece {b0['ece']:.4f}->{b1['ece']:.4f}"
-            f"  acc {b0['accuracy']:.3f}->{b1['accuracy']:.3f}"
+            f"  acc {b0['accuracy']:.3f}->{b1['accuracy']:.3f}{mark}"
         )
     print(
         f"  overall val acc {before_val['overall_accuracy']:.4f}->"
@@ -205,16 +230,18 @@ def main(argv: list[str] | None = None) -> dict:
         "encoder": args.encoder,
         "feature_dim": heads.dim,
         "seed": args.seed,
-        "temperature": fitted,
+        "temperature": applied,
+        "fitted": fitted,
+        "rejected": rejected,
         "before": {"val": before_val, "test": before_test},
         "after": {"val": after_val, "test": after_test},
     }
     (out_dir / "temperature.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    _refresh_metadata(out_dir, fitted, after_val, after_test, summary)
+    _refresh_metadata(out_dir, applied, after_val, after_test, summary)
     print(f"  saved -> {out_dir}")
-    return {"temperature": fitted, "before": before_val, "after": after_val}
+    return {"temperature": applied, "before": before_val, "after": after_val}
 
 
 def _refresh_metadata(
