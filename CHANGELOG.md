@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-28
+
 ### Added
 
 - **Benefit-aware каскад** (`src/backends/benefit.py`): эскалация по ожидаемой
@@ -483,7 +485,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/slavabars/decision-cascade/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/slavabars/decision-cascade/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.7.0
 [0.6.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.6.0

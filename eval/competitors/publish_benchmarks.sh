@@ -42,6 +42,8 @@ IFS=',' read -r -a participants <<< "${PARTICIPANTS:-clef-flash,laya}"
 for f in "$data_dir"/*.json; do
   [[ -f "$f" ]] || continue
   name="$(basename "$f")"
+  # q-файлы fit_remote_accuracy: вход benefit-политики, они не про «_pack_»
+  [[ "$name" == *_accuracy.json ]] && { cp "$f" "$root/benchmarks/"; count=$((count + 1)); continue; }
   keep=1
   for p in "${participants[@]}"; do
     [[ "$name" == *_pack_"$p"* ]] && { keep=0; break; }
@@ -86,7 +88,13 @@ cat > "$root/README.md" <<'EOF'
   «набор × участник»: `reports` по каждому участнику (accuracy, latency
   p50/p95, escalation_rate) и `questions` с разбивкой по вопросам.
 - `benchmarks/<spec>_pack_<participant>_sweep.json` — кривая
-  «качество против доли эскалаций» (`cascade_sweep.rows`).
+  «качество против доли эскалаций» (`cascade_sweep.rows`): порог
+  уверенности или цена эскалации у benefit-политики.
+- `benchmarks/<spec>_pack_<participant>_benefit.json` — каскад с
+  benefit-политикой (эскалация по ожидаемой выгоде).
+- `benchmarks/<spec>_<participant>_accuracy.json` — `q`: точность внешней
+  модели по вопросам на train-срезе (вход benefit-политики) с нижними
+  границами Уилсона.
 - `calibration/<pack>.json` — `temperature.json`: подобранные `T`,
   метрики до/после на val и test, список голов, отклонённых гейтом
   «не навреди».
