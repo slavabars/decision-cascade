@@ -154,6 +154,11 @@ def main(argv: list[str] | None = None) -> dict:
     metrics = {"train": _report(evaluate_benchmark(specs, train, encoder, heads))}
     if val:
         metrics["val"] = _report(evaluate_benchmark(specs, val, encoder, heads))
+    # test — только отчёт (выбор шагов и lr идёт по val), но без него нельзя
+    # сравнить дообученный энкодер с замороженным на честном сплите
+    test = splits.get("test") or []
+    if test:
+        metrics["test"] = _report(evaluate_benchmark(specs, test, encoder, heads))
 
     metadata = {
         "schema_version": SCHEMA_VERSION,
@@ -187,9 +192,10 @@ def main(argv: list[str] | None = None) -> dict:
     print(f"heads    -> {heads_path}")
     print(f"metadata -> {meta_path}")
     for name, report in metrics.items():
+        n_examples = len(test) if name == "test" else len(splits[name])
         print(
             f"  {name:<5} acc={report['overall_accuracy']:.3f} "
-            f"(n={len(splits[name])})"
+            f"(n={n_examples})"
         )
     print(
         f"замер: python -m eval.risk.features --specs {args.specs} "
