@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Публикует набор обученных паков весов одним артефактом GitHub Release.
 # Usage: training/recipe/publish_weight_packs.sh <tag> <packs-root> [repo]
+#        NO_RELEASE=1 — только собрать артефакты в dist/, не создавать релиз.
 #
 # Собирает каталог паков в архив <tag>-weights.tar.gz (без датасетов *.jsonl,
 # они не нужны сервису) плюс manifest.json со сводкой метрик и подписей, и
@@ -64,6 +65,13 @@ cp "$stage/manifest.json" "$stage/${tag}-weights/manifest.json"
 mkdir -p dist
 tar -czf "dist/${tag}-weights.tar.gz" -C "$stage" "${tag}-weights"
 cp "$stage/manifest.json" "dist/${tag}-manifest.json"
+
+if [[ "${NO_RELEASE:-0}" == "1" ]]; then
+  echo "собрано без публикации:"
+  echo "  dist/${tag}-weights.tar.gz"
+  echo "  dist/${tag}-manifest.json"
+  exit 0
+fi
 
 args=(release create "$tag"
   "dist/${tag}-weights.tar.gz"
