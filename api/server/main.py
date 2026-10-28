@@ -193,6 +193,14 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     ``DECISION_RISK_GATE_DELTA`` (> 0 ослабляет гейт, < 0 ужесточает), а
     ``DECISION_RISK_FEW_SHOT_N`` (по умолчанию ``RISK_FEW_SHOT_MIN_N``, значение
     < 2 отключает) задаёт порог few-shot переобучения под новый вопрос.
+
+    ``DECISION_CASCADE_POLICY=benefit`` включает benefit-aware каскад: вопрос
+    эскалируется, только если ожидаемая выгода внешней модели превышает цену
+    вызова. Точность внешней модели ``q`` берётся из
+    ``DECISION_CASCADE_REMOTE_ACCURACY`` (число или JSON, снятый
+    ``python -m eval.competitors.fit_remote_accuracy``), цена эскалации — из
+    ``DECISION_CASCADE_ESCALATION_COST`` (0.05), цена ошибки — из
+    ``DECISION_CASCADE_ERROR_COST`` (1.0). Политика benefit важнее risk-бюджета.
     """
     url = os.environ.get("DECISION_CASCADE_FALLBACK_URL")
     if not url:
@@ -208,6 +216,35 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
         ),
     )
     threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
+    policy = os.environ.get("DECISION_CASCADE_POLICY", "").strip().lower()
+    if policy in {"benefit", "benefit-aware"}:
+        raw_accuracy = os.environ.get("DECISION_CASCADE_REMOTE_ACCURACY")
+        if not raw_accuracy:
+            raise RuntimeError(
+                "DECISION_CASCADE_POLICY=benefit requires "
+                "DECISION_CASCADE_REMOTE_ACCURACY (см. "
+                "python -m eval.competitors.fit_remote_accuracy)"
+            )
+        from src.backends.benefit import (
+            BenefitAwareCascadeBackend,
+            load_remote_accuracy,
+        )
+
+        return BenefitAwareCascadeBackend(
+            primary,
+            fallback,
+            load_remote_accuracy(
+                raw_accuracy,
+                conservative=os.environ.get(
+                    "DECISION_CASCADE_REMOTE_ACCURACY_BOUND", "point"
+                ).strip().lower()
+                == "lower",
+            ),
+            escalation_cost=float(
+                os.environ.get("DECISION_CASCADE_ESCALATION_COST", "0.05")
+            ),
+            error_cost=float(os.environ.get("DECISION_CASCADE_ERROR_COST", "1.0")),
+        )
     risk_budget = os.environ.get("DECISION_CASCADE_RISK_BUDGET")
     if risk_budget is not None:
         from src.backends.cascade import RiskAwareCascadeBackend
