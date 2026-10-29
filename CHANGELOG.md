@@ -6,6 +6,39 @@
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-10-29
+
+### Added
+
+- **Метрики Prometheus** (`GET /metrics`): `decision_http_requests_total`,
+  `decision_http_request_duration_seconds`, `decision_decisions_total`,
+  `decision_untrained_refusals_total`, `decision_ready`,
+  `decision_heads_loaded`. Путь в метках — шаблон маршрута, поэтому
+  кардинальность не растёт с трафиком (`api/server/metrics.py`).
+- **Request id и структурированные логи**: каждый ответ несёт `X-Request-ID`
+  (клиентский сохраняется, если безопасен), строка доступа `decision.access`
+  содержит метод/путь/код/длительность, `DECISION_LOG_FORMAT=json` включает
+  JSON-логи (`api/server/observability.py`, `docs/observability.md`).
+- **Слабая разметка** (`python -m training.labeling.run`): ответы учителя
+  SystemOne на неразмеченных текстах превращаются в датасет, который принимает
+  `train_heads`; отчёт считает уверенность учителя и распределение меток
+  (`docs/weak-labeling.md`).
+- **Многодоменные паки**: сервис находит `*/heads.pt` + `metadata.json` и
+  выбирает пак по `questions_signature`; дубли подписи разрешаются первым по
+  сортировке с `WARNING`, источник виден в `GET /info` →
+  `engine.heads[].source` (`api/server/service.py`, `tests/test_multidomain.py`).
+
+### Changed
+
+- **`prometheus-client>=0.20`** в зависимостях.
+- `docs/routerbench.md`: дообученный энкодер — опубликованный ассет
+  `v0.12.0-encoder-routerbench-bert.tar.gz`, а не «рецепт вместо весов».
+- `docs/stability.md`: P2 (пункты 13–16) закрыт.
+
+### Deprecated
+
+- Пока нет.
+
 ## [0.14.0] — 2026-10-29
 
 ### Added
@@ -601,7 +634,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/slavabars/decision-cascade/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/slavabars/decision-cascade/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/slavabars/decision-cascade/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/slavabars/decision-cascade/compare/v0.11.0...v0.12.0

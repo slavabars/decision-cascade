@@ -45,3 +45,33 @@ def test_deploy_doc_links_back():
     troubleshooting = DOC.read_text(encoding="utf-8")
     assert "troubleshooting.md" in deploy
     assert "deploy.md" in troubleshooting
+
+
+def test_observability_doc_covers_every_metric():
+    from api.server import metrics
+
+    text = (ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    for metric in (
+        metrics.REQUESTS,
+        metrics.LATENCY,
+        metrics.DECISIONS,
+        metrics.UNTRAINED_REFUSALS,
+        metrics.READY,
+        metrics.HEADS_LOADED,
+    ):
+        assert metric._name in text, f"метрика {metric._name} не описана"
+
+
+def test_weak_labeling_doc_and_module_exist():
+    doc = (ROOT / "docs" / "weak-labeling.md").read_text(encoding="utf-8")
+    module = (ROOT / "training" / "labeling" / "run.py").read_text(encoding="utf-8")
+    assert "training.labeling.run" in doc
+    assert "train_heads" in doc
+    assert "def label_examples" in module
+
+
+def test_readme_links_new_docs():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/observability.md" in readme
+    assert "docs/weak-labeling.md" in readme
+    assert "/metrics" in readme

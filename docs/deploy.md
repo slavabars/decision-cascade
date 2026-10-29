@@ -24,11 +24,13 @@ sudo bash deploy/centos/install.sh
 ```bash
 curl -fsS http://127.0.0.1:8080/health   # liveness: процесс жив
 curl -fsS http://127.0.0.1:8080/ready    # readiness: энкодер и головы готовы
+curl -fsS http://127.0.0.1:8080/metrics  # Prometheus (см. observability.md)
 journalctl -u decision-api@api -n 50 --no-pager
 ```
 
 `/ready` отвечает `503`, пока сервис не готов; в теле — `reasons`. Для
-диагностики причин см. [`troubleshooting.md`](troubleshooting.md).
+диагностики причин см. [`troubleshooting.md`](troubleshooting.md), метрики и
+логи — [`observability.md`](observability.md).
 
 ## 2. Что считается состоянием сервиса
 

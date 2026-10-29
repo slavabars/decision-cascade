@@ -9,7 +9,7 @@ state-состояние превращается в признаки, а гол
 **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет),
 Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: beta (0.14.0).** Контракт API ещё может меняться. Что считается
+**Статус: beta (0.15.0).** Контракт API ещё может меняться. Что считается
 стабильным, по каким критериям проект выходит в `1.0` и что для этого осталось —
 в [`docs/stability.md`](docs/stability.md). Замеры и сравнение с конкурентами —
 в [`docs/benchmarks.md`](docs/benchmarks.md).
@@ -197,6 +197,8 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_BACKEND_TIMEOUT` | бюджет одного внешнего вызова, секунды (все retry внутри) | `60` |
 | `DECISION_BACKEND_RETRIES` | повторы внешнего вызова при сети/429/5xx (0 — без повторов) | `1` |
 | `DECISION_WARMUP` | загружать паки голов при старте (нужно для честного `/ready`) | `1` |
+| `DECISION_LOG_FORMAT` | формат логов: `text`, `json` или пусто (не менять) | пусто |
+| `DECISION_LOG_LEVEL` | уровень логов (`DEBUG`, `INFO`, `WARNING`, …) | `INFO` |
 | `DECISION_CASCADE_FALLBACK_URL` | URL fallback для `cascade` | — (обязателен) |
 | `DECISION_CASCADE_FALLBACK_MODEL` | имя fallback-модели | `remote` |
 | `DECISION_CASCADE_FALLBACK_MODALITIES` | модальности fallback | `text` |
@@ -522,7 +524,10 @@ ss -ltn | grep ':8000 ' || echo "порт 8000 свободен"
   fallback виден как `degraded`, но инстанс остаётся готовым. `503`, пока сервис
   не готов, — для балансировщиков и systemd;
 - `GET /info` — конфигурация сервиса: бэкенд, модальности, устройство и статус
-  загруженных голов (`trained`).
+  загруженных голов (`trained`, `source`);
+- `GET /metrics` — метрики Prometheus: запросы, латентность, решения,
+  готовность (`docs/observability.md`). Каждый ответ несёт `X-Request-ID`;
+  `DECISION_LOG_FORMAT=json` включает структурированные логи.
 
 Внешний бэкенд (`http`/`cascade`) ограничен бюджетом `DECISION_BACKEND_TIMEOUT`
 на весь вызов: таймауты и сетевые ошибки повторяются один раз
@@ -904,6 +909,11 @@ SFTTrainer(heads, lr=0.1).fit(
 `training/recipe/train_reference_model.sh`: он сохраняет чекпоинт под **подписью
 схемы вопросов**, поэтому сервер подхватывает его автоматически.
 
+Если ручной разметки нет, датасет можно собрать из ответов сильной модели по
+протоколу SystemOne — `python -m training.labeling.run` (слабая разметка).
+Проверять такую голову нужно на настоящей разметке: метки учителя — не ground
+truth. Подробности и подводные камни — [`docs/weak-labeling.md`](docs/weak-labeling.md).
+
 Матрица «несколько моделей × несколько датасетов» обучается одной командой
 (`training/recipe/train_weight_packs.sh`); каждый пак — отдельный каталог
 `checkpoints/packs/<dataset>-<model>/`, пригодный как `DECISION_CHECKPOINT_DIR`:
@@ -1009,6 +1019,17 @@ svc.save_heads(dim=768, questions=QUESTIONS)      # -> checkpoints/<schema>.pt
 латентность — без повторного прогона энкодера по неизменному состоянию (кэш
 признаков по промпту).
 
+**Несколько доменов в одном процессе.** Помимо плоской раскладки
+`<dir>/<signature>.pt`, сервер понимает каталоги паков
+`<dir>/<домен>/heads.pt` + `metadata.json` (так их публикует
+`training/recipe/publish_weight_packs.sh`). Пак выбирается по
+`questions_signature` из `metadata.json`, а не по имени каталога, поэтому
+`DECISION_CHECKPOINT_DIR=checkpoints/packs` обслуживает сразу все домены:
+запрос с вопросами поддержки получает `support-*`, запрос с вопросами
+маршрутизации — `routerbench-*`. Если два пака объявляют одну подпись, побеждает
+первый по сортировке, а в лог пишется `WARNING` — дубли не подменяют друг друга
+молча. Источник каждой загруженной головы виден в `GET /info` → `engine.heads[].source`.
+
 Если под **новую** схему вопросов чекпоинта нет, головы создаются со случайной
 инициализацией — их `confidence` ничего не значит, и отдавать по ним решения
 (тем более эскалировать в каскаде) нельзя. Поэтому сервер явно сообщает статус
@@ -1044,7 +1065,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 658 passed, 10 skipped
+.venv/bin/python -m pytest                          # 710 passed, 10 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
@@ -1081,6 +1102,28 @@ systemctl status decision-api@api.service
 Обновление, откат и состав бэкапа — [`docs/deploy.md`](docs/deploy.md).
 Типовые ошибки (`UNTRAINED_HEADS`, `MODALITY_NOT_SUPPORTED`, `/ready` 503) —
 [`docs/troubleshooting.md`](docs/troubleshooting.md).
+
+## Наблюдаемость
+
+`GET /metrics` отдаёт метрики Prometheus (`decision_http_requests_total`,
+`decision_http_request_duration_seconds`, `decision_decisions_total`,
+`decision_ready`, `decision_heads_loaded`). Путь в метках — шаблон маршрута,
+поэтому кардинальность не растёт с трафиком.
+
+```bash
+curl -fsS http://127.0.0.1:8080/metrics | grep decision_
+```
+
+Каждый ответ содержит `X-Request-ID` (клиентский сохраняется, если он безопасен);
+тот же id есть в строке доступа `decision.access`. Для Loki/ELK:
+
+```bash
+DECISION_LOG_FORMAT=json DECISION_LOG_LEVEL=INFO \
+  .venv/bin/python -m uvicorn api.server.main:app --port 8000
+```
+
+Тела запросов (`state`, изображения, фидбэк) в метрики и логи не попадают.
+Скрейп, алерты и формат JSON-лога — [`docs/observability.md`](docs/observability.md).
 
 ## Структура репозитория
 

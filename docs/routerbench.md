@@ -146,8 +146,12 @@ DECISION_DEVICE=cuda DECISION_ENCODER_KIND=encoder python -m training.recipe.tra
 DECISION_DEVICE=cuda DECISION_ENCODER_KIND=encoder DECISION_MAX_LENGTH=256 python -m training.recipe.finetune_encoder --specs routerbench     --encoder bert-base-uncased --dim 768 --limit 4000     --steps 300 --lr 5e-5 --seed 0 --out-dir checkpoints/finetune/rb-bert-0
 ```
 
-Оговорка: дообученный энкодер — это ~440 МБ весов (bert-base), а не килобайтный
-пак голов; в опубликованные паки он не входит, рецепт запускается локально.
+Дообученный энкодер опубликован ассетом релиза
+[`v0.12.0-encoder-routerbench-bert.tar.gz`](https://github.com/slavabars/decision-cascade/releases/tag/v0.12.0)
+(405 МБ: `encoder/`, `heads.pt`, `temperature.json`, `metadata.json`). Он не
+входит в `*-weights.tar.gz` с паками голов: энкодер — отдельный артефакт, потому
+что весит в сотни раз больше. Рецепт выше остаётся для воспроизведения и для
+своего домена.
 
 Примечание: если раннер не на GPU, уберите `--device cuda`; на CPU прогон
 заметно дольше (энкодер — узкое место).
