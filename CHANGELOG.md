@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-10-29
+
+### Added
+
+- **Дообучение голов на обратной связи** (`python -m training.feedback.run`):
+  свежие размеченные примеры (`state` + `labels`) смешиваются с replay старого
+  `dataset.jsonl` и дообучают пак. Принимается только если на отложенной части
+  новых примеров стало не хуже порога, а старый домен не просел больше допуска;
+  иначе остаются прежние головы, а `<out>/feedback.report.json` объясняет отказ.
+- **Эксперимент дрейфа домена** (`python -m eval.drift.run`): сдвиг приора и
+  новый домен на AG News, K примеров обратной связи, контроль «просто ещё
+  шагов». Числа и выводы — `docs/drift.md`.
+
+### Changed
+
+- `--replay` принимает значения больше 1 (старые строки повторяются): при
+  большом K фиксированная доля replay не удерживает старый домен.
+- `eval.benchmark.core.build_targets` — публичное имя для рецептов дообучения.
+
 ## [0.15.0] — 2026-10-29
 
 ### Added
@@ -634,7 +653,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/slavabars/decision-cascade/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/slavabars/decision-cascade/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/slavabars/decision-cascade/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/slavabars/decision-cascade/compare/v0.12.0...v0.13.0

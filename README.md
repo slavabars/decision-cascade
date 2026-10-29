@@ -9,7 +9,7 @@ state-состояние превращается в признаки, а гол
 **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет),
 Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: beta (0.15.0).** Контракт API ещё может меняться. Что считается
+**Статус: beta (0.16.0).** Контракт API ещё может меняться. Что считается
 стабильным, по каким критериям проект выходит в `1.0` и что для этого осталось —
 в [`docs/stability.md`](docs/stability.md). Замеры и сравнение с конкурентами —
 в [`docs/benchmarks.md`](docs/benchmarks.md).
@@ -914,6 +914,23 @@ SFTTrainer(heads, lr=0.1).fit(
 Проверять такую голову нужно на настоящей разметке: метки учителя — не ground
 truth. Подробности и подводные камни — [`docs/weak-labeling.md`](docs/weak-labeling.md).
 
+### Дрейф домена: дообучение на обратной связи
+
+Когда домен уезжает, головы дообучаются на свежих размеченных примерах с replay
+старого датасета — иначе они забывают то, что умели:
+
+```bash
+.venv/bin/python -m training.feedback.run \
+  --pack checkpoints/packs/public-gpt2 \
+  --feedback data/feedback.jsonl \
+  --out checkpoints/packs/public-gpt2-v2 --replay 0.5 --steps 100
+```
+
+Пак принимается только если на **отложенной** части новых примеров стало не
+хуже порога, а старый домен не просел больше 1 п.п.; иначе остаются прежние
+головы, а в отчёте видно, почему. Сколько примеров нужно и что бывает без
+replay — [`docs/drift.md`](docs/drift.md).
+
 Матрица «несколько моделей × несколько датасетов» обучается одной командой
 (`training/recipe/train_weight_packs.sh`); каждый пак — отдельный каталог
 `checkpoints/packs/<dataset>-<model>/`, пригодный как `DECISION_CHECKPOINT_DIR`:
@@ -1065,7 +1082,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 710 passed, 10 skipped
+.venv/bin/python -m pytest                          # 747 passed, 10 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
