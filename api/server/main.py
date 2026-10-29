@@ -7,14 +7,24 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from api.server import metrics
 from api.server.deprecation import deprecation_for, validate_registry, warn_once
+from api.server.observability import (
+    REQUEST_ID_HEADER,
+    access_record,
+    bind_request_id,
+    configure_logging,
+    new_request_id,
+    reset_request_id,
+)
 from api.server.service import (
     DEFAULT_CHECKPOINT_DIR,
     UNTRAINED_POLICIES,
@@ -48,6 +58,10 @@ from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
 from src.schemas import SCHEMA_VERSION, DecisionResult
 
 logger = logging.getLogger("decision.cascade")
+access_logger = logging.getLogger("decision.access")
+
+# JSON-логи включаются окружением; по умолчанию поведение не меняется.
+configure_logging()
 
 
 def create_vision_encoder() -> VisionEncoder | None:
@@ -401,6 +415,39 @@ async def deprecation_headers(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def observe_requests(request: Request, call_next):
+    """Request id, метрики и одна строка доступа на каждый запрос.
+
+    ``X-Request-ID`` из запроса сохраняется, если он безопасен, иначе
+    генерируется новый; заголовок возвращается клиенту, поэтому по нему можно
+    найти и лог сервиса, и лог вызывающей стороны.
+    """
+    request_id = new_request_id(request.headers.get(REQUEST_ID_HEADER))
+    token = bind_request_id(request_id)
+    started = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        response.headers[REQUEST_ID_HEADER] = request_id
+        return response
+    finally:
+        elapsed = time.perf_counter() - started
+        # маршрут известен только после routing — шаблон пути берём здесь
+        path = metrics.route_template(request)
+        metrics.observe_request(request.method, path, status, elapsed)
+        access_record(
+            access_logger,
+            method=request.method,
+            path=path,
+            status=status,
+            duration_ms=elapsed * 1000.0,
+            request_id=request_id,
+        )
+        reset_request_id(token)
+
+
 # Единый исполнитель решений для всех эндпоинтов: локальные головы, внешний
 # SystemOne-сервис или каскад (по DECISION_BACKEND). Локальный сервис создаётся
 # лениво — только если выбранный бэкенд его действительно использует.
@@ -551,6 +598,7 @@ def _batch_trained(usages: list[dict[str, Any]]) -> bool | None:
 
 def _untrained_response(exc: UntrainedDecisionError) -> JSONResponse:
     """409 на запрос схемы, под которую нет обученных голов (политика refuse)."""
+    metrics.observe_refusal()
     return JSONResponse(
         status_code=409,
         content={
@@ -668,6 +716,7 @@ def create_decisions(req: DecisionRequest) -> DecisionResponse | JSONResponse:
         return _untrained_response(exc)
     except RemoteBackendError as exc:
         return _backend_unavailable(exc)
+    metrics.observe_decisions(result.decisions, result.usage.get("trained"))
     return DecisionResponse(
         schema_version=SCHEMA_VERSION,
         decisions=result.decisions,
@@ -684,6 +733,8 @@ def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse |
         return _untrained_response(exc)
     except RemoteBackendError as exc:
         return _backend_unavailable(exc)
+    for result in backend_results:
+        metrics.observe_decisions(result.decisions, result.usage.get("trained"))
     return BatchDecisionResponse(
         schema_version=SCHEMA_VERSION,
         results=[result.decisions for result in backend_results],
@@ -774,6 +825,19 @@ def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    """Метрики Prometheus: запросы, латентность, решения, готовность.
+
+    Эндпоинт не учитывается в собственных метриках (иначе скрейпер раздувал бы
+    счётчик запросов). Формат — Prometheus text 0.0.4.
+    """
+    return Response(
+        content=metrics.render(),
+        media_type=metrics.CONTENT_TYPE_LATEST,
+    )
+
+
 @app.get("/ready")
 def ready() -> JSONResponse:
     """Readiness: бэкенд действительно может обслуживать решения.
@@ -786,6 +850,9 @@ def ready() -> JSONResponse:
     report = backend_readiness(backend)
     report.setdefault("backend", backend.name)
     report["version"] = __version__
+    metrics.set_ready(bool(report.get("ready")))
+    if "heads_loaded" in report:
+        metrics.set_heads_loaded(int(report["heads_loaded"]))
     return JSONResponse(
         status_code=200 if report.get("ready") else 503,
         content=report,
@@ -854,6 +921,7 @@ def create_systemone_decisions(
         name: result_to_answer_model(decision)
         for name, decision in result.decisions.items()
     }
+    metrics.observe_decisions(result.decisions, result.usage.get("trained"))
     return SystemOneResponse(
         model=backend.name, answers=answers, usage=result.usage
     )

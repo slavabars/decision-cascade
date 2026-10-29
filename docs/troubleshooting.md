@@ -200,3 +200,29 @@ systemctl status decision-api@api.service
 
 Один инстанс на порт; для нескольких — `decision-api@<instance>.service` с
 разными портами в юните.
+
+## 13. Несколько доменов: пак не тот
+
+`DECISION_CHECKPOINT_DIR` может указывать на каталог с паками
+(`checkpoints/packs/`), где каждый домен лежит отдельно:
+
+```
+checkpoints/packs/
+  support-gpt2/    heads.pt + metadata.json
+  routerbench-gpt2/ heads.pt + metadata.json
+```
+
+Пак выбирается по `questions_signature` из `metadata.json`, а не по имени
+каталога. Проверить, какой пак реально обслуживает запрос:
+
+```bash
+curl -fsS http://127.0.0.1:8080/info | \
+  .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["engine"]["heads"])'
+```
+
+- `trained: false` или `source: null` — под подпись вопросов пака нет;
+- два пака с одной подписью: побеждает первый по сортировке, в лог пишется
+  `skip checkpoint ... already served by ...` — уберите дубль;
+- каталог без `metadata.json` паком не считается (не гадаем по `heads.pt`).
+
+Метрики и request id — [`observability.md`](observability.md).
