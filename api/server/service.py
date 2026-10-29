@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 from collections import OrderedDict
@@ -95,6 +96,8 @@ class DecisionService:
         self.choice_head = mode
         self._heads_cache: dict[str, DecisionHeads] = {}
         self._trained: dict[str, bool] = {}
+        #: Откуда загружены головы (путь к паку) — для ``/info`` и диагностики.
+        self._sources: dict[str, str] = {}
         self._feature_cache: OrderedDict[str, Tensor] = OrderedDict()
         #: Был ли выполнен прогрев чекпоинтов (нужно ``readiness``: отличить
         #: «голов нет» от «головы не читаются»).
@@ -121,6 +124,69 @@ class DecisionService:
     def _heads_key(dim: int, questions: dict[str, QuestionSpec]) -> str:
         return f"{dim}:{questions_signature(questions)}"
 
+    def _pack_dirs(self) -> list[Path]:
+        """Каталоги паков: ``<checkpoint_dir>/*/metadata.json`` + ``heads.pt``.
+
+        Многодоменная раскладка — по каталогу на пак
+        (``checkpoints/packs/<домен>/``); плоские ``*.pt`` в корне остаются
+        поддержанными для старых установок.
+        """
+        if self.checkpoint_dir is None or not self.checkpoint_dir.is_dir():
+            return []
+        return [
+            metadata.parent
+            for metadata in sorted(self.checkpoint_dir.glob("*/metadata.json"))
+            if (metadata.parent / "heads.pt").is_file()
+        ]
+
+    def _checkpoint_paths(self) -> list[Path]:
+        """Все читаемые чекпоинты: корневые ``*.pt`` и паки в подкаталогах."""
+        if self.checkpoint_dir is None or not self.checkpoint_dir.is_dir():
+            return []
+        paths = sorted(self.checkpoint_dir.glob("*.pt"))
+        paths.extend(pack / "heads.pt" for pack in self._pack_dirs())
+        return paths
+
+    def _find_checkpoint(
+        self, questions: dict[str, QuestionSpec], dim: int | None = None
+    ) -> Path | None:
+        """Ищет пак под подпись вопросов в корне и в подкаталогах.
+
+        Порядок: ``<dir>/<signature>.pt`` (старая раскладка), затем пак, чей
+        ``metadata.json`` объявляет эту подпись, затем ``*/<signature>.pt``.
+        Если задан ``dim``, паки с другим ``feature_dim`` пропускаются: один и
+        тот же набор вопросов может быть обучен под разные энкодеры, и сервис
+        должен взять совместимый, а не первый по алфавиту.
+        """
+        if self.checkpoint_dir is None:
+            return None
+        signature = questions_signature(questions)
+        direct = self.checkpoint_dir / f"{signature}.pt"
+        if direct.is_file():
+            return direct
+        fallback: Path | None = None
+        for pack in self._pack_dirs():
+            metadata = pack / "metadata.json"
+            try:
+                payload = json.loads(metadata.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                logger.warning("cannot read pack metadata %s", metadata)
+                continue
+            if payload.get("questions_signature") != signature:
+                continue
+            pack_dim = payload.get("feature_dim")
+            if dim is not None and pack_dim is not None and int(pack_dim) != dim:
+                fallback = fallback or pack / "heads.pt"
+                continue
+            return pack / "heads.pt"
+        if fallback is not None:
+            # Совместимого по dim пака нет — вернём хоть какой-то: загрузчик
+            # проверит dim по самому чекпоинту и честно предупредит.
+            return fallback
+        nested = sorted(self.checkpoint_dir.glob(f"*/{signature}.pt"))
+        return nested[0] if nested else None
+
+
     def _ensure_heads(
         self, dim: int, questions: dict[str, QuestionSpec]
     ) -> tuple[DecisionHeads, bool]:
@@ -141,9 +207,12 @@ class DecisionService:
                     choice_head=self.choice_head,
                     option_embeddings=option_embeddings,
                 )
-                trained = self._load_checkpoint_into(heads, dim)
+                loaded = self._load_checkpoint_into(heads, dim)
                 self._heads_cache[key] = heads
-                self._trained[key] = trained
+                self._trained[key] = loaded is not None
+                if loaded is not None:
+                    self._sources[key] = str(loaded)
+                trained = self._trained[key]
             else:
                 trained = self._trained.get(key, False)
         return heads, trained
@@ -170,6 +239,7 @@ class DecisionService:
                     "dim": int(key.split(":", 1)[0]),
                     "signature": key.split(":", 1)[1],
                     "trained": self._trained.get(key, False),
+                    "source": self._sources.get(key),
                 }
                 for key in self._heads_cache
             ]
@@ -212,11 +282,7 @@ class DecisionService:
             vision_ready = self._component_loaded(self.vision_encoder)
             if not vision_ready:
                 reasons.append("vision encoder is not loaded")
-        packs = (
-            sorted(self.checkpoint_dir.glob("*.pt"))
-            if self.checkpoint_dir is not None and self.checkpoint_dir.is_dir()
-            else []
-        )
+        packs = self._checkpoint_paths()
         with self._lock:
             heads_loaded = sum(1 for trained in self._trained.values() if trained)
         if self.untrained_policy == "refuse":
@@ -239,19 +305,19 @@ class DecisionService:
         }
 
     def warmup(self) -> int:
-        """Загружает головы из ``checkpoint_dir/*.pt`` в кэш при старте.
+        """Загружает головы из чекпоинтов в кэш при старте.
 
-        Прогрев делает ``/ready`` правдивым (головы действительно загружены) и
-        убирает задержку первого запроса. Паки другой размерности или другого
-        режима ``choice_head`` пропускаются: они всё равно не подойдут этому
-        сервису. Ошибка чтения одного файла не мешает остальным — она видна в
-        логе и в ``readiness``.
+        Обходит корневые ``*.pt`` и паки ``*/heads.pt`` с ``metadata.json`` —
+        так один сервис может держать несколько доменов и выбирать пак по
+        подписи вопросов. Прогрев делает ``/ready`` правдивым (головы
+        действительно загружены) и убирает задержку первого запроса. Паки другой
+        размерности или другого режима ``choice_head`` пропускаются: они всё
+        равно не подойдут этому сервису. Ошибка чтения одного файла не мешает
+        остальным — она видна в логе и в ``readiness``.
         """
         self._warmup_done = True
-        if self.checkpoint_dir is None or not self.checkpoint_dir.is_dir():
-            return 0
         loaded = 0
-        for path in sorted(self.checkpoint_dir.glob("*.pt")):
+        for path in self._checkpoint_paths():
             try:
                 heads = DecisionHeads.load_checkpoint(path, seed=self.seed)
             except Exception as exc:  # noqa: BLE001 - один битый пак не блокирует старт
@@ -279,9 +345,19 @@ class DecisionService:
             with self._lock:
                 if key in self._heads_cache:
                     # ``heads.pt`` и ``<signature>.pt`` — один и тот же пак.
+                    previous = self._sources.get(key)
+                    if previous is not None and previous != str(path):
+                        logger.warning(
+                            "skip checkpoint %s: questions signature %s is "
+                            "already served by %s",
+                            path,
+                            key.split(":", 1)[1],
+                            previous,
+                        )
                     continue
                 self._heads_cache[key] = heads
                 self._trained[key] = True
+                self._sources[key] = str(path)
             loaded += 1
         return loaded
 
@@ -300,31 +376,25 @@ class DecisionService:
         path = base / f"{questions_signature(questions)}.pt"
         return self.get_heads(dim, questions).save_checkpoint(path)
 
-    def _checkpoint_path(self, questions: dict[str, QuestionSpec]) -> Path | None:
-        if self.checkpoint_dir is None:
-            return None
-        return self.checkpoint_dir / f"{questions_signature(questions)}.pt"
-
-    def _load_checkpoint_into(self, heads: DecisionHeads, dim: int) -> bool:
-        path = self._checkpoint_path(heads.questions)
+    def _load_checkpoint_into(self, heads: DecisionHeads, dim: int) -> Path | None:
+        path = self._find_checkpoint(heads.questions, dim)
         if path is None:
-            return False
-        if not path.exists():
             # Молчаливое обслуживание необученными головами — источник трудно
             # диагностируемых низких метрик. Если каталог есть, а нужной подписи
             # нет (например, критерии в вопросе не совпали с обучением) — предупреждаем.
-            if path.parent.exists():
+            if self.checkpoint_dir is not None and self.checkpoint_dir.exists():
                 logger.warning(
-                    "no checkpoint %s for questions signature %s; "
+                    "no checkpoint for questions signature %s in %s; "
                     "serving untrained heads",
-                    path.name,
                     questions_signature(heads.questions),
+                    self.checkpoint_dir,
                 )
             else:
                 logger.info(
-                    "no checkpoint dir %s; serving untrained heads", path.parent
+                    "no checkpoint dir %s; serving untrained heads",
+                    self.checkpoint_dir,
                 )
-            return False
+            return None
         payload = torch.load(path, map_location="cpu", weights_only=True)
         if int(payload.get("dim", -1)) != dim:
             logger.warning(
@@ -333,7 +403,7 @@ class DecisionService:
                 dim,
                 path,
             )
-            return False
+            return None
         checkpoint_choice_head = str(payload.get("choice_head", "linear"))
         if checkpoint_choice_head != heads.choice_head:
             logger.warning(
@@ -343,10 +413,10 @@ class DecisionService:
                 heads.choice_head,
                 path,
             )
-            return False
+            return None
         heads.load_state_dict(payload["state_dict"])
         heads.set_temperatures(payload.get("temperature") or {})
-        return True
+        return path
 
     def _check_trained(
         self, questions: dict[str, QuestionSpec], trained: bool
