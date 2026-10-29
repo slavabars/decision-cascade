@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-10-29
+
 ### Added
 
 - **`GET /health` и `GET /ready`**: liveness отвечает всегда, readiness — только
@@ -567,7 +569,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/slavabars/decision-cascade/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/slavabars/decision-cascade/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/slavabars/decision-cascade/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/slavabars/decision-cascade/compare/v0.9.0...v0.10.0
