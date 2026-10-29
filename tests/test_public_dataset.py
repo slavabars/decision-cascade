@@ -95,3 +95,22 @@ def test_report_confidence_and_correct_shapes():
     )
     assert noul_conf.shape == (4,)
     assert set(np.unique(noul_correct)).issubset({0.0, 1.0})
+
+
+def test_load_ag_news_pins_dataset_revision(monkeypatch):
+    import datasets
+
+    from eval.datasets import public_dataset
+
+    calls = {}
+
+    def fake_load_dataset(name, **kwargs):
+        calls["name"] = name
+        calls["kwargs"] = kwargs
+        return {"train": [], "test": []}
+
+    monkeypatch.setattr(datasets, "load_dataset", fake_load_dataset)
+    public_dataset.load_ag_news()
+
+    assert calls["name"] == "fancyzhx/ag_news"
+    assert calls["kwargs"]["revision"] == public_dataset.AG_NEWS_REVISION

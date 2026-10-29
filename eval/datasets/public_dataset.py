@@ -19,6 +19,10 @@ from eval.datasets.text_dataset import spec_from_api, write_jsonl
 
 AG_NEWS_LABELS = ("World", "Sports", "Business", "Sci/Tech")
 
+#: Ревизия датасета: без неё Hub отдаёт текущий ``main`` и числа перестают
+#: воспроизводиться. Закреплено на срезе 2024-03-07 (RouterBench закреплён так же).
+AG_NEWS_REVISION = "eb185aade064a813bc0b7f42de02595523103ca4"
+
 # Реальные метки AG News -> три типизированных вопроса. ``topic`` — настоящая
 # метка; ``business`` — бинарная проекция; ``tech_level`` — порядковая проекция
 # (Sci/Tech -> high, Business -> medium, остальное -> low).
@@ -69,7 +73,7 @@ def load_ag_news(limit: int | None = None) -> dict[str, list[dict[str, Any]]]:
     """Загружает AG News (train/test). ``limit`` режет train и пропорционально test."""
     from datasets import load_dataset
 
-    raw = load_dataset("fancyzhx/ag_news")
+    raw = load_dataset("fancyzhx/ag_news", revision=AG_NEWS_REVISION)
     splits = {}
     for split_name, rows in raw.items():
         splits[split_name] = [
