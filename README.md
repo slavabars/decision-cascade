@@ -129,6 +129,9 @@ python3 -m venv .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
+Версии зависимостей зафиксированы в `uv.lock`: `uv sync --frozen` ставит ровно
+их, а CI проверяет актуальность lockfile через `uv lock --check`.
+
 `bootstrap-user.sh` работает без `sudo`: ставит `uv`/`pyenv` в `~/.local` и
 `~/.pyenv`, создаёт `.venv`, ставит зависимости и кладёт `gh` в `~/.local/bin`.
 
@@ -191,6 +194,9 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_BACKEND_URL` | базовый URL внешнего SystemOne-сервиса | — |
 | `DECISION_BACKEND_MODEL` | имя внешней модели (поле `model`) | `remote` |
 | `DECISION_BACKEND_MODALITIES` | модальности внешнего бэкенда | `text` |
+| `DECISION_BACKEND_TIMEOUT` | бюджет одного внешнего вызова, секунды (все retry внутри) | `60` |
+| `DECISION_BACKEND_RETRIES` | повторы внешнего вызова при сети/429/5xx (0 — без повторов) | `1` |
+| `DECISION_WARMUP` | загружать паки голов при старте (нужно для честного `/ready`) | `1` |
 | `DECISION_CASCADE_FALLBACK_URL` | URL fallback для `cascade` | — (обязателен) |
 | `DECISION_CASCADE_FALLBACK_MODEL` | имя fallback-модели | `remote` |
 | `DECISION_CASCADE_FALLBACK_MODALITIES` | модальности fallback | `text` |
@@ -510,8 +516,18 @@ ss -ltn | grep ':8000 ' || echo "порт 8000 свободен"
 - `POST /v1/feedback` — обратная связь: размеченные примеры решений, которые
   сервис применяет для подстройки под новый вопрос (см. «Подстройка под новый
   вопрос»);
+- `GET /health` — liveness: процесс жив и отвечает; зависимости не проверяются;
+- `GET /ready` — readiness: энкодер загружен, головы читаемы (при
+  `DECISION_UNTRAINED=refuse` — есть хотя бы один пак); у каскада недоступный
+  fallback виден как `degraded`, но инстанс остаётся готовым. `503`, пока сервис
+  не готов, — для балансировщиков и systemd;
 - `GET /info` — конфигурация сервиса: бэкенд, модальности, устройство и статус
   загруженных голов (`trained`).
+
+Внешний бэкенд (`http`/`cascade`) ограничен бюджетом `DECISION_BACKEND_TIMEOUT`
+на весь вызов: таймауты и сетевые ошибки повторяются один раз
+(`DECISION_BACKEND_RETRIES`), после чего API отвечает `502 BACKEND_UNAVAILABLE`.
+Тело запроса (`state`, `images`) в логи и текст ошибки не попадает.
 
 `POST /decisions` и `POST /decisions/batch` возвращают поле `trained`: `true`,
 если решения посчитаны обученными головами, `false` — если весов под эту схему
@@ -1028,11 +1044,13 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 347 passed, 10 skipped
+.venv/bin/python -m pytest                          # 604 passed, 10 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
-.venv/bin/python -m pytest --cov=src --cov=api --cov=eval --cov=training
+.venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
-shellcheck -x deploy/lib/common.sh deploy/ubuntu/install.sh deploy/centos/install.sh
+shellcheck -x $(git ls-files '*.sh')
+uv lock --check                                     # lockfile соответствует зависимостям
+uv build --wheel && scripts/smoke_wheel.sh          # smoke установленного wheel
 ```
 
 Тесты на реальной модели — opt-in (по умолчанию пропускаются, чтобы `pytest` не
@@ -1075,16 +1093,17 @@ docs/           — методика бенчмарков (competitor-benchmark.
                   risk-aware-cascade.md, option-scoring.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
                   SystemOne, каскады, vision, интеграции, эксплуатация)
-tests/          — pytest-набор (419 тестов + opt-in GPU/модель)
+tests/          — pytest-набор (604 теста + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
-scripts/        — bootstrap окружения (bootstrap-user.sh: uv/pyenv/venv/gh)
+scripts/        — bootstrap окружения (bootstrap-user.sh) и smoke wheel
 README.md       — этот файл
 requirements.txt
 pytest.ini
 pyproject.toml  — упаковка (дистрибутив decision-cascade)
 LICENSE, NOTICE — лицензия Apache-2.0
 CHANGELOG.md, SECURITY.md
-.github/workflows/ci.yml — CI: ruff + shellcheck + pytest
+.github/workflows/ci.yml — CI: ruff, shellcheck, pytest с гейтом покрытия,
+                  uv lock --check, сборка wheel и smoke
 ```
 
 ## Ограничения и планы
