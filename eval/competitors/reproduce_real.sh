@@ -65,7 +65,9 @@ export DECISION_MAX_LENGTH="$max_length"
 pids=()
 cleanup() {
   for pid in "${pids[@]:-}"; do
-    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+    if [[ -n "$pid" ]]; then
+      kill "$pid" 2>/dev/null || true
+    fi
   done
 }
 trap cleanup EXIT

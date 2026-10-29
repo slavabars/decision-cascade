@@ -26,14 +26,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Validate packaging (editable install)
-        run: pip install -e . --no-deps
-
       - name: Lint (ruff)
         run: ruff check src api eval training tests examples scripts
 
       - name: Lint shell (shellcheck)
         run: shellcheck -x $(git ls-files '*.sh')
 
-      - name: Tests
-        run: pytest -q
+      - name: Check lockfile
+        run: |
+          pip install uv
+          uv lock --check
+
+      - name: Tests with coverage gate
+        run: pytest -q --cov=src --cov=api --cov-report=term-missing:skip-covered
+
+      - name: Build wheel
+        run: pip wheel . --no-deps -w dist
+
+      - name: Smoke installed wheel
+        run: scripts/smoke_wheel.sh dist/decision_cascade-*.whl

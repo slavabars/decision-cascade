@@ -42,6 +42,15 @@ dependencies = { file = ["requirements.txt"] }
 include = ["src*", "api*", "eval*", "training*", "examples*"]
 exclude = ["tests*", "vendor*", "deploy*", "docs*", "scripts*", "data*", "checkpoints*"]
 
+[tool.coverage.run]
+source = ["src", "api"]
+
+[tool.coverage.report]
+# Гейт стабильности: контракт и ядро должны быть покрыты, а не «в среднем».
+fail_under = 90
+show_missing = true
+skip_covered = true
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"
