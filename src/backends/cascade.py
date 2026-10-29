@@ -13,6 +13,7 @@ from src.backends.base import (
     Backend,
     BackendResult,
     Capabilities,
+    backend_readiness,
     decide_many_states,
     missing_modalities,
     requested_modalities,
@@ -79,6 +80,25 @@ class CascadeBackend:
             modalities=primary.capabilities.modalities
             | fallback.capabilities.modalities
         )
+
+    def readiness(self) -> dict[str, Any]:
+        """Каскад готов, если готов primary; недоступный fallback — деградация.
+
+        Локальные решения можно отдавать и без внешней модели, поэтому падение
+        fallback не повод убирать инстанс из балансировки. Но ``degraded`` в
+        ответе ``/ready`` показывает, что эскалация сейчас не сработает.
+        """
+        primary = backend_readiness(self.primary)
+        fallback = backend_readiness(self.fallback)
+        report: dict[str, Any] = {
+            "ready": bool(primary.get("ready", False)),
+            "backend": self.name,
+            "primary": primary,
+            "fallback": fallback,
+        }
+        if not fallback.get("ready", False):
+            report["degraded"] = True
+        return report
 
     def untrained_falls_back(self) -> bool:
         """Эскалировать ли во внешнюю модель, если primary не обучен.

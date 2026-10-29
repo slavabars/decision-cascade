@@ -96,6 +96,9 @@ class DecisionService:
         self._heads_cache: dict[str, DecisionHeads] = {}
         self._trained: dict[str, bool] = {}
         self._feature_cache: OrderedDict[str, Tensor] = OrderedDict()
+        #: Был ли выполнен прогрев чекпоинтов (нужно ``readiness``: отличить
+        #: «голов нет» от «головы не читаются»).
+        self._warmup_done = False
         # Эндпоинты синхронные и обслуживаются threadpool'ом FastAPI, поэтому
         # общие кэши (головы и признаков) прикрываем блокировкой.
         self._lock = threading.RLock()
@@ -180,6 +183,107 @@ class DecisionService:
             ),
             "heads": heads,
         }
+
+    @staticmethod
+    def _component_loaded(component: Any) -> bool:
+        """Загружен ли компонент: у трансформеров признак — непустой ``_model``."""
+        if hasattr(component, "_model"):
+            return component._model is not None
+        loaded = getattr(component, "loaded", None)
+        if isinstance(loaded, bool):
+            return loaded
+        return True
+
+    def readiness(self) -> dict[str, Any]:
+        """Готовность сервиса: энкодер загружен, а головы есть и читаются.
+
+        Политика ``refuse`` требует хотя бы одного чекпоинта: иначе первый же
+        запрос получит 409, и балансировщику незачем считать инстанс готовым.
+        При ``allow``/``fallback`` сервис отвечает и без паков (демо-режим или
+        эскалация во внешнюю модель), поэтому отсутствие чекпоинтов не делает
+        его неготовым.
+        """
+        reasons: list[str] = []
+        encoder_ready = self._component_loaded(self.encoder)
+        if not encoder_ready:
+            reasons.append("encoder is not loaded")
+        vision_ready = True
+        if self.vision_encoder is not None:
+            vision_ready = self._component_loaded(self.vision_encoder)
+            if not vision_ready:
+                reasons.append("vision encoder is not loaded")
+        packs = (
+            sorted(self.checkpoint_dir.glob("*.pt"))
+            if self.checkpoint_dir is not None and self.checkpoint_dir.is_dir()
+            else []
+        )
+        with self._lock:
+            heads_loaded = sum(1 for trained in self._trained.values() if trained)
+        if self.untrained_policy == "refuse":
+            if not packs:
+                reasons.append("no trained checkpoints for untrained_policy=refuse")
+            elif self._warmup_done and heads_loaded == 0:
+                reasons.append("checkpoints are not readable by this service")
+        return {
+            "ready": not reasons,
+            "reasons": reasons,
+            "encoder": type(self.encoder).__name__,
+            "encoder_loaded": encoder_ready,
+            "vision_loaded": vision_ready,
+            "untrained_policy": self.untrained_policy,
+            "checkpoint_dir": (
+                str(self.checkpoint_dir) if self.checkpoint_dir else None
+            ),
+            "checkpoints": len(packs),
+            "heads_loaded": heads_loaded,
+        }
+
+    def warmup(self) -> int:
+        """Загружает головы из ``checkpoint_dir/*.pt`` в кэш при старте.
+
+        Прогрев делает ``/ready`` правдивым (головы действительно загружены) и
+        убирает задержку первого запроса. Паки другой размерности или другого
+        режима ``choice_head`` пропускаются: они всё равно не подойдут этому
+        сервису. Ошибка чтения одного файла не мешает остальным — она видна в
+        логе и в ``readiness``.
+        """
+        self._warmup_done = True
+        if self.checkpoint_dir is None or not self.checkpoint_dir.is_dir():
+            return 0
+        loaded = 0
+        for path in sorted(self.checkpoint_dir.glob("*.pt")):
+            try:
+                heads = DecisionHeads.load_checkpoint(path, seed=self.seed)
+            except Exception as exc:  # noqa: BLE001 - один битый пак не блокирует старт
+                logger.warning(
+                    "cannot load checkpoint %s: %s", path.name, type(exc).__name__
+                )
+                continue
+            if heads.dim != self.dim:
+                logger.info(
+                    "skip checkpoint %s: dim=%s, service dim=%s",
+                    path.name,
+                    heads.dim,
+                    self.dim,
+                )
+                continue
+            if heads.choice_head != self.choice_head:
+                logger.warning(
+                    "skip checkpoint %s: choice_head=%s, service choice_head=%s",
+                    path.name,
+                    heads.choice_head,
+                    self.choice_head,
+                )
+                continue
+            key = self._heads_key(heads.dim, heads.questions)
+            with self._lock:
+                if key in self._heads_cache:
+                    # ``heads.pt`` и ``<signature>.pt`` — один и тот же пак.
+                    continue
+                self._heads_cache[key] = heads
+                self._trained[key] = True
+            loaded += 1
+        return loaded
 
     def save_heads(
         self,
@@ -382,6 +486,9 @@ class DecisionService:
         results = sample_decisions(heads, features)
         for name, result in results.items():
             dist = getattr(result, "probabilities", None) or {"p": result.noul}
+            # Логируем только решение (вопрос, тип, распределение, confidence).
+            # state, images и тела /v1/feedback сюда не попадают — это
+            # зафиксировано тестом tests/test_logging_privacy.py.
             logger.info(
                 "decision name=%s type=%s distribution=%s confidence=%.3f",
                 name,

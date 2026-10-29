@@ -110,6 +110,26 @@ def missing_modalities(
     return frozenset(requested - supported)
 
 
+def backend_readiness(backend: Any) -> dict[str, Any]:
+    """Готовность бэкенда в едином формате для ``GET /ready``.
+
+    Бэкенд может объявить ``readiness()``; если не объявил (тесты, сторонние
+    реализации), считаем его готовым: сам факт создания — уже готовность.
+    Исключение внутри пробы не роняет эндпоинт, а превращается в ``ready: false``.
+    """
+    probe = getattr(backend, "readiness", None)
+    if not callable(probe):
+        return {"ready": True}
+    try:
+        report = probe()
+    except Exception as exc:  # noqa: BLE001 - проба не должна ронять /ready
+        return {"ready": False, "reason": type(exc).__name__}
+    if isinstance(report, dict):
+        report.setdefault("ready", False)
+        return report
+    return {"ready": bool(report)}
+
+
 def decide_many_states(
     backend: Backend,
     states: list[str],

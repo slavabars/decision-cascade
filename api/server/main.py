@@ -26,13 +26,23 @@ from api.server.systemone import (
     systemone_to_specs,
 )
 from src import __version__
-from src.backends.base import Backend, missing_modalities, requested_modalities
+from src.backends.base import (
+    Backend,
+    backend_readiness,
+    missing_modalities,
+    requested_modalities,
+)
 from src.backends.cascade import CascadeBackend
-from src.backends.http import HttpSystemOneBackend, parse_modalities
+from src.backends.http import (
+    DEFAULT_RETRIES,
+    DEFAULT_TIMEOUT,
+    HttpSystemOneBackend,
+    parse_modalities,
+)
 from src.backends.local import LocalHeadsBackend
 from src.device import check_dtype_device, resolve_device, resolve_dtype
 from src.encoder.vision import VisionEncoder
-from src.errors import UntrainedDecisionError
+from src.errors import RemoteBackendError, UntrainedDecisionError
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
 from src.schemas import SCHEMA_VERSION, DecisionResult
 
@@ -93,6 +103,72 @@ def parse_max_length(raw: str) -> int | None:
     return parsed if parsed >= 1 else None
 
 
+def parse_positive_float(name: str, raw: str | None, *, default: float) -> float:
+    """Разбирает положительное число из окружения (таймаут внешнего бэкенда)."""
+    value = default if raw is None else raw
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be a positive number, got {value!r}") from exc
+    if parsed <= 0:
+        raise RuntimeError(f"{name} must be > 0, got {parsed}")
+    return parsed
+
+
+def parse_retries(raw: str | None, *, default: int) -> int:
+    """Разбирает число retry внешнего бэкенда (0 — без повторов)."""
+    value = default if raw is None else raw
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"DECISION_BACKEND_RETRIES must be a non-negative int, got {value!r}"
+        ) from exc
+    if parsed < 0:
+        raise RuntimeError(
+            f"DECISION_BACKEND_RETRIES must be >= 0, got {parsed}"
+        )
+    return parsed
+
+
+def http_backend_options() -> dict[str, float | int]:
+    """Таймаут и retry внешних вызовов из окружения (общие для http и cascade)."""
+    return {
+        "timeout": parse_positive_float(
+            "DECISION_BACKEND_TIMEOUT",
+            os.environ.get("DECISION_BACKEND_TIMEOUT"),
+            default=DEFAULT_TIMEOUT,
+        ),
+        "retries": parse_retries(
+            os.environ.get("DECISION_BACKEND_RETRIES"), default=DEFAULT_RETRIES
+        ),
+    }
+
+
+def warmup_enabled() -> bool:
+    """Прогрев чекпоинтов при старте; ``DECISION_WARMUP=0`` отключает его."""
+    return os.environ.get("DECISION_WARMUP", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def warmup_service(service: DecisionService) -> DecisionService:
+    """Прогревает головы, чтобы ``/ready`` отражал реальную готовность."""
+    if not warmup_enabled():
+        return service
+    loaded = service.warmup()
+    if loaded:
+        logger.info(
+            "warmup: loaded %d checkpoint(s) from %s",
+            loaded,
+            service.checkpoint_dir,
+        )
+    return service
+
+
 def resolve_untrained_policy() -> str:
     """Разбирает ``DECISION_UNTRAINED``: ``allow``/``refuse``/``fallback``/``auto``.
 
@@ -120,11 +196,13 @@ def create_service() -> DecisionService:
     vision_encoder = create_vision_encoder()
     model_id = os.environ.get("DECISION_MODEL_ID")
     if not model_id:
-        return DecisionService(
-            checkpoint_dir=checkpoint_dir,
-            vision_encoder=vision_encoder,
-            untrained_policy=untrained_policy,
-            choice_head=choice_head,
+        return warmup_service(
+            DecisionService(
+                checkpoint_dir=checkpoint_dir,
+                vision_encoder=vision_encoder,
+                untrained_policy=untrained_policy,
+                choice_head=choice_head,
+            )
         )
     from src.encoder.factory import create_state_encoder
 
@@ -155,13 +233,15 @@ def create_service() -> DecisionService:
         batch_size=batch_size,
     )
     encoder.load()
-    return DecisionService(
-        encoder=encoder,
-        dim=feature_dim,
-        checkpoint_dir=checkpoint_dir,
-        vision_encoder=vision_encoder,
-        untrained_policy=untrained_policy,
-        choice_head=choice_head,
+    return warmup_service(
+        DecisionService(
+            encoder=encoder,
+            dim=feature_dim,
+            checkpoint_dir=checkpoint_dir,
+            vision_encoder=vision_encoder,
+            untrained_policy=untrained_policy,
+            choice_head=choice_head,
+        )
     )
 
 
@@ -176,7 +256,9 @@ def create_backend(service: DecisionService | None = None) -> Backend:
         modalities = parse_modalities(
             os.environ.get("DECISION_BACKEND_MODALITIES", "text")
         )
-        return HttpSystemOneBackend(url, model=model, modalities=modalities)
+        return HttpSystemOneBackend(
+            url, model=model, modalities=modalities, **http_backend_options()
+        )
     if kind == "cascade":
         return create_cascade_backend(service)
     return LocalHeadsBackend(service or create_service())
@@ -217,6 +299,7 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
         modalities=parse_modalities(
             os.environ.get("DECISION_CASCADE_FALLBACK_MODALITIES", "text")
         ),
+        **http_backend_options(),
     )
     threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
     policy = os.environ.get("DECISION_CASCADE_POLICY", "").strip().lower()
@@ -460,6 +543,31 @@ def _untrained_response(exc: UntrainedDecisionError) -> JSONResponse:
     )
 
 
+def _backend_unavailable(exc: RemoteBackendError) -> JSONResponse:
+    """502: внешний SystemOne-сервис недоступен после исчерпания таймаута/retry.
+
+    Наружу отдаём только имя бэкенда и HTTP-статус (если был): тело запроса
+    (state/images) в ответ и в лог не попадает.
+    """
+    logger.warning(
+        "backend %s unavailable: %s (status=%s)",
+        exc.backend,
+        exc,
+        exc.status_code,
+    )
+    return JSONResponse(
+        status_code=502,
+        content={
+            "error": {
+                "code": "BACKEND_UNAVAILABLE",
+                "message": f"backend {exc.backend!r} is unavailable",
+                "backend": exc.backend,
+                "status_code": exc.status_code,
+            }
+        },
+    )
+
+
 def _feedback_unsupported() -> JSONResponse:
     """409: бэкенд не принимает обратную связь — few-shot выключен или риск-модели нет."""
     return JSONResponse(
@@ -537,6 +645,8 @@ def create_decisions(req: DecisionRequest) -> DecisionResponse | JSONResponse:
         result = backend.decide(req.state, _to_specs(req.questions))
     except UntrainedDecisionError as exc:
         return _untrained_response(exc)
+    except RemoteBackendError as exc:
+        return _backend_unavailable(exc)
     return DecisionResponse(
         schema_version=SCHEMA_VERSION,
         decisions=result.decisions,
@@ -551,6 +661,8 @@ def create_decisions_batch(req: BatchDecisionRequest) -> BatchDecisionResponse |
         backend_results = backend.decide_many(req.states, _to_specs(req.questions))
     except UntrainedDecisionError as exc:
         return _untrained_response(exc)
+    except RemoteBackendError as exc:
+        return _backend_unavailable(exc)
     return BatchDecisionResponse(
         schema_version=SCHEMA_VERSION,
         results=[result.decisions for result in backend_results],
@@ -635,6 +747,30 @@ def submit_feedback(req: FeedbackRequest) -> FeedbackResponse | JSONResponse:
     )
 
 
+@app.get("/health")
+def health() -> dict[str, str]:
+    """Liveness: процесс жив и event loop отвечает. Зависимости не проверяются."""
+    return {"status": "ok", "version": __version__}
+
+
+@app.get("/ready")
+def ready() -> JSONResponse:
+    """Readiness: бэкенд действительно может обслуживать решения.
+
+    Для локального бэкенда это загруженный энкодер и читаемые головы (при
+    ``DECISION_UNTRAINED=refuse`` — хотя бы один пак); для каскада — готовность
+    primary, а недоступный fallback отмечается как ``degraded``. Ответ 503, пока
+    сервис не готов, — балансировщик не должен слать на него трафик.
+    """
+    report = backend_readiness(backend)
+    report.setdefault("backend", backend.name)
+    report["version"] = __version__
+    return JSONResponse(
+        status_code=200 if report.get("ready") else 503,
+        content=report,
+    )
+
+
 @app.get("/info")
 def get_info() -> dict[str, Any]:
     """Конфигурация сервиса: бэкенд, модальности и статус локальных голов."""
@@ -691,6 +827,8 @@ def create_systemone_decisions(
         )
     except UntrainedDecisionError as exc:
         return _untrained_response(exc)
+    except RemoteBackendError as exc:
+        return _backend_unavailable(exc)
     answers = {
         name: result_to_answer_model(decision)
         for name, decision in result.decisions.items()

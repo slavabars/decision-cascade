@@ -15,4 +15,6 @@ ensure_venv "$PROJECT_DIR"
 install_systemd_unit "$SCRIPT_DIR/../systemd/decision-api@.service" "api"
 
 echo "CentOS deploy done. App dir: $PROJECT_DIR"
-echo "Health: curl http://127.0.0.1:8080/decisions (POST)"
+echo "Liveness: curl -f http://127.0.0.1:8080/health"
+echo "Readiness: curl -f http://127.0.0.1:8080/ready"
+echo "Decision: curl -X POST http://127.0.0.1:8080/decisions"

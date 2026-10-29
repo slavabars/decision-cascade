@@ -27,3 +27,23 @@ class UntrainedDecisionError(RuntimeError):
             f"no trained checkpoint for questions signature {signature!r}; "
             f"refusing to serve untrained heads ({hint})"
         )
+
+
+class RemoteBackendError(RuntimeError):
+    """Внешний SystemOne-бэкенд недоступен или ответил ошибкой после retry.
+
+    ``message`` не содержит тела запроса (state/images) — только имя бэкенда и
+    код ответа: тексты состояний и изображения не должны попадать в логи и в
+    ответы об ошибках.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        backend: str = "remote",
+        status_code: int | None = None,
+    ) -> None:
+        self.backend = backend
+        self.status_code = status_code
+        super().__init__(message)

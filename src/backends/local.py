@@ -8,6 +8,7 @@ from src.backends.base import (
     BackendResult,
     Capabilities,
     LocalEngine,
+    backend_readiness,
     decide_many_states,
 )
 from src.sampler.questions import QuestionSpec
@@ -21,6 +22,12 @@ class LocalHeadsBackend:
         self.name = name
         supported = getattr(engine, "modalities", frozenset({TEXT}))
         self.capabilities = Capabilities(modalities=frozenset(supported))
+
+    def readiness(self) -> dict[str, Any]:
+        """Готовность локального движка: загружен ли энкодер и есть ли головы."""
+        report = backend_readiness(self.engine)
+        report.setdefault("backend", self.name)
+        return report
 
     def _trained(self, questions: dict[str, QuestionSpec]) -> bool | None:
         """Обучены ли головы под схему (``None`` — движок не сообщает)."""

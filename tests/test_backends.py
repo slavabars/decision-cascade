@@ -271,3 +271,101 @@ def test_answer_to_result_normalizes_score_probabilities():
         }
     )
     assert sum(score.probabilities.values()) == pytest.approx(1.0)
+
+
+def _retry_payload():
+    return {"u": NoulSpec("urgent?")}
+
+
+def test_http_backend_retries_transient_status():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(503, json={"error": "busy"})
+        return httpx.Response(200, json=_systemone_response())
+
+    backend = HttpSystemOneBackend(
+        "http://remote", retries=1, transport=httpx.MockTransport(handler)
+    )
+    result = backend.decide("state text", _retry_payload())
+
+    assert len(calls) == 2
+    assert result.decisions["u"].type == "noul"
+
+
+def test_http_backend_does_not_retry_client_errors():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(400, json={"error": "bad request"})
+
+    from src.errors import RemoteBackendError
+
+    backend = HttpSystemOneBackend(
+        "http://remote", retries=1, transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(RemoteBackendError) as excinfo:
+        backend.decide("state text", _retry_payload())
+
+    assert len(calls) == 1
+    assert excinfo.value.status_code == 400
+
+
+def test_http_backend_retries_transport_error_once():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        raise httpx.ConnectError("boom", request=request)
+
+    from src.errors import RemoteBackendError
+
+    backend = HttpSystemOneBackend(
+        "http://remote", retries=1, transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(RemoteBackendError) as excinfo:
+        backend.decide("secret state text", _retry_payload())
+
+    assert len(calls) == 2
+    assert "secret state text" not in str(excinfo.value)
+
+
+def test_http_backend_zero_retries_fails_fast():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(503, json={})
+
+    from src.errors import RemoteBackendError
+
+    backend = HttpSystemOneBackend(
+        "http://remote", retries=0, transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(RemoteBackendError):
+        backend.decide("state text", _retry_payload())
+
+    assert len(calls) == 1
+
+
+def test_http_backend_rejects_invalid_options():
+    with pytest.raises(ValueError, match="timeout"):
+        HttpSystemOneBackend("http://remote", timeout=0)
+    with pytest.raises(ValueError, match="retries"):
+        HttpSystemOneBackend("http://remote", retries=-1)
+
+
+def test_create_backend_passes_http_budget(monkeypatch):
+    from api.server import main
+
+    monkeypatch.setenv("DECISION_BACKEND", "http")
+    monkeypatch.setenv("DECISION_BACKEND_URL", "http://localhost:30000")
+    monkeypatch.setenv("DECISION_BACKEND_TIMEOUT", "12.5")
+    monkeypatch.setenv("DECISION_BACKEND_RETRIES", "2")
+    backend = main.create_backend()
+
+    assert backend.timeout == 12.5
+    assert backend.retries == 2
