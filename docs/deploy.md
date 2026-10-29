@@ -162,6 +162,14 @@ curl -fsS http://127.0.0.1:8080/ready
 Перед выкаткой на новый дистрибутив прогоните `install.sh` → `upgrade.sh` →
 `restore.sh` на одноразовой VM и сверьте `/ready`.
 
+Проверено вживую (2026-10-29, `0.15.0`, Ubuntu 24.04.5 LTS, systemd 255):
+`install.sh` → `/health`, `/ready`, `/metrics`, `X-Request-ID`,
+`POST /decisions` → `upgrade.sh` → `backup.sh` → порча `.env` → `restore.sh` →
+teardown — **PASS**. Юнит рендерится под `/opt/decision-model`, сервис работает
+под пользователем `decision`, после teardown не остаётся ни юнита, ни каталога,
+ни пользователя. CentOS-путь пока проверен только тестами паритета
+(`tests/test_deploy.py`).
+
 ## 6. Аккуратное завершение
 
 `systemctl restart`/`stop` посылает `SIGTERM`. uvicorn перестаёт принимать новые
