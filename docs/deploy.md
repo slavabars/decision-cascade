@@ -1,9 +1,9 @@
 # Деплой, обновление и откат
 
-Сервис ставится в каталог проекта (`/opt/decision-model` в systemd-юните) и
-работает под systemd. Ubuntu и CentOS/RHEL-семейство идут одним путём: различия
-только в установке пакетов (`apt` против `dnf`), всё остальное — общий
-`deploy/lib/common.sh`.
+Сервис ставится в `/opt/decision-model` (переопределяется `DECISION_INSTALL_DIR`),
+юнит `decision-api@.service` рендерится под этот каталог и пользователя сервиса.
+Ubuntu и CentOS/RHEL-семейство идут одним путём: различия только в установке
+пакетов (`apt` против `dnf`), всё остальное — общий `deploy/lib/common.sh`.
 
 ## 1. Установка
 
@@ -15,9 +15,34 @@ sudo bash deploy/ubuntu/install.sh
 sudo bash deploy/centos/install.sh
 ```
 
-Скрипт ставит python3/venv/pip/curl/git, собирает `.venv` из
-`requirements.txt`, кладёт юнит `decision-api@.service` и запускает инстанс
-`api` на `127.0.0.1:8080`.
+Что делает установщик:
+
+1. ставит python3/venv/pip/curl/git;
+2. разворачивает **закоммиченное** состояние в `/opt/decision-model`
+   (`git clone` из чекаута, из которого запущен скрипт; грязное дерево —
+   ошибка, чтобы на сервер не уехало непроверенное);
+3. собирает `.venv` из `requirements.txt` уже в каталоге установки;
+4. создаёт системного пользователя `decision` без логина и отдаёт ему чтение
+   дерева (владелец — `root`, чтобы `upgrade.sh` мог делать `git pull`);
+5. рендерит юнит `decision-api@.service` под фактический каталог и
+   пользователя и запускает инстанс `api` на `127.0.0.1:8080`.
+
+| Переменная | По умолчанию | Назначение |
+| --- | --- | --- |
+| `DECISION_INSTALL_DIR` | `/opt/decision-model` | каталог установки |
+| `DECISION_SERVICE_USER` | `decision` | пользователь сервиса (создаётся, если нет) |
+
+Если ставить прямо из рабочего дерева (`DECISION_INSTALL_DIR` равен каталогу
+чекаута), сервис запускается под пользователем, вызвавшим `sudo`, а права на
+исходники не меняются — удобно для одноразовой VM, но не для продакшена.
+
+```bash
+# проверить установку, не трогая /opt
+sudo DECISION_INSTALL_DIR=/srv/decision-model bash deploy/ubuntu/install.sh
+```
+
+Состояние (`.env`, паки, риск-модель) установщик не создаёт: на новом сервере
+его привозят из бэкапа (`deploy/restore.sh`) или из релизных паков.
 
 Проверка после установки:
 
@@ -115,6 +140,8 @@ curl -fsS http://127.0.0.1:8080/ready
 | --- | --- | --- |
 | Пакеты | `apt-get install python3 python3-venv python3-pip curl git` | `dnf install python3 python3-pip curl git` |
 | venv | `python3 -m venv .venv` | то же |
+| Каталог установки | `/opt/decision-model` (`DECISION_INSTALL_DIR`) | то же |
+| Пользователь сервиса | системный `decision` (`DECISION_SERVICE_USER`) | то же |
 | systemd | `systemctl enable --now decision-api@api` | то же |
 | upgrade/rollback | `deploy/upgrade.sh`, `deploy/restore.sh` | то же |
 
@@ -124,6 +151,10 @@ curl -fsS http://127.0.0.1:8080/ready
   `centos`/`rocky`/`almalinux`/`rhel`, а неизвестный дистрибутив — отклоняет;
 - бэкап и восстановление `.env`, паков и риск-модели на временном каталоге;
 - `shellcheck -x` для всех `deploy/**/*.sh`;
+- `render_unit` подставляет в юнит фактический каталог и пользователя и
+  отклоняет нераскрытые placeholder'ы;
+- `ensure_project_dir` разворачивает только закоммиченное состояние, не
+  копирует `.venv`/`checkpoints` и не перезаписывает непустой каталог;
 - systemd-юнит: `KillSignal=SIGTERM`, `TimeoutStopSec=30`,
   `--timeout-graceful-shutdown 30`.
 

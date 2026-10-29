@@ -1095,9 +1095,11 @@ systemctl status decision-api@api.service
 ```
 
 Обе сборки используют общий `deploy/lib/common.sh`: детект дистрибутива по
-`/etc/os-release`, установка пакетов, `ensure_venv`, установка юнита
-`decision-api@.service` (uvicorn, порт 8080, автозапуск, graceful shutdown по
-`SIGTERM`).
+`/etc/os-release`, установка пакетов, `ensure_venv`, рендер юнита
+`decision-api@.service` под фактический каталог и пользователя (uvicorn, порт
+8080, автозапуск, graceful shutdown по `SIGTERM`). Установщик разворачивает
+закоммиченное состояние в `/opt/decision-model` (`DECISION_INSTALL_DIR`) и
+создаёт системного пользователя `decision` (`DECISION_SERVICE_USER`).
 
 Обновление, откат и состав бэкапа — [`docs/deploy.md`](docs/deploy.md).
 Типовые ошибки (`UNTRAINED_HEADS`, `MODALITY_NOT_SUPPORTED`, `/ready` 503) —

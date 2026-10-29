@@ -4,15 +4,17 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/decision-model
-ExecStart=/opt/decision-model/.venv/bin/uvicorn api.server.main:app --host 127.0.0.1 --port 8080 --timeout-graceful-shutdown 30
+# Каталог, пользователь и группа подставляются deploy/lib/common.sh
+# (render_unit) при установке: юнит не знает конкретный путь заранее.
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__PROJECT_DIR__/.venv/bin/uvicorn api.server.main:app --host 127.0.0.1 --port 8080 --timeout-graceful-shutdown 30
 Restart=on-failure
 RestartSec=2
 # SIGTERM -> uvicorn перестаёт принимать новое, но доводит текущие запросы.
 KillSignal=SIGTERM
 TimeoutStopSec=30
-User=decision
-Group=decision
+User=__SERVICE_USER__
+Group=__SERVICE_GROUP__
 Environment=PYTHONUNBUFFERED=1
 
 [Install]

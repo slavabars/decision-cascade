@@ -47,6 +47,11 @@ def test_systemd_unit_template():
     assert "uvicorn" in unit and "api.server.main:app" in unit
     assert "8080" in unit
     assert "%i" in unit
+    # Каталог и пользователь подставляет установщик: статический /opt ломал
+    # установку из любого другого каталога.
+    assert "/opt/decision-model" not in unit
+    assert "__PROJECT_DIR__" in unit
+    assert "__SERVICE_USER__" in unit and "__SERVICE_GROUP__" in unit
 
 
 def test_systemd_unit_shuts_down_gracefully():
@@ -195,3 +200,152 @@ def test_upgrade_and_restore_use_shared_helpers():
     assert "wait_ready" in upgrade and "ensure_venv" in upgrade
     assert "restore_state" in restore and "wait_ready" in restore
     assert "backup_state" in backup
+
+# --- установка: юнит под фактический каталог и пользователя -------------------
+
+
+def test_install_scripts_prepare_project_dir_and_user():
+    for name in ("ubuntu", "centos"):
+        script = (DEPLOY / name / "install.sh").read_text()
+        assert "DECISION_INSTALL_DIR" in script
+        assert "ensure_project_dir" in script
+        assert "ensure_service_user" in script
+        assert 'install_systemd_unit' in script
+        # юнит получает каталог и пользователя, а не /opt по умолчанию
+        assert '"$INSTALL_DIR" "$SERVICE_USER" "$SERVICE_USER"' in script
+
+
+def test_render_unit_substitutes_paths_and_user(tmp_path):
+    dest = tmp_path / "decision-api@.service"
+    project = tmp_path / "opt" / "decision-model"
+    result = _bash(
+        'source "$1"; render_unit "$2" "$3" "svc" "svcgrp" "$4"',
+        str(COMMON),
+        str(DEPLOY / "systemd" / "decision-api@.service"),
+        str(project),
+        str(dest),
+    )
+    assert result.returncode == 0, result.stderr
+    unit = dest.read_text()
+    assert f"WorkingDirectory={project}" in unit
+    assert f"ExecStart={project}/.venv/bin/uvicorn" in unit
+    assert "User=svc" in unit and "Group=svcgrp" in unit
+    assert "__" not in unit
+    # шаблонные подстановки не съедают спецификаторы systemd
+    assert "%i" in unit and "8080" in unit
+
+
+def test_render_unit_rejects_pipe_in_path(tmp_path):
+    dest = tmp_path / "unit"
+    result = _bash(
+        'source "$1"; render_unit "$2" "/opt/a|b" "u" "g" "$3"',
+        str(COMMON),
+        str(DEPLOY / "systemd" / "decision-api@.service"),
+        str(dest),
+    )
+    assert result.returncode != 0
+    assert "must not contain" in result.stderr
+
+
+def _git_init(path: Path) -> None:
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-q", "-m", "init"],
+        check=True,
+        env={**os.environ, **env},
+    )
+
+
+def test_ensure_project_dir_clones_committed_state(tmp_path):
+    src = tmp_path / "checkout"
+    src.mkdir()
+    (src / "README.md").write_text("hello\n", encoding="utf-8")
+    _git_init(src)
+    # незакоммиченный файл не должен уехать на сервер
+    (src / "local-only.txt").write_text("x\n", encoding="utf-8")
+
+    dest = tmp_path / "opt" / "decision-model"
+    result = _bash(
+        'source "$1"; ensure_project_dir "$2" "$3"',
+        str(COMMON),
+        str(src),
+        str(dest),
+    )
+    assert result.returncode == 0, result.stderr
+    assert (dest / "README.md").is_file()
+    assert (dest / ".git").is_dir()
+    assert not (dest / "local-only.txt").exists()
+    assert "installed commit:" in result.stdout
+
+
+def test_ensure_project_dir_refuses_dirty_checkout(tmp_path):
+    src = tmp_path / "checkout"
+    src.mkdir()
+    (src / "README.md").write_text("hello\n", encoding="utf-8")
+    _git_init(src)
+    (src / "README.md").write_text("changed\n", encoding="utf-8")
+
+    result = _bash(
+        'source "$1"; ensure_project_dir "$2" "$3"',
+        str(COMMON),
+        str(src),
+        str(tmp_path / "dest"),
+    )
+    assert result.returncode != 0
+    assert "dirty" in result.stderr
+
+
+def test_ensure_project_dir_copies_tree_without_git(tmp_path):
+    src = tmp_path / "tarball"
+    (src / "checkpoints").mkdir(parents=True)
+    (src / ".venv" / "bin").mkdir(parents=True)
+    (src / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (src / "checkpoints" / "heads.pt").write_bytes(b"pt")
+    (src / ".venv" / "bin" / "python").write_text("x", encoding="utf-8")
+
+    dest = tmp_path / "dest"
+    result = _bash(
+        'source "$1"; ensure_project_dir "$2" "$3"',
+        str(COMMON),
+        str(src),
+        str(dest),
+    )
+    assert result.returncode == 0, result.stderr
+    assert (dest / "requirements.txt").is_file()
+    # venv и локальное состояние не копируем — они пересобираются/приезжают бэкапом
+    assert not (dest / ".venv").exists()
+    assert not (dest / "checkpoints").exists()
+
+
+def test_ensure_project_dir_refuses_non_empty_destination(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "keep.txt").write_text("x", encoding="utf-8")
+
+    result = _bash(
+        'source "$1"; ensure_project_dir "$2" "$3"',
+        str(COMMON),
+        str(src),
+        str(dest),
+    )
+    assert result.returncode != 0
+    assert "not empty" in result.stderr
+
+
+def test_ensure_project_dir_same_dir_is_noop(tmp_path):
+    result = _bash(
+        'source "$1"; ensure_project_dir "$2" "$2"',
+        str(COMMON),
+        str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "same as checkout" in result.stdout

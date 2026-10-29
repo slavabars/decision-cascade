@@ -56,14 +56,21 @@ distro_pkg_install() {
     esac
 }
 
-## install_systemd_unit <path-to-service-template> <instance>
-## Копирует юнит в /etc/systemd/system и, при наличии systemd, включает сервис.
+## install_systemd_unit <template> <instance> [project-dir] [user] [group]
+## Рендерит юнит под фактический каталог и пользователя и включает сервис.
+## Раньше юнит был статическим (/opt/decision-model, User=decision), поэтому
+## установка из любого другого каталога давала неработающий сервис: systemd не
+## находил ни venv, ни пользователя.
 install_systemd_unit() {
     local template="$1"
     local instance="$2"
+    local project_dir="${3:-/opt/decision-model}"
+    local user="${4:-decision}"
+    local group="${5:-$user}"
     local unit="/etc/systemd/system/decision-api@.service"
     require_root
-    cp "$template" "$unit" || die "cannot copy unit to $unit (need root)"
+    render_unit "$template" "$project_dir" "$user" "$group" "$unit" \
+        || die "cannot render unit to $unit (need root)"
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload
         systemctl enable --now "decision-api@${instance}.service" \
@@ -71,8 +78,97 @@ install_systemd_unit() {
         echo "service started: decision-api@${instance}.service"
     else
         echo "systemd not available; unit installed at $unit"
-        echo "start manually: .venv/bin/uvicorn api.server.main:app --port 8080"
+        echo "start manually: $project_dir/.venv/bin/uvicorn api.server.main:app --port 8080"
     fi
+}
+
+## _sed_escape <text> — экранирует символы, значимые для sed-замены.
+_sed_escape() {
+    printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'
+}
+
+## render_unit <template> <project-dir> <user> <group> <dest>
+## Подставляет __PROJECT_DIR__/__SERVICE_USER__/__SERVICE_GROUP__ в шаблон.
+render_unit() {
+    local template="$1"
+    local project_dir="$2"
+    local user="$3"
+    local group="$4"
+    local dest="$5"
+    local path user_esc group_esc
+    case "$project_dir" in
+        *"|"* | *"&"*) die "project dir must not contain '|' or '&': $project_dir" ;;
+    esac
+    path="$(_sed_escape "$project_dir")"
+    user_esc="$(_sed_escape "$user")"
+    group_esc="$(_sed_escape "$group")"
+    sed -e "s|__PROJECT_DIR__|$path|g" \
+        -e "s|__SERVICE_USER__|$user_esc|g" \
+        -e "s|__SERVICE_GROUP__|$group_esc|g" \
+        "$template" > "$dest" || return 1
+    # Нераскрытый placeholder — ошибка шаблона, а не «пусть работает как есть».
+    if grep -q '__[A-Z_]*__' "$dest"; then
+        die "unrendered placeholders in $dest"
+    fi
+}
+
+## ensure_project_dir <source-dir> <install-dir>
+## Готовит каталог установки: если он отличается от чекаута, разворачивает туда
+## закоммиченное состояние (git clone). Грязный чекаут — ошибка: иначе на сервер
+## уедет не то, что проверено.
+ensure_project_dir() {
+    local src="$1"
+    local dest="$2"
+    if [ "$src" = "$dest" ]; then
+        echo "install dir: $dest (same as checkout)"
+        return 0
+    fi
+    if [ -e "$dest" ] && [ -n "$(ls -A "$dest" 2>/dev/null)" ]; then
+        die "$dest is not empty; remove it or set DECISION_INSTALL_DIR"
+    fi
+    mkdir -p "$(dirname "$dest")" || die "cannot create $(dirname "$dest")"
+    if [ -d "$src/.git" ]; then
+        if ! git -C "$src" diff --quiet \
+            || ! git -C "$src" diff --cached --quiet; then
+            die "checkout $src is dirty; commit or stash before install"
+        fi
+        git clone --quiet "$src" "$dest" \
+            || die "cannot clone $src -> $dest"
+        echo "installed commit: $(git -C "$dest" rev-parse --short HEAD)"
+        return 0
+    fi
+    mkdir -p "$dest"
+    tar -C "$src" --exclude=.venv --exclude=checkpoints --exclude=data \
+        --exclude=dist -cf - . | tar -C "$dest" -xf - \
+        || die "cannot copy $src -> $dest"
+    echo "copied from $src (no git repo)"
+}
+
+## ensure_service_user <user> <group> <project-dir>
+## Создаёт системного пользователя без логина и даёт группе чтение дерева.
+## Владелец остаётся root: upgrade.sh делает git pull от root, и git не
+## спотыкается о смену владельца (safe.directory не нужен).
+ensure_service_user() {
+    local user="$1"
+    local group="$2"
+    local project_dir="$3"
+    local owner
+    require_root
+    getent group "$group" >/dev/null 2>&1 || groupadd --system "$group" \
+        || die "cannot create group $group"
+    if ! id -u "$user" >/dev/null 2>&1; then
+        useradd --system --gid "$group" --home-dir "$project_dir" \
+            --shell /usr/sbin/nologin "$user" \
+            || die "cannot create user $user"
+    fi
+    owner="$(stat -c %U "$project_dir" 2>/dev/null || echo "")"
+    if [ "$owner" != "$user" ]; then
+        chown -R "root:$group" "$project_dir" \
+            || die "cannot chown $project_dir"
+        chmod -R g+rX "$project_dir" || die "cannot chmod $project_dir"
+        chmod g+rx "$project_dir"
+    fi
+    echo "service user: $user:$group"
 }
 
 ## ensure_venv <project-dir>  — ставит/обновляет .venv из requirements.txt
