@@ -28,6 +28,8 @@ checkpoints/
 *.gguf
 *.pt
 *.pth
+# эталонный пак для теста обратной совместимости (tests/test_pack_compat.py)
+!tests/fixtures/*.pt
 *.onnx
 *.ckpt
 
@@ -49,6 +51,8 @@ AGENTS.md
 agents.md
 ROADMAP.md
 sudo-requests/
+# версия, восстановленная из бэкапа deploy/restore.sh
+.installed-version
 
 # Сторонний код, скопированный для знакомства (не часть проекта)
 vendor/
