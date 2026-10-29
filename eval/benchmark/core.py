@@ -80,6 +80,10 @@ def _build_targets(spec: QuestionSpec, labels: list[Any]) -> torch.Tensor:
     return torch.tensor(_label_indices(spec, labels), dtype=torch.long)
 
 
+#: Публичный псевдоним для внешних рецептов (дообучение на обратной связи).
+build_targets = _build_targets
+
+
 def _evaluate_head(
     head, features: torch.Tensor, spec, labels: list[Any]
 ) -> dict[str, float]:

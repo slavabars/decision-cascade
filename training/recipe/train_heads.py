@@ -58,6 +58,11 @@ def _make_encoder(name: str, dim: int):
     ).load()
 
 
+#: Публичное имя: обратная связь и дрейф должны брать ровно тот же энкодер,
+#: что и рецепт обучения, иначе признаки несовместимы с головой.
+make_encoder = _make_encoder
+
+
 def _max_length() -> int | None:
     raw = os.environ.get("DECISION_MAX_LENGTH", "256").strip().lower()
     if raw in ("", "none", "0"):
