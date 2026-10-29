@@ -4,14 +4,19 @@
 # чтобы проверить именно пакет, а не исходники.
 #
 # Usage: scripts/smoke_wheel.sh [path/to/decision_cascade-*.whl]
-#        PYTHON=python3.11 — интерпретатор для venv (по умолчанию python3)
+#        PYTHON=python3.11 — интерпретатор для venv
+#        (по умолчанию .venv/bin/python, если он есть, иначе python3)
 #
 # Venv создаётся с --system-site-packages: зависимости (torch, fastapi) уже
 # стоят в окружении CI, а проверяем мы упаковку и запуск, а не их установку.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-python_bin="${PYTHON:-python3}"
+python_bin="${PYTHON:-}"
+if [[ -z "$python_bin" && -x "$repo_root/.venv/bin/python" ]]; then
+  python_bin="$repo_root/.venv/bin/python"
+fi
+python_bin="${python_bin:-python3}"
 wheel="${1:-}"
 if [[ -z "$wheel" ]]; then
   wheel="$(find "$repo_root/dist" -maxdepth 1 -name 'decision_cascade-*.whl' 2>/dev/null | sort | tail -1)"
