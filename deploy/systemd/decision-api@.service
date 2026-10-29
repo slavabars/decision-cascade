@@ -5,9 +5,12 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/decision-model
-ExecStart=/opt/decision-model/.venv/bin/uvicorn api.server.main:app --host 127.0.0.1 --port 8080
+ExecStart=/opt/decision-model/.venv/bin/uvicorn api.server.main:app --host 127.0.0.1 --port 8080 --timeout-graceful-shutdown 30
 Restart=on-failure
 RestartSec=2
+# SIGTERM -> uvicorn перестаёт принимать новое, но доводит текущие запросы.
+KillSignal=SIGTERM
+TimeoutStopSec=30
 User=decision
 Group=decision
 Environment=PYTHONUNBUFFERED=1
