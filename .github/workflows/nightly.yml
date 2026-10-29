@@ -1,0 +1,63 @@
+name: Nightly quality
+
+# Ночной регресс качества: опубликованные паки на закреплённых сплитах.
+# Падение accuracy больше чем на 1 п.п. против eval/nightly_baseline.json — красный.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # CPU-only torch: заметно легче и быстрее, чем CUDA-сборка по умолчанию.
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Паки берём из последнего релиза — того же артефакта, что получают
+      # пользователи. Если в релизе нет *-weights.tar.gz, шаг падает: это
+      # сигнал, что публикация весов сломана.
+      - name: Download published packs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist checkpoints/packs
+          gh release download --pattern '*-weights.tar.gz' --dir dist
+          tar -xzf dist/*-weights.tar.gz -C checkpoints/packs --strip-components=1
+          ls -1 checkpoints/packs
+
+      # Модели энкодеров (gpt2) кэшируются между прогонами: ночной job не
+      # должен каждый раз качать полгигабайта.
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-nightly-${{ runner.os }}-gpt2-v1
+
+      - name: Quality regression
+        run: |
+          python -m eval.nightly --suite all --device cpu \
+            --out data/nightly/report.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-report
+          path: data/nightly/report.json
+          if-no-files-found: warn

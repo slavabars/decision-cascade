@@ -1,0 +1,15 @@
+{
+  "schema_version": "1",
+  "ag_news": {
+    "pack": "public-gpt2",
+    "n": 1000,
+    "overall_accuracy": 0.88,
+    "tolerance": 0.01
+  },
+  "routerbench": {
+    "pack": "routerbench-gpt2",
+    "n": 1000,
+    "overall_accuracy": 0.548,
+    "tolerance": 0.01
+  }
+}

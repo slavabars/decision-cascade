@@ -1,6 +1,6 @@
 # Результаты: сравнение с конкурентами и качество
 
-Сводка всех измерений проекта на 29 октября 2026 (v0.11.0). Цифры получены
+Сводка всех измерений проекта на 29 октября 2026 (v0.14.0; числа не менялись с 0.11.0). Цифры получены
 реальными прогонами на одной GPU 16 ГБ; методика, команды и оговорки — в
 [`competitor-benchmark.md`](competitor-benchmark.md),
 [`routerbench.md`](routerbench.md) и [`risk-aware-cascade.md`](risk-aware-cascade.md).
@@ -139,3 +139,25 @@ python -m training.recipe.finetune_encoder --specs routerbench \
 Артефакты каждого релиза: `decision_cascade-X.Y.Z-*.whl`, `vX.Y.Z-weights.tar.gz`
 (паки + температуры + manifest), `vX.Y.Z-benchmarks.tar.gz` (сырые прогоны, `q`
 и sha256).
+
+## 9. Ночной регресс
+
+Опубликованные паки прогоняются на закреплённых сплитах каждую ночь
+(`.github/workflows/nightly.yml`). Базовая линия — `eval/nightly_baseline.json`,
+допуск — 1 п.п.; падение больше допуска делает job красным.
+
+| Набор | Пак | n | accuracy | baseline |
+| --- | --- | ---: | ---: | ---: |
+| AG News | `public-gpt2` | 1000 | 0.8800 | 0.8800 |
+| RouterBench | `routerbench-gpt2` | 1000 | 0.5480 | 0.5480 |
+
+Локальный прогон:
+
+```bash
+python -m eval.nightly --suite all --device cuda
+```
+
+Числа совпадают с `metrics.test` из `metadata.json` паков: сплиты
+детерминированы (AG News — ревизия `eb185aa…`, RouterBench — ревизия
+`7840214…` и `seed=0`), поэтому ночной job ловит регресс кода, а не шум
+пересэмплирования.
