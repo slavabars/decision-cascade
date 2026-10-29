@@ -75,3 +75,14 @@ def test_readme_links_new_docs():
     assert "docs/observability.md" in readme
     assert "docs/weak-labeling.md" in readme
     assert "/metrics" in readme
+
+
+def test_drift_doc_describes_tools_and_gate():
+    text = (ROOT / "docs" / "drift.md").read_text(encoding="utf-8")
+    assert "training.feedback.run" in text
+    assert "eval.drift.run" in text
+    assert "--control" in text
+    assert "--replay" in text
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/drift.md" in readme
+    assert "training.feedback.run" in readme
