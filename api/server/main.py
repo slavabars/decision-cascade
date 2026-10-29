@@ -10,10 +10,11 @@ import os
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from api.server.deprecation import deprecation_for, validate_registry, warn_once
 from api.server.service import (
     DEFAULT_CHECKPOINT_DIR,
     UNTRAINED_POLICIES,
@@ -379,6 +380,26 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
 
 
 app = FastAPI(title="decision-cascade API", version=__version__)
+
+# Политика депрекации: реестр проверяется на старте, чтобы объявленный срок
+# жизни поверхности не мог быть короче двух минорных версий.
+validate_registry()
+
+
+@app.middleware("http")
+async def deprecation_headers(request: Request, call_next):
+    """Добавляет ``Deprecation``/``Sunset``/``Link`` для устаревших путей.
+
+    Реестр пуст, пока устаревших поверхностей нет, — middleware тогда ничего не
+    меняет. Предупреждение в лог пишется один раз за жизнь процесса.
+    """
+    response = await call_next(request)
+    deprecation = deprecation_for(request.url.path)
+    if deprecation is not None:
+        warn_once(request.url.path)
+        response.headers.update(deprecation.headers())
+    return response
+
 
 # Единый исполнитель решений для всех эндпоинтов: локальные головы, внешний
 # SystemOne-сервис или каскад (по DECISION_BACKEND). Локальный сервис создаётся
