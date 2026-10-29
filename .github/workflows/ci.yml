@@ -37,6 +37,12 @@ jobs:
           pip install uv
           uv lock --check
 
+      # Аудит зависимостей: известные CVE в requirements.txt — красный CI.
+      - name: Audit dependencies
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
       - name: Tests with coverage gate
         run: pytest -q --cov=src --cov=api --cov-report=term-missing:skip-covered
 
