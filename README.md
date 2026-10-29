@@ -9,7 +9,7 @@ state-состояние превращается в признаки, а гол
 **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет),
 Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: beta (0.13.0).** Контракт API ещё может меняться. Что считается
+**Статус: beta (0.14.0).** Контракт API ещё может меняться. Что считается
 стабильным, по каким критериям проект выходит в `1.0` и что для этого осталось —
 в [`docs/stability.md`](docs/stability.md). Замеры и сравнение с конкурентами —
 в [`docs/benchmarks.md`](docs/benchmarks.md).
@@ -1044,7 +1044,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 604 passed, 10 skipped
+.venv/bin/python -m pytest                          # 658 passed, 10 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
@@ -1068,12 +1068,19 @@ uv build --wheel && scripts/smoke_wheel.sh          # smoke установлен
 ```bash
 sudo bash deploy/ubuntu/install.sh      # Ubuntu — apt, venv, systemd-юнит
 sudo bash deploy/centos/install.sh      # CentOS/RHEL — dnf, venv, systemd-юнит
+sudo bash deploy/upgrade.sh /opt/decision-model   # обновление с авто-откатом
+sudo bash deploy/backup.sh /opt/decision-model    # .env + паки + risk.json
 systemctl status decision-api@api.service
 ```
 
 Обе сборки используют общий `deploy/lib/common.sh`: детект дистрибутива по
 `/etc/os-release`, установка пакетов, `ensure_venv`, установка юнита
-`decision-api@.service` (uvicorn, порт 8080, автозапуск).
+`decision-api@.service` (uvicorn, порт 8080, автозапуск, graceful shutdown по
+`SIGTERM`).
+
+Обновление, откат и состав бэкапа — [`docs/deploy.md`](docs/deploy.md).
+Типовые ошибки (`UNTRAINED_HEADS`, `MODALITY_NOT_SUPPORTED`, `/ready` 503) —
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ## Структура репозитория
 

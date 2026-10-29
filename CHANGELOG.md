@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-10-29
+
+### Added
+
+- **Политика депрекации** (`docs/stability.md` §5): реестр
+  `api/server/deprecation.py`, заголовки `Deprecation`/`Sunset`/`Link` на
+  устаревших путях, предупреждение в лог один раз за процесс и проверка
+  «не раньше двух минорных версий» на старте.
+- **Ночной регресс качества** (`.github/workflows/nightly.yml`,
+  `eval/nightly.py`): паки из последнего релиза на закреплённых сплитах AG News
+  и RouterBench; падение accuracy больше 1 п.п. — красный job.
+- **Upgrade/rollback** (`deploy/upgrade.sh`, `deploy/backup.sh`,
+  `deploy/restore.sh`): бэкап `.env`, паков и `risk.json`, обновление с
+  авто-откатом данных и кода, если `/ready` не поднялся.
+- **`docs/troubleshooting.md`**: все коды ошибок API, `/ready` 503, отсутствие
+  `q`, несовпадение `choice_head`/`dim`.
+- **`tests/fixtures/pack_v0.8.0.pt`**: эталонный пак, собранный кодом `v0.8.0`;
+  `tests/test_pack_compat.py` фиксирует чтение старых паков текущей версией.
+- **Graceful shutdown**: systemd-юнит получил `KillSignal=SIGTERM`,
+  `TimeoutStopSec=30` и `--timeout-graceful-shutdown 30`;
+  `tests/test_graceful_shutdown.py` проверяет, что `SIGTERM` не обрывает
+  выполняющийся запрос.
+
+### Changed
+
+- **CI**: добавлен `pip-audit -r requirements.txt` (известных уязвимостей нет).
+
+### Deprecated
+
+- Пока нет. Механизм объявления описан в `docs/stability.md` §5; первая
+  депрекация появится в этом разделе.
+
 ## [0.13.0] — 2026-10-29
 
 ### Added
@@ -569,7 +601,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/slavabars/decision-cascade/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/slavabars/decision-cascade/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/slavabars/decision-cascade/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/slavabars/decision-cascade/compare/v0.10.0...v0.11.0
