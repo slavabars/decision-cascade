@@ -6,6 +6,37 @@
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-11-10
+
+Первый стабильный релиз. Функционально `1.0.0` совпадает с `0.16.0`: новых
+возможностей нет — меняются статус и обещания.
+
+### Added
+
+- **Стабильный контракт `1.x`**: `schema_version = "1"`, эндпоинты
+  `/decisions`, `/decisions/batch`, `/v1/systemone`, `/v1/feedback`, `/info`,
+  `/health`, `/ready`, `/metrics`, формат паков (`heads.pt` + `metadata.json` +
+  `temperature.json`) и смысл переменных `DECISION_*` не ломаются. Ломающие
+  изменения — только в major, после окна депрекации в две минорные версии
+  (`docs/stability.md` §5).
+- **Классификатор пакета** `Development Status :: 5 - Production/Stable`.
+
+### Changed
+
+- README и `docs/stability.md` переведены из беты в стабильный статус: что
+  обещает `1.x`, какие поверхности остаются beta (risk-aware и benefit каскады,
+  option-scoring голова, дообучение энкодера и по обратной связи) и как
+  объявляется депрекация.
+- Все двенадцать критериев выхода закрыты и продолжают проверяться
+  автоматически: контрактные тесты и покрытие в CI, ночной регресс на паках
+  текущего релиза, деплой и откат — тестами и чек-листом `docs/deploy.md`.
+
+### Compatibility
+
+- Ломающих изменений относительно `0.16.0` нет: API, паки и переменные
+  окружения те же, поэтому обновление — обычный `deploy/upgrade.sh`.
+- Паки, собранные любой версией `1.x`, читаются всеми версиями линейки.
+
 ## [0.16.0] — 2026-10-29
 
 ### Added
@@ -653,7 +684,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/slavabars/decision-cascade/compare/v0.16.0...v1.0.0
 [0.16.0]: https://github.com/slavabars/decision-cascade/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/slavabars/decision-cascade/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/slavabars/decision-cascade/compare/v0.13.0...v0.14.0

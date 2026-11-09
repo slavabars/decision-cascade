@@ -18,7 +18,7 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "slavabars", email = "slavabars@users.noreply.github.com" }]
 keywords = ["decision", "calibration", "routing", "cascade", "llm", "systemone"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
