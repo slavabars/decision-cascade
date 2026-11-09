@@ -120,6 +120,24 @@ state (строка-описание) ──► StateEncoder ──► features 
 создавать впечатление аффилированности, проект носит собственное имя, но
 **совместим** с этим протоколом и умеет проксировать к нему.
 
+## Установка
+
+Стабильный пакет опубликован на PyPI (линейка `1.x`):
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install decision-cascade
+```
+
+Пакет ставит библиотеку (`src`, `api`, `eval`, `training`) и сервер; запуск —
+как обычно через uvicorn:
+
+```bash
+python -m uvicorn api.server.main:app --host 127.0.0.1 --port 8000
+```
+
+Для разработки — из исходников, с `uv` и зафиксированным `uv.lock` (ниже).
+
 ## Установка окружения
 
 ```bash
@@ -143,6 +161,9 @@ uv pip install --python .venv/bin/python -r requirements.txt
 ```bash
 uv pip install --python .venv/bin/python -e .
 ```
+
+Процесс релиза (версия → тег → PyPI → артефакты) — в
+[`docs/release.md`](docs/release.md).
 
 ## Запуск сервера
 
@@ -1084,7 +1105,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 752 passed, 10 skipped
+.venv/bin/python -m pytest                          # 754 passed, 10 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)

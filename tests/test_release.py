@@ -56,3 +56,26 @@ def test_stability_doc_covers_guarantees():
     assert "Политика депрекации" in text
     assert "schema_version" in text
     assert "Критерии выхода" in text
+
+
+def test_pypi_workflow_publishes_on_tags():
+    workflow = (ROOT / ".github" / "workflows" / "pypi.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'tags: ["v*"]' in workflow
+    assert "uv publish" in workflow
+    assert "PYPI_API_TOKEN" in workflow
+    # повторный запуск не должен перезаписывать опубликованную версию
+    assert "pypi.org/pypi/decision-cascade/" in workflow
+    assert "exists == 'false'" in workflow
+    # проверяется артефакт из индекса, а не локальная сборка
+    assert "Verify install from PyPI" in workflow
+
+
+def test_release_doc_and_readme_install():
+    release = (ROOT / "docs" / "release.md").read_text(encoding="utf-8")
+    assert "git tag -a v" in release
+    assert "pypi.yml" in release
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "pip install decision-cascade" in readme
+    assert "docs/release.md" in readme

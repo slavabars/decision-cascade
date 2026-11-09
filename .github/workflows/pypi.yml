@@ -1,0 +1,88 @@
+name: Publish to PyPI
+
+# Публикация стабильного пакета: тег v* (или ручной запуск для проверки).
+# Шаги: тесты -> сборка -> smoke wheel -> публикация (если версии ещё нет на
+# PyPI) -> проверка установки из индекса. Повторный запуск идемпотентен:
+# уже опубликованная версия не перезаписывается, но сборка и smoke проверяются.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # CPU-only torch: заметно легче и быстрее, чем CUDA-сборка по умолчанию.
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        run: ruff check src api eval training tests examples scripts
+
+      - name: Tests
+        run: pytest -q
+
+      - name: Build distributions
+        run: |
+          pip install build
+          python -m build
+
+      - name: Smoke installed wheel
+        run: scripts/smoke_wheel.sh dist/decision_cascade-*.whl
+
+      # Публикуем только то, чего ещё нет на PyPI: повторный прогон не должен
+      # падать на «file already exists» и не может перезаписать релиз.
+      - name: Check PyPI for version
+        id: check
+        run: |
+          version="$(python -c 'import src; print(src.__version__)')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if curl -fsS "https://pypi.org/pypi/decision-cascade/$version/json" \
+              >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "decision-cascade $version already on PyPI"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "decision-cascade $version is not on PyPI yet"
+          fi
+
+      - name: Publish to PyPI
+        if: steps.check.outputs.exists == 'false' && env.PYPI_API_TOKEN != ''
+        run: |
+          pip install uv
+          uv publish dist/*
+
+      - name: Warn about missing token
+        if: steps.check.outputs.exists == 'false' && env.PYPI_API_TOKEN == ''
+        run: echo "::warning::PYPI_API_TOKEN не задан — публикация пропущена"
+
+      # Проверяем именно артефакт из индекса, а не локальную сборку.
+      - name: Verify install from PyPI
+        run: |
+          version="${{ steps.check.outputs.version }}"
+          python -m venv /tmp/pypi-verify
+          site="$(/tmp/pypi-verify/bin/python -c \
+            'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+          printf '%s\n' "$(python -c \
+            'import sysconfig; print(sysconfig.get_paths()["purelib"])')" \
+            > "$site/deps.pth"
+          /tmp/pypi-verify/bin/pip install --quiet --no-deps \
+            "decision-cascade==$version"
+          PYTHONPATH='' /tmp/pypi-verify/bin/python -c \
+            "import api.server.main as m, src; print('PyPI version:', src.__version__); print(m.__file__)"
