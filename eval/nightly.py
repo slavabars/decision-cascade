@@ -77,6 +77,38 @@ def within_tolerance(accuracy: float, expected: float, allowed: float) -> bool:
     return accuracy - expected >= -allowed - 1e-9
 
 
+def check_latency(
+    entry: dict[str, Any], latency_ms: dict[str, float]
+) -> dict[str, Any] | None:
+    """Сверяет измеренные p50/p95 с бюджетом набора (``entry["latency"]``).
+
+    ``None`` — бюджета нет или метрик нет: это не ошибка, просто нечего
+    проверять. Допуск задаётся множителем, потому что CPU-раннеры дают разброс
+    в десятки процентов на одинаковом коде.
+    """
+    budget = entry.get("latency")
+    if not budget or not latency_ms:
+        return None
+    factor = float(budget.get("tolerance", 1.25))
+    checks: dict[str, dict[str, Any]] = {}
+    for key, metric in (("p50_ms", "p50"), ("p95_ms", "p95")):
+        if key not in budget or metric not in latency_ms:
+            continue
+        limit = float(budget[key]) * factor
+        value = float(latency_ms[metric])
+        checks[key] = {
+            "value_ms": value,
+            "limit_ms": limit,
+            "passed": value <= limit,
+        }
+    if not checks:
+        return None
+    return {
+        "checks": checks,
+        "passed": all(item["passed"] for item in checks.values()),
+    }
+
+
 def check_suite(
     suite: str,
     entry: dict[str, Any],
@@ -96,6 +128,7 @@ def check_suite(
     allowed = float(entry.get("tolerance", 0.01) if tolerance is None else tolerance)
     delta = metrics["overall_accuracy"] - expected
     passed = within_tolerance(metrics["overall_accuracy"], expected, allowed)
+    latency = check_latency(entry, metrics.get("latency_ms", {}))
     return {
         "suite": suite,
         "pack": entry["pack"],
@@ -107,6 +140,7 @@ def check_suite(
         "passed": passed,
         "questions": metrics["questions"],
         "latency_ms": metrics.get("latency_ms", {}),
+        "latency": latency,
     }
 
 
@@ -124,6 +158,13 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=None,
         help="допуск падения accuracy (по умолчанию из baseline, 0.01)",
+    )
+    parser.add_argument(
+        "--latency",
+        choices=["off", "warn", "fail"],
+        default="warn",
+        help="проверка бюджета латентности: off — не считать, warn — печатать, "
+        "fail — ронять job (в ночном workflow)",
     )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--out", type=Path, default=None)
@@ -156,21 +197,52 @@ def main(argv: list[str] | None = None) -> int:
             f"tolerance={result['tolerance']:.3f}",
             flush=True,
         )
+        latency = result.get("latency")
+        if latency is not None:
+            parts = [
+                f"{key}={check['value_ms']:.0f}/{check['limit_ms']:.0f}ms"
+                for key, check in latency["checks"].items()
+            ]
+            print(
+                f"{'':<10} latency {' '.join(parts)} "
+                f"{'OK' if latency['passed'] else 'SLOW'}",
+                flush=True,
+            )
 
+    checked = [result for result in results if result.get("latency")]
+    latency_passed: bool | None
+    if args.latency == "off" or not checked:
+        latency_passed = None
+    else:
+        latency_passed = all(result["latency"]["passed"] for result in checked)
     report = {
         "device": device,
         "limit": args.limit,
         "seed": args.seed,
+        "latency_mode": args.latency,
+        "latency_passed": latency_passed,
         "suites": results,
         "passed": all(result["passed"] for result in results),
     }
+    if latency_passed is False:
+        if args.latency == "warn":
+            print(
+                "WARNING: latency budget exceeded (mode=warn, job stays green)",
+                flush=True,
+            )
+        else:
+            print("LATENCY REGRESSION: latency budget exceeded", flush=True)
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         print(f"report -> {args.out}")
-    return 0 if report["passed"] else 1
+    if not report["passed"]:
+        return 1
+    if args.latency == "fail" and latency_passed is False:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

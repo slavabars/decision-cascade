@@ -1,14 +1,36 @@
 name: Nightly quality
 
-# Ночной регресс качества: опубликованные паки на закреплённых сплитах.
-# Падение accuracy больше чем на 1 п.п. против eval/nightly_baseline.json — красный.
+# Регресс качества и латентности на опубликованных паках.
+# - по расписанию: раз в сутки на паках последнего релиза;
+# - на push в main: только когда меняется код/зависимости пути решений,
+#   чтобы регрессия ловилась в день коммита, а не через сутки;
+# - вручную: workflow_dispatch.
+# Падение accuracy больше допуска или (при --latency fail) выход за бюджет p95
+# делают job красным.
 on:
   schedule:
     - cron: "0 3 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "api/**"
+      - "eval/**"
+      - "training/**"
+      - "requirements.txt"
+      - "uv.lock"
+      - "pyproject.toml"
+      - ".github/workflows/nightly.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Новый push отменяет предыдущий прогон: важно для push-триггера, чтобы
+# очередь не копила устаревшие проверки.
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
@@ -49,9 +71,12 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-nightly-${{ runner.os }}-gpt2-v1
 
-      - name: Quality regression
+      # --latency fail: бюджет p95 из eval/nightly_baseline.json с множителем
+      # 1.25. Бюджет взят с запасом над CPU-раннерами (шум десятки процентов),
+      # поэтому ловит деградацию, а не колебания.
+      - name: Quality and latency regression
         run: |
-          python -m eval.nightly --suite all --device cpu \
+          python -m eval.nightly --suite all --device cpu --latency fail \
             --out data/nightly/report.json
 
       - name: Upload report

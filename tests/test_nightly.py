@@ -88,3 +88,93 @@ def test_main_rejects_unknown_suite(tmp_path):
     baseline.write_text(json.dumps({"ag_news": {}}), encoding="utf-8")
     with pytest.raises(SystemExit):
         nightly.main(["--suite", "all", "--baseline", str(baseline)])
+
+
+# --- бюджет латентности ------------------------------------------------------
+
+
+def test_baseline_has_latency_budget():
+    payload = json.loads(BASELINE.read_text(encoding="utf-8"))
+    for suite in nightly.SUITES:
+        budget = payload[suite]["latency"]
+        assert 0 < budget["p50_ms"] < budget["p95_ms"]
+        assert budget["tolerance"] >= 1.0
+
+
+def test_check_latency_without_budget_or_metrics():
+    entry = {"latency": None}
+    assert nightly.check_latency(entry, {"p50": 10.0, "p95": 20.0}) is None
+    entry = {"latency": {"p50_ms": 100, "p95_ms": 200, "tolerance": 1.25}}
+    assert nightly.check_latency(entry, {}) is None
+
+
+def test_check_latency_respects_tolerance():
+    entry = {"latency": {"p50_ms": 100, "p95_ms": 200, "tolerance": 1.5}}
+    within = nightly.check_latency(entry, {"p50": 120.0, "p95": 280.0})
+    assert within["passed"] is True
+    assert within["checks"]["p95_ms"]["limit_ms"] == pytest.approx(300.0)
+    slow = nightly.check_latency(entry, {"p50": 120.0, "p95": 301.0})
+    assert slow["passed"] is False
+
+
+def _fake_check_latency(latency_passed: bool):
+    def check(suite, entry, packs_root, **kwargs):
+        return {
+            "suite": suite,
+            "pack": entry["pack"],
+            "n": entry["n"],
+            "accuracy": entry["overall_accuracy"],
+            "baseline": entry["overall_accuracy"],
+            "delta": 0.0,
+            "tolerance": entry["tolerance"],
+            "passed": True,
+            "questions": {},
+            "latency_ms": {"p50": 10.0, "p95": 20.0},
+            "latency": {
+                "checks": {
+                    "p95_ms": {
+                        "value_ms": 20.0 if latency_passed else 10_000.0,
+                        "limit_ms": 100.0,
+                        "passed": latency_passed,
+                    }
+                },
+                "passed": latency_passed,
+            },
+        }
+
+    return check
+
+
+def test_latency_fail_mode_returns_nonzero(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly, "check_suite", _fake_check_latency(False))
+    out = tmp_path / "report.json"
+    code = nightly.main(
+        ["--suite", "ag_news", "--latency", "fail", "--out", str(out)]
+    )
+    assert code == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["latency_passed"] is False
+    assert report["latency_mode"] == "fail"
+
+
+def test_latency_warn_mode_keeps_job_green(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly, "check_suite", _fake_check_latency(False))
+    out = tmp_path / "report.json"
+    code = nightly.main(
+        ["--suite", "ag_news", "--latency", "warn", "--out", str(out)]
+    )
+    assert code == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["latency_passed"] is False
+
+
+def test_latency_off_mode_reports_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly, "check_suite", _fake_check_latency(False))
+    out = tmp_path / "report.json"
+    code = nightly.main(
+        ["--suite", "ag_news", "--latency", "off", "--out", str(out)]
+    )
+    assert code == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["latency_passed"] is None

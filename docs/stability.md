@@ -58,7 +58,7 @@
 | 3 | Контрактные тесты на все эндпоинты и SDK | есть на все эндпоинты | — (эталонный пак 0.8 в `tests/fixtures/`) |
 | 4 | Покрытие `src` + `api` ≥ 90% | **94%** | — (гейт `--cov-fail-under=90` в CI) |
 | 5 | CI: ruff, shellcheck, pytest, сборка и smoke установленного wheel | всё перечисленное есть | — (`scripts/smoke_wheel.sh`) |
-| 6 | Регрессия качества закреплена в CI | ночной job на паках релиза, порог 1 п.п. | — (`eval/nightly.py`) |
+| 6 | Регрессия качества закреплена в CI | ночной job на паках релиза, порог 1 п.п.; бюджет p50/p95 на латентность | — (`eval/nightly.py`) |
 | 7 | Репродуцируемость данных | RouterBench и AG News закреплены ревизиями, есть `uv.lock` | — |
 | 8 | Эксплуатация: liveness/readiness, таймауты, аккуратное завершение | `/health`, `/ready`, бюджет и retry, SIGTERM-тест | — |
 | 9 | Безопасность: модель угроз, отсутствие PII в логах, аудит зависимостей | `SECURITY.md`, тест логов, `pip-audit` в CI | — |
@@ -102,7 +102,9 @@
    читается текущей версией и отдаёт решения — `tests/test_pack_compat.py`.
 8. ✅ Ночной job `.github/workflows/nightly.yml`: паки из последнего релиза,
    AG News и RouterBench на закреплённых ревизиях и сидах, падение при регрессе
-   больше 1 п.п. (`eval/nightly.py`, `eval/nightly_baseline.json`).
+   больше 1 п.п., плюс бюджет латентности p50/p95 (`--latency fail`) и запуск
+   на `push` в `main` по путям кода решений (`eval/nightly.py`,
+   `eval/nightly_baseline.json`).
 9. ✅ Upgrade/rollback: `deploy/upgrade.sh` (бэкап → `git pull` → venv →
    restart → `/ready`, авто-откат данных и кода), `deploy/backup.sh`,
    `deploy/restore.sh`; паритет Ubuntu/CentOS проверяется `distro_from_release`
