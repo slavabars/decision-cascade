@@ -169,13 +169,20 @@ curl -fsS http://127.0.0.1:8080/ready
 (`dnf install python3.11`), а не собирает venv на 3.9. На Ubuntu 22.04
 `python3` — это 3.10, поэтому нужен `python3.11` (deadsnakes) или 24.04.
 
-Проверено вживую (2026-10-29, `0.15.0`, Ubuntu 24.04.5 LTS, systemd 255):
-`install.sh` → `/health`, `/ready`, `/metrics`, `X-Request-ID`,
-`POST /decisions` → `upgrade.sh` → `backup.sh` → порча `.env` → `restore.sh` →
-teardown — **PASS**. Юнит рендерится под `/opt/decision-model`, сервис работает
-под пользователем `decision`, после teardown не остаётся ни юнита, ни каталога,
-ни пользователя. CentOS-путь пока проверен только тестами паритета
-(`tests/test_deploy.py`).
+Проверено вживую на обоих дистрибутивах: `install.sh` → `/health`, `/ready`,
+`/metrics`, `X-Request-ID`, `POST /decisions` → `upgrade.sh` → `backup.sh` →
+порча `.env` → `restore.sh` → teardown — **PASS**. Юнит рендерится под
+`/opt/decision-model`, сервис работает под пользователем `decision`, после
+teardown не остаётся ни юнита, ни каталога, ни пользователя.
+
+| Дата | Дистрибутив | Версия | Что проверялось |
+| --- | --- | --- | --- |
+| 2026-10-29 | Ubuntu 24.04.5, systemd 255 | `0.15.0` | полный цикл |
+| 2026-11-10 | CentOS Stream 9 (cloud VM) | `1.0.0` (`11fe196`) | полный цикл, `python3.11` из AppStream |
+
+CentOS-прогон закрыл реальную поломку: `python3` там — 3.9, и установка
+собирала venv на нём. Теперь `python_bin` требует ≥ 3.11 и подсказывает
+`dnf install python3.11`; на Stream 9 ставится `python3.11` (3.11.13).
 
 ## 6. Аккуратное завершение
 

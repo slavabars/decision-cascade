@@ -108,7 +108,8 @@
 9. ✅ Upgrade/rollback: `deploy/upgrade.sh` (бэкап → `git pull` → venv →
    restart → `/ready`, авто-откат данных и кода), `deploy/backup.sh`,
    `deploy/restore.sh`; паритет Ubuntu/CentOS проверяется `distro_from_release`
-   на временных `os-release`.
+   на временных `os-release`, а полный цикл прогнан вживую на Ubuntu 24.04 и
+   CentOS Stream 9 (`docs/deploy.md` §5).
 10. ✅ Troubleshooting: `docs/troubleshooting.md` — все коды ошибок API,
     `/ready` 503, отсутствие `q`, несовпадение `choice_head`/`dim`.
 11. ✅ Аккуратное завершение: `KillSignal=SIGTERM`, `TimeoutStopSec=30`,
