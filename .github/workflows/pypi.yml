@@ -64,6 +64,9 @@ jobs:
 
       - name: Publish to PyPI
         if: steps.check.outputs.exists == 'false' && env.PYPI_API_TOKEN != ''
+        # uv читает токен из UV_PUBLISH_TOKEN, а не из произвольного имени.
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           pip install uv
           uv publish dist/*

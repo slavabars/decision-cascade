@@ -65,6 +65,8 @@ def test_pypi_workflow_publishes_on_tags():
     assert 'tags: ["v*"]' in workflow
     assert "uv publish" in workflow
     assert "PYPI_API_TOKEN" in workflow
+    # uv берёт учётные данные только из UV_PUBLISH_TOKEN
+    assert "UV_PUBLISH_TOKEN" in workflow
     # повторный запуск не должен перезаписывать опубликованную версию
     assert "pypi.org/pypi/decision-cascade/" in workflow
     assert "exists == 'false'" in workflow
