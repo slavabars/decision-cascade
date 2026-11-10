@@ -171,12 +171,39 @@ ensure_service_user() {
     echo "service user: $user:$group"
 }
 
+## python_bin — интерпретатор для venv: DECISION_PYTHON, иначе первый 3.11+.
+## CentOS Stream 9 поставляет python3 = 3.9, поэтому «просто python3» ломает
+## установку: пакет требует >= 3.11. Явная переменная нужна и для нестандартных
+## сборок (pyenv, /opt/python).
+python_bin() {
+    local candidate
+    if [ -n "${DECISION_PYTHON:-}" ]; then
+        command -v "$DECISION_PYTHON" >/dev/null 2>&1 \
+            || die "DECISION_PYTHON=$DECISION_PYTHON not found in PATH"
+        "$DECISION_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
+            || die "$DECISION_PYTHON is older than 3.11"
+        printf '%s' "$DECISION_PYTHON"
+        return 0
+    fi
+    for candidate in python3.13 python3.12 python3.11 python3; do
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    die "no Python >= 3.11 found; CentOS: dnf install python3.11, or set DECISION_PYTHON"
+}
+
 ## ensure_venv <project-dir>  — ставит/обновляет .venv из requirements.txt
 ensure_venv() {
     local project_dir="$1"
     local venv_bin="$project_dir/.venv/bin"
+    local python
+    python="$(python_bin)"
     if [ ! -x "$venv_bin/python" ]; then
-        python3 -m venv "$project_dir/.venv" || die "failed to create venv"
+        "$python" -m venv "$project_dir/.venv" \
+            || die "failed to create venv with $python"
     fi
     "$venv_bin/python" -m pip install --quiet --upgrade pip
     "$venv_bin/python" -m pip install --quiet -r "$project_dir/requirements.txt" \

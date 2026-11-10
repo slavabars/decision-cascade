@@ -17,7 +17,7 @@ sudo bash deploy/centos/install.sh
 
 Что делает установщик:
 
-1. ставит python3/venv/pip/curl/git;
+1. ставит Python 3.11+ (Ubuntu — `python3`/`venv`, CentOS — `python3.11`), pip, curl и git;
 2. разворачивает **закоммиченное** состояние в `/opt/decision-model`
    (`git clone` из чекаута, из которого запущен скрипт; грязное дерево —
    ошибка, чтобы на сервер не уехало непроверенное);
@@ -138,10 +138,11 @@ curl -fsS http://127.0.0.1:8080/ready
 
 | Шаг | Ubuntu | CentOS/RHEL |
 | --- | --- | --- |
-| Пакеты | `apt-get install python3 python3-venv python3-pip curl git` | `dnf install python3 python3-pip curl git` |
-| venv | `python3 -m venv .venv` | то же |
+| Пакеты | `apt-get install python3 python3-venv python3-pip curl git` | `dnf install python3.11 python3.11-pip curl git` |
+| venv | `python3 -m venv .venv` | `python3.11 -m venv .venv` |
 | Каталог установки | `/opt/decision-model` (`DECISION_INSTALL_DIR`) | то же |
 | Пользователь сервиса | системный `decision` (`DECISION_SERVICE_USER`) | то же |
+| Python | 3.11+ (Ubuntu 24.04+; на 22.04 — `python3.11`) | 3.11+ (`python3.11` из AppStream) |
 | systemd | `systemctl enable --now decision-api@api` | то же |
 | upgrade/rollback | `deploy/upgrade.sh`, `deploy/restore.sh` | то же |
 
@@ -161,6 +162,12 @@ curl -fsS http://127.0.0.1:8080/ready
 Реальный прогон на VM не автоматизирован: скрипты требуют root и systemd.
 Перед выкаткой на новый дистрибутив прогоните `install.sh` → `upgrade.sh` →
 `restore.sh` на одноразовой VM и сверьте `/ready`.
+
+Интерпретатор выбирается один раз и одинаково для install и upgrade:
+`DECISION_PYTHON`, иначе первый доступный `python3.13`/`python3.12`/`python3.11`/
+`python3` с версией ≥ 3.11. Если подходящего нет, скрипт падает с подсказкой
+(`dnf install python3.11`), а не собирает venv на 3.9. На Ubuntu 22.04
+`python3` — это 3.10, поэтому нужен `python3.11` (deadsnakes) или 24.04.
 
 Проверено вживую (2026-10-29, `0.15.0`, Ubuntu 24.04.5 LTS, systemd 255):
 `install.sh` → `/health`, `/ready`, `/metrics`, `X-Request-ID`,

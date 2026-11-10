@@ -20,7 +20,8 @@ else
     SERVICE_USER="${DECISION_SERVICE_USER:-decision}"
 fi
 
-distro_pkg_install python3 python3-pip curl git
+# CentOS Stream 9: python3 — это 3.9, а пакету нужно >= 3.11.
+distro_pkg_install python3.11 python3.11-pip curl git
 
 ensure_project_dir "$PROJECT_DIR" "$INSTALL_DIR"
 ensure_venv "$INSTALL_DIR"

@@ -75,8 +75,9 @@ COMMON = DEPLOY / "lib" / "common.sh"
 
 def _bash(script: str, *args: str, env: dict[str, str] | None = None):
     full_env = {**os.environ, **(env or {})}
+    # абсолютный путь: тесты python_bin подменяют PATH целиком
     return subprocess.run(
-        ["bash", "-c", script, "bash", *args],
+        ["/bin/bash", "-c", script, "bash", *args],
         check=False,
         capture_output=True,
         text=True,
@@ -349,3 +350,77 @@ def test_ensure_project_dir_same_dir_is_noop(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "same as checkout" in result.stdout
+
+
+# --- выбор интерпретатора: CentOS Stream 9 даёт python3 = 3.9 ----------------
+
+
+def _stub_python(directory: Path, name: str, *, version: tuple[int, int]) -> None:
+    path = directory / name
+    modern = version >= (3, 11)
+    path.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-c" ]; then\n'
+        f"  exit {0 if modern else 1}\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def test_python_bin_skips_old_python3(tmp_path):
+    _stub_python(tmp_path, "python3", version=(3, 9))
+    _stub_python(tmp_path, "python3.11", version=(3, 11))
+    result = _bash(
+        'source "$1"; python_bin', str(COMMON), env={"PATH": str(tmp_path)}
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "python3.11"
+
+
+def test_python_bin_prefers_explicit_decision_python(tmp_path):
+    _stub_python(tmp_path, "python3", version=(3, 12))
+    _stub_python(tmp_path, "python3.11", version=(3, 11))
+    result = _bash(
+        'source "$1"; python_bin',
+        str(COMMON),
+        env={"PATH": str(tmp_path), "DECISION_PYTHON": "python3.11"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "python3.11"
+
+
+def test_python_bin_rejects_old_explicit_python(tmp_path):
+    _stub_python(tmp_path, "python3", version=(3, 9))
+    result = _bash(
+        'source "$1"; python_bin',
+        str(COMMON),
+        env={"PATH": str(tmp_path), "DECISION_PYTHON": "python3"},
+    )
+    assert result.returncode != 0
+    assert "older than 3.11" in result.stderr
+
+
+def test_python_bin_errors_when_missing_or_old(tmp_path):
+    _stub_python(tmp_path, "python3", version=(3, 9))
+    result = _bash(
+        'source "$1"; python_bin', str(COMMON), env={"PATH": str(tmp_path)}
+    )
+    assert result.returncode != 0
+    assert "no Python >= 3.11" in result.stderr
+
+    result = _bash(
+        'source "$1"; python_bin',
+        str(COMMON),
+        env={"PATH": str(tmp_path), "DECISION_PYTHON": "python3.11"},
+    )
+    assert result.returncode != 0
+    assert "not found" in result.stderr
+
+
+def test_centos_install_uses_python311():
+    script = (DEPLOY / "centos" / "install.sh").read_text()
+    # python3 на Stream 9 — 3.9, для пакета этого мало
+    assert "python3.11" in script
+    assert "python3-venv" not in script
