@@ -62,6 +62,23 @@ def test_observability_doc_covers_every_metric():
         assert metric._name in text, f"метрика {metric._name} не описана"
 
 
+def test_observability_alert_metrics_exist_in_registry():
+    """Метрики из примеров алертов должны реально существовать в реестре."""
+    import re
+
+    from prometheus_client import REGISTRY
+
+    text = (ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    known: set[str] = set()
+    for family in REGISTRY.collect():
+        known.add(family.name)
+        for suffix in ("_total", "_bucket", "_count", "_sum"):
+            known.add(family.name + suffix)
+    referenced = set(re.findall(r"\bdecision_[a-z0-9_]+\b", text))
+    missing = sorted(name for name in referenced if name not in known)
+    assert not missing, f"в алертах упомянуты неизвестные метрики: {missing}"
+
+
 def test_weak_labeling_doc_and_module_exist():
     doc = (ROOT / "docs" / "weak-labeling.md").read_text(encoding="utf-8")
     module = (ROOT / "training" / "labeling" / "run.py").read_text(encoding="utf-8")

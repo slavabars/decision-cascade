@@ -32,6 +32,12 @@ URL: иначе кардинальность росла бы с каждым з�
 т.п.) добавляет сам `prometheus_client`; они полезны при разборе утечек и
 деградации памяти.
 
+Имена метрик в примерах алертов сверяются с реальным реестром тестом
+`tests/test_docs.py::test_observability_alert_metrics_exist_in_registry`, а
+живой скрейп проверяется вручную (§5): `decision_ready`,
+`decision_untrained_refusals_total` и `decision_heads_loaded` отдаются с
+ожидаемыми значениями, гистограмма — с бакетами.
+
 ### Скрейп и алерты
 
 ```yaml
