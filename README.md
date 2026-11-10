@@ -9,7 +9,7 @@ state-состояние превращается в признаки, а гол
 **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет),
 Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: stable (1.1.0).** Контракт API (`schema_version = "1"`), формат
+**Статус: stable (1.2.0).** Контракт API (`schema_version = "1"`), формат
 паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major,
 с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие
 поверхности остаются beta и как объявляется депрекация —
@@ -765,7 +765,13 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 
 # через запущенный сервер (свой /decisions или внешний SystemOne)
 .venv/bin/python -m eval.latency.run --http http://127.0.0.1:8000/decisions --n 30
+
+# бюджет батчинга, длины входа и dtype
+.venv/bin/python -m eval.latency.sweep   --encoder openai-community/gpt2 --dim 768 --kind causal --device cpu
 ```
+
+Числа по батчингу и обрезке входа, а также замер int8/float16 —
+в [`docs/latency.md`](docs/latency.md).
 
 Фаза `encode` замеряется прямым прогоном энкодера (в обход кэша признаков), а
 `decide` — полным путём сервиса. На повторяющемся `state` `decide` попадает в
@@ -807,6 +813,12 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 то есть цифра `1.000` про hash-энкодер отражает лёгкость синтетики, а не
 универсальное качество. Для `noul` дополнительно считаются Brier и ECE.
 Датасеты и отчёты складываются в `data/` (в `.gitignore`).
+
+
+Русскоязычный набор — `eval.datasets.ru_sentiment` (тональность: choice +
+два noul). Числа, baseline и команды — в
+[`docs/ru-benchmark.md`](docs/ru-benchmark.md).
+
 
 ### Публичная оценка (AG News): untrained vs trained
 
@@ -1107,7 +1119,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 770 passed, 14 skipped
+.venv/bin/python -m pytest                          # 787 passed, 14 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)

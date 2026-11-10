@@ -66,9 +66,16 @@ fi
 }
 
 if [[ -d "$packs_root" ]]; then
+  IFS=',' read -r -a excluded <<< "${EXCLUDE_PACKS:-}"
   for d in "$packs_root"/*/; do
     [[ -f "$d/temperature.json" ]] || continue
-    cp "$d/temperature.json" "$root/calibration/$(basename "$d").json"
+    name="$(basename "$d")"
+    skip=0
+    for pack in "${excluded[@]}"; do
+      [[ -n "$pack" && "$pack" == "$name" ]] && skip=1
+    done
+    [[ "$skip" == "0" ]] || continue
+    cp "$d/temperature.json" "$root/calibration/$name.json"
   done
 fi
 if [[ -f checkpoints/reference/temperature.json ]]; then

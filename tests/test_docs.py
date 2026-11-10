@@ -103,3 +103,16 @@ def test_drift_doc_describes_tools_and_gate():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "docs/drift.md" in readme
     assert "training.feedback.run" in readme
+
+
+def test_latency_and_russian_docs_linked():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/latency.md" in readme
+    assert "docs/ru-benchmark.md" in readme
+    assert "eval.latency.sweep" in readme
+    assert "ru_sentiment" in readme
+    latency = (ROOT / "docs" / "latency.md").read_text(encoding="utf-8")
+    assert "eval.latency.sweep" in latency
+    russian = (ROOT / "docs" / "ru-benchmark.md").read_text(encoding="utf-8")
+    assert "ru_sentiment" in russian
+    assert "cointegrated/rubert-tiny2" in russian

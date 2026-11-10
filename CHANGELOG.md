@@ -6,6 +6,39 @@
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-11-10
+
+### Added
+
+- **Авто-перекалибровка после дообучения.** `python -m training.feedback.run`
+  сам подбирает температуру на отдельном срезе обратной связи
+  (`--calibration`, по умолчанию 10%) с гейтом «ECE не хуже, Brier не хуже»;
+  температуры и метрики до/после лежат в `metadata.json -> feedback.calibration`.
+  `--no-recalibrate` отключает. Раньше это был ручной шаг, который забывался,
+  и `confidence` переставала быть вероятностью.
+- **Русскоязычный набор** `eval.datasets.ru_sentiment`
+  (`MonoHime/ru_sentiment_dataset`, ревизия закреплена): вопросы `sentiment`
+  (choice) и `is_positive`/`is_negative` (noul). `--specs ru_sentiment`
+  поддержан в `train_heads` и `calibrate_temperature`. Числа и baseline —
+  `docs/ru-benchmark.md` (rubert-tiny2: test 0.708 против baseline 0.584,
+  ECE `sentiment` 0.176 → 0.022 после калибровки).
+- **Свип латентности** `python -m eval.latency.sweep`: батчинг, длина входа,
+  dtype, с честной методикой (каждый замер кодирует новые состояния).
+  Числа — `docs/latency.md`; там же замер dynamic-int8 (1.35× ценой 2 п.п.) и
+  решение его не внедрять.
+- `eval.latency.run` получил `--max-length`, `--batch`, `--kind`.
+
+### Changed
+
+- `training.recipe.calibrate_temperature.accept_calibration` — публичное имя
+  гейта калибровки (используется дообучением по обратной связи).
+
+### Compatibility
+
+- Ломающих изменений нет; новых переменных окружения и зависимостей нет.
+  Русский набор — только чтение по закреплённой ревизии, веса на нём не
+  публикуются (лицензия датасета не указана).
+
 ## [1.1.0] — 2026-11-10
 
 ### Added
@@ -722,7 +755,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/slavabars/decision-cascade/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/slavabars/decision-cascade/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/slavabars/decision-cascade/compare/v0.16.0...v1.0.0
 [0.16.0]: https://github.com/slavabars/decision-cascade/compare/v0.15.0...v0.16.0

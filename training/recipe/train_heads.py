@@ -78,9 +78,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--specs",
-        choices=["support", "public", "routerbench"],
+        choices=["support", "public", "routerbench", "ru_sentiment"],
         default="support",
-        help="набор вопросов: синтетические тикеты, публичный AG News или RouterBench",
+        help="набор вопросов: тикеты, AG News, RouterBench или русская тональность",
     )
     parser.add_argument(
         "--limit", type=int, default=0, help="для public: ограничение train-сплита"
@@ -142,6 +142,27 @@ def _load_data(
         dataset_path = out_dir / "dataset.jsonl"
         write_jsonl(dataset_path, examples)
         return PUBLIC_SPECS, splits, dataset_path, "ag_news"
+
+    if args.specs == "ru_sentiment":
+        from eval.datasets.ru_sentiment import RU_QUESTIONS, load_ru_sentiment
+
+        base = load_ru_sentiment(args.limit or None, seed=args.seed)
+        carved = split_examples(
+            base["train"],
+            val_fraction=args.val_fraction,
+            test_fraction=0.0,
+            seed=args.seed,
+        )
+        splits = {
+            "train": carved["train"],
+            "val": carved["val"],
+            "test": base["test"],
+        }
+        examples = splits["train"] + splits["test"]
+        dataset_path = out_dir / "dataset.jsonl"
+        write_jsonl(dataset_path, examples)
+        specs = {name: spec_from_api(data) for name, data in RU_QUESTIONS.items()}
+        return specs, splits, dataset_path, "ru_sentiment"
 
     if args.specs == "routerbench":
         from eval.datasets.routerbench import ROUTERBENCH_QUESTIONS, load_routerbench

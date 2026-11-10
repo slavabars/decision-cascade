@@ -42,7 +42,9 @@ T_MIN, T_MAX, T_STEPS = 1.0, 1000.0, 200
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Temperature scaling of heads")
     parser.add_argument(
-        "--specs", choices=["support", "public", "routerbench"], default="support"
+        "--specs",
+        choices=["support", "public", "routerbench", "ru_sentiment"],
+        default="support",
     )
     parser.add_argument(
         "--shot",
@@ -72,6 +74,18 @@ def _load_splits(args):
         spec_from_api,
         split_examples,
     )
+
+    if args.specs == "ru_sentiment":
+        from eval.datasets.ru_sentiment import RU_SPECS, load_ru_sentiment
+
+        base = load_ru_sentiment(args.limit or None, seed=args.seed)
+        carved = split_examples(
+            base["train"],
+            val_fraction=0.2,
+            test_fraction=0.0,
+            seed=args.seed,
+        )
+        return RU_SPECS, carved["train"], carved["val"], base["test"]
 
     if args.specs == "public":
         from eval.datasets.public_dataset import PUBLIC_SPECS, load_ag_news
@@ -128,7 +142,7 @@ def _report(specs, examples, features, heads) -> dict:
     return _metrics_report(specs, examples, features, heads)
 
 
-def _accept(before: dict, after: dict) -> bool:
+def accept_calibration(before: dict, after: dict) -> bool:
     """Гейт «не навреди»: ECE на val должен улучшиться, Brier — не ухудшиться.
 
     NLL-оптимум температуры иногда смягчает голову, которая уже была
@@ -183,7 +197,7 @@ def main(argv: list[str] | None = None) -> dict:
         name
         for name in specs
         if fitted[name] != 1.0
-        and not _accept(before_val["questions"][name], after_val["questions"][name])
+        and not accept_calibration(before_val["questions"][name], after_val["questions"][name])
     ]
     if rejected:
         heads.set_temperatures({name: 1.0 for name in rejected})

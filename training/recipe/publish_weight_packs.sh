@@ -34,6 +34,18 @@ cp -r "$root" "$stage/${tag}-weights"
 # Веса сервису нужны без датасетов — не раздуваем архив.
 find "$stage/${tag}-weights" -name '*.jsonl' -delete
 
+# Паки с ограничениями по лицензии датасета не публикуем: список в
+# EXCLUDE_PACKS (через запятую). Например, ru-rubert-tiny2 обучен на наборе
+# без указанной лицензии.
+if [[ -n "${EXCLUDE_PACKS:-}" ]]; then
+  IFS=',' read -r -a excluded <<< "$EXCLUDE_PACKS"
+  for pack in "${excluded[@]}"; do
+    [[ -n "$pack" ]] || continue
+    rm -rf "$stage/${tag}-weights/$pack"
+    echo "excluded from release: $pack"
+  done
+fi
+
 "$python_bin" - "$stage/${tag}-weights" <<'PY' > "$stage/manifest.json"
 import json
 import sys

@@ -40,6 +40,10 @@ from eval.benchmark.core import build_targets, encode_examples, evaluate_benchma
 from src.decision_head.heads import DecisionHeads
 from src.encoder.caching import CachedEncoder
 from src.sampler.questions import ChoiceSpec, NoulSpec, QuestionSpec, ScoreSpec
+from training.recipe.calibrate_temperature import (
+    accept_calibration,
+    fit_temperature,
+)
 from training.sft.train import SFTTrainer
 
 #: Допуск по умолчанию: старая точность может просесть не больше чем на 1 п.п.
@@ -227,6 +231,64 @@ def retrain(
     return trained
 
 
+def recalibrate(
+    heads: DecisionHeads,
+    specs: dict[str, QuestionSpec],
+    encoder,
+    examples: list[dict[str, Any]],
+) -> tuple[dict[str, float], dict[str, Any]]:
+    """Temperature scaling на отдельном срезе после дообучения.
+
+    Точность не меняется (T делит логиты), меняются вероятности: дообученные
+    головы почти всегда переуверены. Температура принимается по вопросу только
+    если на этом же срезе ECE улучшился, а Brier не ухудшился, — иначе остаётся
+    1.0 (тот же гейт, что у ``calibrate_temperature``).
+    """
+    if not examples:
+        return {}, {"n": 0, "applied": {}}
+    features = encode_examples(specs, examples, encoder)
+    targets = {
+        name: build_targets(spec, [ex["labels"][name] for ex in examples])
+        for name, spec in specs.items()
+    }
+    heads.set_temperatures({name: 1.0 for name in specs})
+    before_report = evaluate_benchmark(specs, examples, encoder, heads)
+    before = summarize(before_report)
+    before_questions = before_report["questions"]
+
+    fitted: dict[str, float] = {}
+    for name, spec in specs.items():
+        with torch.no_grad():
+            logits = heads.heads[name].logits(features[name])
+        fitted[name] = fit_temperature(
+            logits, targets[name], noul=isinstance(spec, NoulSpec)
+        )
+    heads.set_temperatures(fitted)
+    after_report = evaluate_benchmark(specs, examples, encoder, heads)
+    after_questions = after_report["questions"]
+    rejected = [
+        name
+        for name in specs
+        if fitted[name] != 1.0
+        and not accept_calibration(before_questions[name], after_questions[name])
+    ]
+    applied = {
+        name: (1.0 if name in rejected else value) for name, value in fitted.items()
+    }
+    if rejected:
+        heads.set_temperatures(applied)
+        after = summarize(evaluate_benchmark(specs, examples, encoder, heads))
+    else:
+        after = summarize(after_report)
+    return applied, {
+        "n": len(examples),
+        "applied": applied,
+        "rejected": rejected,
+        "before": before,
+        "after": after,
+    }
+
+
 def summarize(report: dict[str, Any]) -> dict[str, float]:
     """Сжимает отчёт ``evaluate_benchmark`` до accuracy и среднего ECE."""
     per_question = report["questions"]
@@ -330,6 +392,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--holdout", type=float, default=0.2)
+    parser.add_argument(
+        "--calibration",
+        type=float,
+        default=0.1,
+        help="доля обратной связи для подбора температуры (отдельно от holdout)",
+    )
+    parser.add_argument(
+        "--no-recalibrate",
+        dest="recalibrate",
+        action="store_false",
+        help="не подбирать температуру после дообучения",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--min-new-gain", type=float, default=DEFAULT_MIN_NEW_GAIN)
     parser.add_argument("--max-old-drop", type=float, default=DEFAULT_MAX_OLD_DROP)
@@ -364,6 +438,16 @@ def main(
     train_examples, holdout_examples = split_holdout(
         feedback, args.holdout, args.seed
     )
+    calibration_examples: list[dict[str, Any]] = []
+    if args.recalibrate and args.calibration > 0:
+        if not 0.0 < args.calibration < 1.0:
+            raise ValueError(
+                f"calibration fraction must be in (0, 1), got {args.calibration}"
+            )
+        share = args.calibration / (1.0 - args.holdout)
+        train_examples, calibration_examples = split_holdout(
+            train_examples, min(share, 0.9), args.seed + 11
+        )
 
     old_examples: list[dict[str, Any]] = []
     dataset_path = Path(args.pack) / "dataset.jsonl"
@@ -418,6 +502,11 @@ def main(
         batch_size=args.batch_size,
         seed=args.seed,
     )
+    calibration: dict[str, Any] | None = None
+    if args.recalibrate and calibration_examples:
+        _temperatures, calibration = recalibrate(
+            trained, specs, encoder, calibration_examples
+        )
     after_new = summarize(
         evaluate_benchmark(specs, holdout_examples, encoder, trained)
     )
@@ -444,6 +533,7 @@ def main(
         "n_feedback": len(feedback),
         "n_train": len(train_examples),
         "n_holdout": len(holdout_examples),
+        "n_calibration": len(calibration_examples),
         "n_replay": len(replay_examples),
         "n_old_holdout": len(old_holdout),
         "replay": args.replay,
@@ -452,6 +542,7 @@ def main(
         "seed": args.seed,
         "before": {"new": before_new, "old": before_old},
         "after": {"new": after_new, "old": after_old},
+        "calibration": calibration,
         "control": control,
         "net": (
             {
@@ -480,6 +571,7 @@ def main(
             "n": len(feedback),
             "n_train": len(train_examples),
             "n_holdout": len(holdout_examples),
+            "n_calibration": len(calibration_examples),
             "n_replay": len(replay_examples),
             "replay": args.replay,
             "steps": args.steps,
@@ -488,7 +580,8 @@ def main(
             "gate": verdict,
             "control": control,
             "net": report["net"],
-            "temperature_recalibrated": False,
+            "temperature_recalibrated": calibration is not None,
+            "calibration": calibration,
         }
         (out / "metadata.json").write_text(
             json.dumps(updated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

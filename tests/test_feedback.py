@@ -273,7 +273,12 @@ def test_cli_writes_pack_and_metadata(tmp_path):
     metadata = json.loads((out / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["feedback"]["n"] == 120
     assert metadata["feedback"]["gate"]["accepted"] is True
-    assert metadata["feedback"]["temperature_recalibrated"] is False
+    # по умолчанию температура подбирается на отдельном срезе
+    assert metadata["feedback"]["temperature_recalibrated"] is True
+    calibration = metadata["feedback"]["calibration"]
+    assert calibration["n"] > 0
+    assert set(calibration["applied"]) == set(SPECS)
+    assert calibration["after"]["ece"] <= calibration["before"]["ece"] + 1e-9
     merged = (out / "dataset.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(merged) == len(old) + report["n_train"]
     # пак читается сервисом
@@ -371,3 +376,64 @@ def test_cli_control_reports_net_gain(tmp_path):
     assert "new" in report["control"] and "old" in report["control"]
     assert report["net"] is not None
     assert set(report["net"]) == {"new_gain", "old_delta"}
+
+
+def test_cli_no_recalibrate_keeps_flag_false(tmp_path):
+    old = _examples(OLD, 200, "old")
+    new = _examples(NEW, 120, "new")
+    pack = _write_pack(tmp_path, old)
+    feedback = _write_jsonl(tmp_path / "feedback.jsonl", new)
+    out = tmp_path / "pack-v2"
+
+    report = run.main(
+        [
+            "--pack",
+            str(pack),
+            "--feedback",
+            str(feedback),
+            "--out",
+            str(out),
+            "--steps",
+            "100",
+            "--lr",
+            "0.1",
+            "--no-recalibrate",
+        ],
+        encoder=HashStateEncoder(DIM),
+    )
+    assert report["calibration"] is None
+    metadata = json.loads((out / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["feedback"]["temperature_recalibrated"] is False
+
+
+def test_recalibrate_does_not_change_accuracy(tmp_path):
+    from eval.benchmark.core import evaluate_benchmark
+
+    old = _examples(OLD, 200, "old")
+    heads, _ = run.load_pack(_write_pack(tmp_path, old))
+    encoder = HashStateEncoder(DIM)
+    calibration = _examples(NEW, 80, "cal")
+
+    before = run.summarize(evaluate_benchmark(SPECS, calibration, encoder, heads))
+    temperatures, report = run.recalibrate(heads, SPECS, encoder, calibration)
+    after = run.summarize(evaluate_benchmark(SPECS, calibration, encoder, heads))
+
+    assert set(temperatures) == set(SPECS)
+    assert after["accuracy"] == pytest.approx(before["accuracy"])
+    # гейт «не навреди»: ECE не вырос
+    assert after["ece"] <= before["ece"] + 1e-9
+    assert report["n"] == len(calibration)
+
+
+def test_recalibrate_without_examples_is_noop():
+    import torch
+
+    from src.decision_head.heads import DecisionHeads
+
+    heads = DecisionHeads(DIM, SPECS, seed=0)
+    temperatures, report = run.recalibrate(
+        heads, SPECS, HashStateEncoder(DIM), []
+    )
+    assert temperatures == {}
+    assert report["n"] == 0
+    assert torch.allclose(torch.tensor(heads.temperatures()["urgent"]), torch.tensor(1.0))

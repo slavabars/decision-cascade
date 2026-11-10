@@ -51,6 +51,7 @@ def _run_local(
     dtype: str = "float32",
     max_length: int | None = 256,
     batch_size: int = 16,
+    kind: str | None = None,
 ) -> dict[str, Any]:
     from src.device import check_dtype_device, resolve_device, resolve_dtype
 
@@ -63,6 +64,7 @@ def _run_local(
         encoder = create_state_encoder(
             encoder_id,
             dim,
+            kind=kind,
             dtype=resolved_dtype,
             device=resolved_device,
             max_length=max_length,
@@ -125,6 +127,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="float32|float16|bfloat16 (DECISION_DTYPE-совместимо)",
     )
     parser.add_argument(
+        "--max-length",
+        type=int,
+        default=256,
+        help="обрезка входа в токенах (0 — без обрезки)",
+    )
+    parser.add_argument(
+        "--batch", type=int, default=16, help="размер батча энкодера"
+    )
+    parser.add_argument(
+        "--kind",
+        choices=["causal", "encoder"],
+        default=None,
+        help="вид энкодера (по умолчанию DECISION_ENCODER_KIND)",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="выводить только JSON-отчёт"
     )
     return parser.parse_args(argv)
@@ -142,6 +159,9 @@ def main(argv: list[str] | None = None) -> int:
             dim=args.dim,
             device=args.device,
             dtype=args.dtype,
+            max_length=args.max_length or None,
+            batch_size=args.batch,
+            kind=args.kind,
         )
 
     if args.json:

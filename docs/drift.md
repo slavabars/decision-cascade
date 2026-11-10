@@ -144,7 +144,7 @@ replay, либо честно поднимать `--max-old-drop`, либо (е�
 свежие данные действительно добавляют информацию, а не только шаги. Гейт пак
 принял, `metadata.json` содержит блок `feedback` с `net` и вердиктом.
 
-## 4. Рецепт## 4. Рецепт
+## 4. Рецепт
 
 ```bash
 # 1. собрать свежие размеченные примеры (JSONL: state + labels)
@@ -160,10 +160,22 @@ replay, либо честно поднимать `--max-old-drop`, либо (е�
 
 # 3. посмотреть отчёт (в т.ч. при отказе)
 cat checkpoints/packs/public-gpt2-v2/feedback.report.json
+```
 
-# 4. перекалибровать температуру: после дообучения она уже не та
-DECISION_DEVICE=cuda .venv/bin/python -m training.recipe.calibrate_temperature \
-  --pack checkpoints/packs/public-gpt2-v2
+Температура подбирается **автоматически** на отдельном срезе обратной связи
+(`--calibration`, по умолчанию 10%): после дообучения головы переуверены, и
+`training.feedback.run` сам делает temperature scaling с тем же гейтом
+«не навреди» (ECE не хуже, Brier не хуже), что и
+`training.recipe.calibrate_temperature`. Температуры и метрики до/после лежат в
+`metadata.json -> feedback.calibration`.
+
+Отключить — `--no-recalibrate`; переподобрать вручную на своих данных можно
+штатным рецептом:
+
+```bash
+.venv/bin/python -m training.recipe.calibrate_temperature \
+  --specs public --encoder openai-community/gpt2 --dim 768 --limit 4000 \
+  --checkpoint-dir checkpoints/packs/public-gpt2-v2
 ```
 
 Что важно знать:
@@ -171,9 +183,10 @@ DECISION_DEVICE=cuda .venv/bin/python -m training.recipe.calibrate_temperature \
 - **Метки — ваши.** Слабая разметка (`training.labeling.run`) годится для
   покрытия, но ошибки учителя наследуются и в гейте не видны: он меряет
   согласие с теми же метками.
-- **Температура.** Пак переносит старые температуры, а логиты после дообучения
-  другие — калибровку надо повторить, иначе `confidence` перестанет быть
-  вероятностью.
+- **Температура.** Логиты после дообучения другие, поэтому пак калибруется
+  заново на отдельном срезе (по умолчанию; `--no-recalibrate` отключает).
+  Если отключили — `confidence` перестанет быть вероятностью, переподберите
+  температуру вручную.
 - **`dataset.jsonl` растёт.** Принятая обратная связь дописывается к датасету
   пака, поэтому следующий replay уже видит новый домен.
 - **Порог гейта — политика.** Для сдвига приора допуск `1 п.п.` может быть

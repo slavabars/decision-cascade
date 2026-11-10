@@ -40,6 +40,14 @@ NO_RELEASE=1 training/recipe/publish_weight_packs.sh v<версия> checkpoints
 eval/competitors/publish_benchmarks.sh v<версия>
 ```
 
+`EXCLUDE_PACKS` (через запятую) убирает паки из архива — например, если датасет
+не разрешает публикацию производных весов:
+
+```bash
+EXCLUDE_PACKS=ru-rubert-tiny2 NO_RELEASE=1 \
+  training/recipe/publish_weight_packs.sh v<версия> checkpoints/packs
+```
+
 ## 4. Публикация
 
 ```bash

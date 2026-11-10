@@ -154,14 +154,14 @@ def test_fit_temperature_for_choice_keeps_argmax():
 
 
 def test_accept_gate_requires_ece_and_brier_to_improve():
-    from training.recipe.calibrate_temperature import _accept
+    from training.recipe.calibrate_temperature import accept_calibration
 
     # Оба улучшились — принимаем.
-    assert _accept({"ece": 0.2, "brier": 0.2}, {"ece": 0.05, "brier": 0.18})
+    assert accept_calibration({"ece": 0.2, "brier": 0.2}, {"ece": 0.05, "brier": 0.18})
     # Brier лучше, ECE хуже — отклоняем (типичный бинарный noul).
-    assert not _accept({"ece": 0.10, "brier": 0.10}, {"ece": 0.11, "brier": 0.09})
+    assert not accept_calibration({"ece": 0.10, "brier": 0.10}, {"ece": 0.11, "brier": 0.09})
     # ECE лучше, Brier хуже — тоже отклоняем.
-    assert not _accept({"ece": 0.10, "brier": 0.10}, {"ece": 0.05, "brier": 0.12})
+    assert not accept_calibration({"ece": 0.10, "brier": 0.10}, {"ece": 0.05, "brier": 0.12})
 
 
 def test_refresh_metadata_describes_calibrated_checkpoint(tmp_path):
