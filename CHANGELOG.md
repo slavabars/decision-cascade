@@ -6,6 +6,44 @@
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-11-10
+
+### Added
+
+- **Risk-aware каскад стабилен.** Контракт зафиксирован в `docs/stability.md`
+  §7: переменные `DECISION_CASCADE_RISK_BUDGET`, `DECISION_RISK_MODEL_PATH`,
+  `DECISION_RISK_FEW_SHOT_N`, `DECISION_RISK_GATE_DELTA`; ключи
+  `GET /info -> engine`; словарь `usage.reason` (`risk`, `risk_gate`); поля
+  ответа `/v1/feedback`; правило «hard gate не ослабляется без явного
+  `DECISION_RISK_GATE_DELTA > 0`». `tests/test_risk_contract.py` проверяет и
+  код, и документацию, чтобы они не разъехались.
+- **Публикация пакета на PyPI** (`.github/workflows/pypi.yml`): по тегу `v*`
+  тесты → сборка → smoke wheel → публикация (если версии ещё нет) →
+  установка из индекса. Повторный запуск идемпотентен.
+- **Ночной регресс латентности**: бюджет `p50`/`p95` в
+  `eval/nightly_baseline.json`, режимы `--latency off|warn|fail`, в CI —
+  `fail`; job запускается и на `push` в `main` по путям кода решений.
+
+### Fixed
+
+- **deploy: Python 3.11+ вместо жёсткого `python3`.** CentOS Stream 9 даёт
+  `python3 = 3.9`, и установка собирала venv на нём. Теперь интерпретатор
+  выбирается (`DECISION_PYTHON` или первый 3.13/3.12/3.11/3 с проверкой
+  версии), `centos/install.sh` ставит `python3.11`, `upgrade.sh` и
+  `restore.sh` используют тот же выбор.
+
+### Changed
+
+- `docs/deploy.md`: реальный прогон на CentOS Stream 9 (полный цикл
+  install → health/ready/metrics → upgrade → backup/restore → teardown) рядом
+  с Ubuntu 24.04; требования по Python.
+
+### Compatibility
+
+- Ломающих изменений относительно `1.0.0` нет. Две переменные, которые были и
+  раньше (`DECISION_RISK_FEW_SHOT_N`, `DECISION_RISK_GATE_DELTA`), теперь
+  входят в стабильный контракт: их смысл и значения по умолчанию не менялись.
+
 ## [1.0.0] — 2026-11-10
 
 Первый стабильный релиз. Функционально `1.0.0` совпадает с `0.16.0`: новых
@@ -684,7 +722,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/slavabars/decision-cascade/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/slavabars/decision-cascade/compare/v0.16.0...v1.0.0
 [0.16.0]: https://github.com/slavabars/decision-cascade/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/slavabars/decision-cascade/compare/v0.14.0...v0.15.0

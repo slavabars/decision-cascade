@@ -9,7 +9,7 @@ state-состояние превращается в признаки, а гол
 **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет),
 Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: stable (1.0.0).** Контракт API (`schema_version = "1"`), формат
+**Статус: stable (1.1.0).** Контракт API (`schema_version = "1"`), формат
 паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major,
 с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие
 поверхности остаются beta и как объявляется депрекация —
@@ -228,6 +228,8 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_CASCADE_THRESHOLD` | порог уверенности для эскалации (0–1) | `0.6` |
 | `DECISION_CASCADE_RISK_BUDGET` | бюджет ошибок для risk-aware каскада (0–1); включает режим | — (порог) |
 | `DECISION_RISK_MODEL_PATH` | файл обученного оценщика `P(ошибка)` | `<checkpoint>/risk.json` |
+| `DECISION_RISK_FEW_SHOT_N` | примеров до переобучения риск-модели под вопрос (`>= 2`; `0`/`1` — выключено) | `10` |
+| `DECISION_RISK_GATE_DELTA` | допуск к сертификату hard gate (`> 0` ослабляет, `< 0` ужесточает) | `0.0` |
 | `DECISION_VISION_MODEL_ID` | CLIP/SigLIP для локальных `images` | — (без vision) |
 | `DECISION_VISION_DIM` | размерность признаков vision-энкодера (1–8192) | `512` |
 | `DECISION_MEDIA_ROOT` | allow-list каталог для чтения `images`/`videos` с диска | — (любой путь) |
@@ -1105,7 +1107,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 762 passed, 14 skipped
+.venv/bin/python -m pytest                          # 770 passed, 14 skipped
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
