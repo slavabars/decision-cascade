@@ -29,8 +29,10 @@ permissions:
 # Новый push отменяет предыдущий прогон: важно для push-триггера, чтобы
 # очередь не копила устаревшие проверки.
 concurrency:
-  group: nightly-${{ github.ref }}
-  cancel-in-progress: true
+  # Прогон по расписанию не должен отменяться push'ем (иначе релизный коммит
+  # остаётся без проверки), а устаревшие push-прогоны отменять полезно.
+  group: nightly-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   quality:
