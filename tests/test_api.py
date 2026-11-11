@@ -218,3 +218,57 @@ def test_to_specs_carries_criteria():
     )
     assert specs["dept"].criteria == {"a": "Alpha", "b": "Beta"}
     assert specs["pain"].criteria == ("calm", "critical")
+
+
+def test_info_reports_effective_config(client):
+    """`/info` показывает применённые настройки, а не только бэкенд."""
+    config = client.get("/info").json()["config"]
+    assert config["encoder"] == "HashStateEncoder"
+    assert config["feature_dim"] > 0
+    assert config["device"] == "cpu"
+    assert config["checkpoint_dir"]
+    assert config["untrained"] in {"allow", "refuse", "fallback"}
+    assert config["choice_head"] in {"linear", "option_scoring"}
+
+
+def test_service_config_reads_resolved_encoder_settings():
+    import torch
+
+    from api.server.main import _service_config
+    from api.server.service import DecisionService, HashStateEncoder
+
+    class StubEncoder(HashStateEncoder):
+        """Подменяет разобранные настройки, не загружая веса."""
+
+        model_id = "stub/encoder"
+        device = "cuda:0"
+        dtype = torch.bfloat16
+        max_length = 128
+        batch_size = 32
+
+    service = DecisionService(
+        encoder=StubEncoder(64), dim=64, checkpoint_dir="/tmp/packs"
+    )
+    config = _service_config(service)
+    assert config["model_id"] == "stub/encoder"
+    assert config["device"] == "cuda:0"
+    assert config["dtype"] == "bfloat16"
+    assert config["max_length"] == 128
+    assert config["encode_batch"] == 32
+    assert config["checkpoint_dir"] == "/tmp/packs"
+
+
+def test_effective_config_walks_cascade_and_tolerates_remote():
+    from types import SimpleNamespace
+
+    from api.server.main import _effective_config
+    from api.server.service import DecisionService
+
+    primary = SimpleNamespace(engine=DecisionService(seed=0))
+    cascade = SimpleNamespace(primary=primary, fallback=None)
+    config = _effective_config(cascade)
+    assert config["primary"]["encoder"] == "HashStateEncoder"
+    assert config["fallback"] is None
+
+    # внешний бэкенд не сообщает локальных настроек — не выдумываем их
+    assert _effective_config(SimpleNamespace()) is None

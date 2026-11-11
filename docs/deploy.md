@@ -42,7 +42,9 @@ sudo DECISION_INSTALL_DIR=/srv/decision-model bash deploy/ubuntu/install.sh
 ```
 
 Состояние (`.env`, паки, риск-модель) установщик не создаёт: на новом сервере
-его привозят из бэкапа (`deploy/restore.sh`) или из релизных паков.
+его привозят из бэкапа (`deploy/restore.sh`) или из релизных паков. Без `.env`
+сервис стартует на дефолтах — файл необязателен, поэтому «забыли скопировать»
+не превращается в неработающий сервис.
 
 Проверка после установки:
 
@@ -63,7 +65,7 @@ journalctl -u decision-api@api -n 50 --no-pager
 
 | Путь | Зачем |
 | --- | --- |
-| `.env` | `DECISION_*`: бэкенд, устройство, порог каскада, пути |
+| `.env` | `DECISION_*`: бэкенд, устройство, порог каскада, пути. Читается юнитом (`EnvironmentFile=-<project>/.env`), образец — `.env.example` |
 | `checkpoints/packs/` | обученные паки голов (`heads.pt`, `metadata.json`, `temperature.json`) |
 | `checkpoints/risk.json` | обученная риск-модель (если включён risk-aware каскад) |
 

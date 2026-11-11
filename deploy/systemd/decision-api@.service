@@ -16,6 +16,9 @@ TimeoutStopSec=30
 User=__SERVICE_USER__
 Group=__SERVICE_GROUP__
 Environment=PYTHONUNBUFFERED=1
+# Состояние сервиса: DECISION_* из .env (см. .env.example). Префикс «-» —
+# файл необязателен: без него сервис стартует на дефолтах, а не падает.
+EnvironmentFile=-__PROJECT_DIR__/.env
 
 [Install]
 WantedBy=multi-user.target

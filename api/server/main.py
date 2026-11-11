@@ -686,6 +686,46 @@ def _engine_info(backend: Backend) -> dict[str, Any] | None:
     return None
 
 
+def _service_config(service: Any) -> dict[str, Any] | None:
+    """Применённая конфигурация локального сервиса (дефолты + env).
+
+    Нужна, чтобы отвечать на вопрос «почему он взял bfloat16?» без чтения кода:
+    значения здесь уже разобраны и проверены, а не взяты из окружения.
+    """
+    encoder = getattr(service, "encoder", None)
+    if encoder is None:
+        return None
+    dtype = getattr(encoder, "dtype", None)
+    checkpoint_dir = getattr(service, "checkpoint_dir", None)
+    return {
+        "encoder": type(encoder).__name__,
+        "model_id": getattr(encoder, "model_id", None),
+        "feature_dim": getattr(service, "dim", None),
+        "device": str(getattr(encoder, "device", "cpu")),
+        "dtype": str(dtype).replace("torch.", "") if dtype is not None else None,
+        "max_length": getattr(encoder, "max_length", None),
+        "encode_batch": getattr(encoder, "batch_size", None),
+        "checkpoint_dir": str(checkpoint_dir) if checkpoint_dir else None,
+        "untrained": getattr(service, "untrained_policy", None),
+        "choice_head": getattr(service, "choice_head", None),
+    }
+
+
+def _effective_config(backend: Backend) -> dict[str, Any] | None:
+    """Конфигурация бэкенда: локальный сервис или каскад (primary/fallback)."""
+    config = _service_config(getattr(backend, "engine", None))
+    if config is not None:
+        return config
+    primary = getattr(backend, "primary", None)
+    fallback = getattr(backend, "fallback", None)
+    if primary is not None or fallback is not None:
+        return {
+            "primary": _effective_config(primary) if primary is not None else None,
+            "fallback": _effective_config(fallback) if fallback is not None else None,
+        }
+    return None
+
+
 def _to_specs(questions: dict[str, Question]) -> dict[str, QuestionSpec]:
     specs = {}
     for name, q in questions.items():
@@ -861,7 +901,7 @@ def ready() -> JSONResponse:
 
 @app.get("/info")
 def get_info() -> dict[str, Any]:
-    """Конфигурация сервиса: бэкенд, модальности и статус локальных голов."""
+    """Конфигурация сервиса: бэкенд, модальности, головы и применённые настройки."""
     return {
         "version": __version__,
         "backend": backend.name,
@@ -869,6 +909,8 @@ def get_info() -> dict[str, Any]:
         # принимает ли бэкенд обратную связь (few-shot риск-модели, /v1/feedback)
         "accepts_feedback": backend.capabilities.accepts_feedback,
         "engine": _engine_info(backend),
+        # что реально применилось (device/dtype/обрезка/паки) — после разбора env
+        "config": _effective_config(backend),
     }
 
 

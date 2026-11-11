@@ -54,6 +54,12 @@ def test_systemd_unit_template():
     assert "__SERVICE_USER__" in unit and "__SERVICE_GROUP__" in unit
 
 
+def test_systemd_unit_reads_env_file():
+    """`.env` — носитель DECISION_*: юнит обязан его читать (и без него работать)."""
+    unit = (DEPLOY / "systemd" / "decision-api@.service").read_text()
+    assert "EnvironmentFile=-__PROJECT_DIR__/.env" in unit
+
+
 def test_systemd_unit_shuts_down_gracefully():
     unit = (DEPLOY / "systemd" / "decision-api@.service").read_text()
     # SIGTERM + запас времени: uvicorn доводит запросы, которые уже принял.
