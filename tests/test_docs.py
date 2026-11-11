@@ -232,3 +232,27 @@ def test_readme_embeds_game_demo_with_absolute_url():
     assert "examples/games/maze/README.md" in readme
     assert (ROOT / "examples" / "games" / "chess" / "demo.gif").is_file()
     assert (ROOT / "examples" / "games" / "maze" / "demo.gif").is_file()
+
+
+def test_readme_links_are_absolute_for_pypi():
+    """PyPI рендерит README из индекса: относительные ссылки там ведут в никуда.
+
+    Проверяем и ссылки, и картинки: на странице PyPI `docs/x.md` превращается в
+    404, а `demo.gif` — в битую картинку.
+    """
+    import re
+
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    stripped = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    relative_links = sorted(
+        {
+            target
+            for target in re.findall(r"\]\(([^)]+)\)", stripped)
+            if not target.startswith(("http://", "https://", "#", "mailto:"))
+        }
+    )
+    assert not relative_links, f"на PyPI будут битыми: {relative_links}"
+    images = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", stripped)
+    assert images, "в README не осталось картинок"
+    for src in images:
+        assert src.startswith("https://"), f"картинка с относительным путём: {src}"

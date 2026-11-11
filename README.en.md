@@ -3,16 +3,16 @@
 [![CI](https://github.com/slavabars/decision-cascade/actions/workflows/ci.yml/badge.svg)](https://github.com/slavabars/decision-cascade/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/decision-cascade)](https://pypi.org/project/decision-cascade/)
 [![Python](https://img.shields.io/pypi/pyversions/decision-cascade)](https://pypi.org/project/decision-cascade/)
-[![Coverage gate](https://img.shields.io/badge/coverage_gate-%E2%89%A590%25-brightgreen)](pyproject.toml)
-[![License](https://img.shields.io/pypi/l/decision-cascade)](LICENSE)
+[![Coverage gate](https://img.shields.io/badge/coverage_gate-%E2%89%A590%25-brightgreen)](https://github.com/slavabars/decision-cascade/blob/main/pyproject.toml)
+[![License](https://img.shields.io/pypi/l/decision-cascade)](https://github.com/slavabars/decision-cascade/blob/main/LICENSE)
 
-[Русский](README.md) · **English**
+[Русский](https://github.com/slavabars/decision-cascade/blob/main/README.md) · **English**
 
 A local, machine-native decision engine in the spirit of **Jev (TypeSafe AI)** — open source, running entirely on your hardware, with the full loop "train → calibrate → evaluate → deploy".
 
 Instead of asking an LLM to generate an answer, the model **decides**: a state becomes features, and decision heads return **typed, probabilistic, calibrated** answers — Noul (yes/no), Choice (pick an option), Score (value on a scale) — without generating a single token.
 
-**Status: stable (1.3.0).** The API contract (`schema_version = "1"`), the pack format and the meaning of `DECISION_*` variables do not break inside `1.x`: changes land only in a major, with a two-minor deprecation window. What exactly is promised, which surfaces are still beta and how deprecation is announced — see [`docs/stability.md`](docs/stability.md).
+**Status: stable (1.4.0).** The API contract (`schema_version = "1"`), the pack format and the meaning of `DECISION_*` variables do not break inside `1.x`: changes land only in a major, with a two-minor deprecation window. What exactly is promised, which surfaces are still beta and how deprecation is announced — see [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
 
 ## Demo: two games
 
@@ -20,9 +20,9 @@ The engine does not generate an answer as text — it **decides**: it proposes c
 
 | Chess vs Stockfish | Pac-Man-style maze |
 | :---: | :---: |
-| [![Chess: the head decides when to think deeper](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](examples/games/chess/README.md) | [![Maze: the head decides when to play it safe](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/maze/demo.gif)](examples/games/maze/README.md) |
+| [![Chess: the head decides when to think deeper](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.md) | [![Maze: the head decides when to play it safe](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/maze/demo.gif)](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.md) |
 | 19% escalations close half the gap to "always deep" at 38% of its cost | 94% of the cautious policy's score at 33% escalations; twice the greedy score |
-| [code, data and numbers](examples/games/chess/README.md) | [code, data and numbers](examples/games/maze/README.md) |
+| [code, data and numbers](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.md) | [code, data and numbers](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.md) |
 
 Both games are ours: map, environment and rules are written in this repository, no third-party assets. The heads learn from outcomes, not from hints: in chess, when the engine's fast search is unreliable; in the maze, when a greedy step will cost a life.
 
@@ -81,11 +81,11 @@ The response is typed decisions with probabilities (real output, unabridged):
 The near-uniform probabilities and `trained: false` are honest: the encoder is `hash` and the heads are untrained. The point of this step is the shape of the response and the fact that everything runs locally and deterministically. Meaningful numbers require a trained pack (~0.5 GB encoder):
 
 ```bash
-gh release download v1.3.0 --pattern '*-weights.tar.gz' \
+gh release download v1.4.0 --pattern '*-weights.tar.gz' \
   --repo slavabars/decision-cascade
-tar -xzf v1.3.0-weights.tar.gz
+tar -xzf v1.4.0-weights.tar.gz
 
-DECISION_CHECKPOINT_DIR=v1.3.0-weights/public-gpt2 \
+DECISION_CHECKPOINT_DIR=v1.4.0-weights/public-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   python -m uvicorn api.server.main:app --port 8000
 ```
@@ -110,11 +110,11 @@ Two things people usually ask next:
 - **cascade**: +3.4 pp on `support` and +3.7 pp on AG News at 11–18% escalation rate; on RouterBench the benefit policy refuses to pay for a model that is weaker than the local one;
 - **calibration**: temperature scaling drops ECE from 0.144 to 0.024 on AG News and from 0.547 to 0.024 on RouterBench without changing accuracy; on the Russian dataset from 0.176 to 0.022.
 
-The synthetic `support` domain (0.915 vs 0.667 and 0.500), three escalation policies, reliability diagrams and caveats are in [`docs/benchmarks.md`](docs/benchmarks.md) (Russian); methodology and `--sweep` in [`docs/competitor-benchmark.md`](docs/competitor-benchmark.md). Reproduce with one command: `eval/competitors/reproduce_real.sh`. Raw JSON ships in `*-benchmarks.tar.gz` of every release.
+The synthetic `support` domain (0.915 vs 0.667 and 0.500), three escalation policies, reliability diagrams and caveats are in [`docs/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/benchmarks.md) (Russian); methodology and `--sweep` in [`docs/competitor-benchmark.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/competitor-benchmark.md). Reproduce with one command: `eval/competitors/reproduce_real.sh`. Raw JSON ships in `*-benchmarks.tar.gz` of every release.
 
 ## Why this is different
 
-- **No generation.** The whole path is `encode → heads → decide`; latency is bounded and there is no token loop to run away. gpt2 on GPU: 9–25 ms p50 per request depending on input truncation, 0.2 ms per state in a batch on a small encoder ([`docs/latency.md`](docs/latency.md)).
+- **No generation.** The whole path is `encode → heads → decide`; latency is bounded and there is no token loop to run away. gpt2 on GPU: 9–25 ms p50 per request depending on input truncation, 0.2 ms per state in a batch on a small encoder ([`docs/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/latency.md)).
 - **Probabilities that mean something.** Temperature scaling is fitted on a held-out slice and accepted only if ECE and Brier do not get worse (`accept_calibration`). `confidence` is a probability, not a logit in disguise.
 - **Typed answers.** Noul / Choice / Score with a JSON schema (`schema_version = "1"`), validated on the server and in the SDK. Downstream code switches on types instead of parsing prose.
 - **Cascade instead of a bigger model.** Local heads answer what they know; only uncertain questions escalate to a remote model. With `DECISION_CASCADE_RISK_BUDGET` escalation is driven by an error budget (`P(mistake)` model) instead of a raw confidence threshold.
@@ -156,7 +156,7 @@ The response is validated against the schema before you see it (`validate_respon
   --checkpoint-dir checkpoints/packs/public-gpt2
 ```
 
-Russian sentiment (`--specs ru_sentiment`, rubert-tiny2, 0.708 vs 0.584 majority baseline) — [`docs/ru-benchmark.md`](docs/ru-benchmark.md). Feedback retraining with an automatic re-calibration and a "do not harm" gate — [`docs/drift.md`](docs/drift.md).
+Russian sentiment (`--specs ru_sentiment`, rubert-tiny2, 0.708 vs 0.584 majority baseline) — [`docs/ru-benchmark.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/ru-benchmark.md). Feedback retraining with an automatic re-calibration and a "do not harm" gate — [`docs/drift.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/drift.md).
 
 ## Deploy
 
@@ -164,7 +164,7 @@ Russian sentiment (`--specs ru_sentiment`, rubert-tiny2, 0.708 vs 0.584 majority
 sudo bash deploy/ubuntu/install.sh   # or deploy/centos/install.sh
 ```
 
-Installs a venv, a systemd template unit (`decision-api@api`) and reads `DECISION_*` from `.env` (`EnvironmentFile=-<project>/.env`; without the file the service runs on defaults). Production variable set with comments: [`.env.example`](.env.example). `GET /info` shows what was actually applied (`config`: encoder, device, dtype, truncation, batch, packs). Upgrade, rollback, backup and restore — [`docs/deploy.md`](docs/deploy.md).
+Installs a venv, a systemd template unit (`decision-api@api`) and reads `DECISION_*` from `.env` (`EnvironmentFile=-<project>/.env`; without the file the service runs on defaults). Production variable set with comments: [`.env.example`](https://github.com/slavabars/decision-cascade/blob/main/.env.example). `GET /info` shows what was actually applied (`config`: encoder, device, dtype, truncation, batch, packs). Upgrade, rollback, backup and restore — [`docs/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/deploy.md).
 
 ## Documentation
 
@@ -172,20 +172,20 @@ Detailed docs are currently in Russian; the API, CLI and code comments are self-
 
 | Doc | What is there |
 | --- | --- |
-| [`docs/stability.md`](docs/stability.md) | what `1.x` promises, beta surfaces, deprecation policy |
-| [`docs/benchmarks.md`](docs/benchmarks.md) | competitor comparison, cascade policies, calibration |
-| [`docs/latency.md`](docs/latency.md) | batching, input truncation, dtype budgets (CPU and GPU) |
-| [`docs/ru-benchmark.md`](docs/ru-benchmark.md) | Russian sentiment benchmark |
-| [`docs/risk-aware-cascade.md`](docs/risk-aware-cascade.md) | error-budget cascade, hard gate, `risk.json` |
-| [`docs/deploy.md`](docs/deploy.md) | Ubuntu/CentOS install, upgrade, backup |
-| [`docs/observability.md`](docs/observability.md) | metrics, alerts, log format |
-| [`docs/troubleshooting.md`](docs/troubleshooting.md) | error codes and known failure modes |
-| [`docs/release.md`](docs/release.md) | release process (version → tag → PyPI → GitHub) |
+| [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md) | what `1.x` promises, beta surfaces, deprecation policy |
+| [`docs/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/benchmarks.md) | competitor comparison, cascade policies, calibration |
+| [`docs/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/latency.md) | batching, input truncation, dtype budgets (CPU and GPU) |
+| [`docs/ru-benchmark.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/ru-benchmark.md) | Russian sentiment benchmark |
+| [`docs/risk-aware-cascade.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/risk-aware-cascade.md) | error-budget cascade, hard gate, `risk.json` |
+| [`docs/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/deploy.md) | Ubuntu/CentOS install, upgrade, backup |
+| [`docs/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/observability.md) | metrics, alerts, log format |
+| [`docs/troubleshooting.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/troubleshooting.md) | error codes and known failure modes |
+| [`docs/release.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/release.md) | release process (version → tag → PyPI → GitHub) |
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest                     # 799 passed, 14 skipped (no GPU)
+.venv/bin/python -m pytest                     # 838 passed, 14 skipped (no GPU)
 .venv/bin/python -m pytest --cov=src --cov=api  # coverage gate 90% (pyproject)
 ```
 

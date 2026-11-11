@@ -3,16 +3,16 @@
 [![CI](https://github.com/slavabars/decision-cascade/actions/workflows/ci.yml/badge.svg)](https://github.com/slavabars/decision-cascade/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/decision-cascade)](https://pypi.org/project/decision-cascade/)
 [![Python](https://img.shields.io/pypi/pyversions/decision-cascade)](https://pypi.org/project/decision-cascade/)
-[![Coverage gate](https://img.shields.io/badge/coverage_gate-%E2%89%A590%25-brightgreen)](pyproject.toml)
-[![License](https://img.shields.io/pypi/l/decision-cascade)](LICENSE)
+[![Coverage gate](https://img.shields.io/badge/coverage_gate-%E2%89%A590%25-brightgreen)](https://github.com/slavabars/decision-cascade/blob/main/pyproject.toml)
+[![License](https://img.shields.io/pypi/l/decision-cascade)](https://github.com/slavabars/decision-cascade/blob/main/LICENSE)
 
-**Русский** · [English](README.en.md)
+**Русский** · [English](https://github.com/slavabars/decision-cascade/blob/main/README.en.md)
 
 Machine-native система принятия решений в духе **Jev (TypeSafe AI)**, но с открытым исходным кодом, локальным исполнением и полным циклом «обучение → калибровка → оценка → деплой».
 
 Вместо того чтобы заставлять LLM генерировать текст ответа, модель **решает**: state-состояние превращается в признаки, а головы решений возвращают **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет), Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: stable (1.3.0).** Контракт API (`schema_version = "1"`), формат паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major, с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие поверхности остаются beta и как объявляется депрекация — в [`docs/stability.md`](docs/stability.md).
+**Статус: stable (1.4.0).** Контракт API (`schema_version = "1"`), формат паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major, с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие поверхности остаются beta и как объявляется депрекация — в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
 
 ## Демо: две игры
 
@@ -20,9 +20,9 @@ Machine-native система принятия решений в духе **Jev 
 
 | Шахматы против Stockfish | Лабиринт в духе Pac-Man |
 | :---: | :---: |
-| [![Шахматы: голова решает, когда думать глубже](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](examples/games/chess/README.md) | [![Лабиринт: голова решает, когда жать на осторожность](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/maze/demo.gif)](examples/games/maze/README.md) |
+| [![Шахматы: голова решает, когда думать глубже](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.md) | [![Лабиринт: голова решает, когда жать на осторожность](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/maze/demo.gif)](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.md) |
 | 19% эскалаций закрывают половину разрыва до «всегда глубоко» — при 38% цены полного просчёта | 94% очков осторожной политики при 33% эскалаций; вдвое больше, чем жадная |
-| [код, данные и числа](examples/games/chess/README.md) | [код, данные и числа](examples/games/maze/README.md) |
+| [код, данные и числа](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.md) | [код, данные и числа](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.md) |
 
 Обе игры — наши: карта, среда и правила написаны в этом репозитории, чужих ассетов нет. Головы учатся на исходах, а не на подсказках: в шахматах — когда быстрому поиску движка нельзя верить, в лабиринте — когда жадный шаг к точке закончится потерей жизни.
 
@@ -81,11 +81,11 @@ curl -sS -X POST http://127.0.0.1:8000/decisions \
 Вероятности почти равномерные и `trained: false` — это честно: энкодер `hash`, головы не обучены, шаг нужен, чтобы увидеть форму ответа и то, что всё работает локально и детерминированно. Осмысленные числа — с обученным паком (веса из релиза, ~0.5 ГБ модели):
 
 ```bash
-gh release download v1.3.0 --pattern '*-weights.tar.gz' \
+gh release download v1.4.0 --pattern '*-weights.tar.gz' \
   --repo slavabars/decision-cascade
-tar -xzf v1.3.0-weights.tar.gz
+tar -xzf v1.4.0-weights.tar.gz
 
-DECISION_CHECKPOINT_DIR=v1.3.0-weights/public-gpt2 \
+DECISION_CHECKPOINT_DIR=v1.4.0-weights/public-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   python -m uvicorn api.server.main:app --port 8000
 ```
@@ -110,7 +110,7 @@ DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
 - **каскад**: +3.4 п.п. на `support` и +3.7 п.п. на AG News при 11–18% эскалаций; на RouterBench политика по выгоде сама отказывается платить за модель, которая слабее локальной;
 - **калибровка**: температура снижает ECE с 0.144 до 0.024 на AG News и с 0.547 до 0.024 на RouterBench — без изменения accuracy; на русском наборе с 0.176 до 0.022.
 
-Синтетический домен `support` (0.915 против 0.667 и 0.500), три политики эскалации, reliability-диаграммы и оговорки — в [`docs/benchmarks.md`](docs/benchmarks.md); методика и `--sweep` — в [`docs/competitor-benchmark.md`](docs/competitor-benchmark.md). Воспроизведение одной командой: `eval/competitors/reproduce_real.sh`; сырые JSON — в `*-benchmarks.tar.gz` каждого релиза.
+Синтетический домен `support` (0.915 против 0.667 и 0.500), три политики эскалации, reliability-диаграммы и оговорки — в [`docs/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/benchmarks.md); методика и `--sweep` — в [`docs/competitor-benchmark.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/competitor-benchmark.md). Воспроизведение одной командой: `eval/competitors/reproduce_real.sh`; сырые JSON — в `*-benchmarks.tar.gz` каждого релиза.
 
 <details>
 <summary><b>Оглавление</b></summary>
@@ -239,7 +239,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 uv pip install --python .venv/bin/python -e .
 ```
 
-Процесс релиза (версия → тег → PyPI → артефакты) — в [`docs/release.md`](docs/release.md).
+Процесс релиза (версия → тег → PyPI → артефакты) — в [`docs/release.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/release.md).
 
 ## Запуск сервера
 
@@ -283,10 +283,10 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_MAX_LENGTH` | обрезка входа, токенов (`none` — без обрезки) | `256` |
 | `DECISION_CHECKPOINT_DIR` | каталог паков голов | `checkpoints` |
 
-Готовый production-набор с комментариями — в [`.env.example`](.env.example) (`cp .env.example .env`, дальше `set -a; . ./.env; set +a`). Что реально применилось — с учётом дефолтов и разбора значений — видно в `GET /info`, блок `config`: энкодер, устройство, dtype, обрезка, батч, каталог паков.
+Готовый production-набор с комментариями — в [`.env.example`](https://github.com/slavabars/decision-cascade/blob/main/.env.example) (`cp .env.example .env`, дальше `set -a; . ./.env; set +a`). Что реально применилось — с учётом дефолтов и разбора значений — видно в `GET /info`, блок `config`: энкодер, устройство, dtype, обрезка, батч, каталог паков.
 
 > Обрезка входа и dtype — самые дешёвые рычаги латентности: `256 → 64` экономит
-> 2.3×, `bfloat16` на GPU — ещё 2.5×. Замеры — в [`docs/latency.md`](docs/latency.md).
+> 2.3×, `bfloat16` на GPU — ещё 2.5×. Замеры — в [`docs/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/latency.md).
 
 ### Все переменные
 
@@ -733,7 +733,7 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 .venv/bin/python -m eval.latency.sweep   --encoder openai-community/gpt2 --dim 768 --kind causal --device cpu
 ```
 
-Числа по батчингу и обрезке входа, а также замер int8/float16 — в [`docs/latency.md`](docs/latency.md).
+Числа по батчингу и обрезке входа, а также замер int8/float16 — в [`docs/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/latency.md).
 
 Фаза `encode` замеряется прямым прогоном энкодера (в обход кэша признаков), а `decide` — полным путём сервиса. На повторяющемся `state` `decide` попадает в кэш и потому быстрее `encode`; это наглядно показывает вклад кэша.
 
@@ -758,7 +758,7 @@ with httpx.Client(base_url="http://127.0.0.1:8000", timeout=60) as c:
 **Честная оговорка.** Синтетические метки линейно отделимы по ключевым словам, поэтому даже hash-энкодер с линейной головой после 200 шагов SFT даёт `overall_accuracy = 1.000` не только на train, но и на отложенных val/test (по 200 примеров каждый). Это метрика **на синтетике**, и она доказывает работоспособность конвейера, а не качество на реальных данных: без обучения та же схема даёт ≈ 0.276 (уровень случайного угадывания). На реальном энкодере та же задача решается уже неидеально: рецепт на gpt2 (малый прогон, `--generate 60 --train-steps 60`) даёт train ≈ 0.69, val ≈ 0.47, test ≈ 0.51 — то есть цифра `1.000` про hash-энкодер отражает лёгкость синтетики, а не универсальное качество. Для `noul` дополнительно считаются Brier и ECE. Датасеты и отчёты складываются в `data/` (в `.gitignore`).
 
 
-Русскоязычный набор — `eval.datasets.ru_sentiment` (тональность: choice + два noul). Числа, baseline и команды — в [`docs/ru-benchmark.md`](docs/ru-benchmark.md).
+Русскоязычный набор — `eval.datasets.ru_sentiment` (тональность: choice + два noul). Числа, baseline и команды — в [`docs/ru-benchmark.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/ru-benchmark.md).
 
 
 ### Публичная оценка (AG News): untrained vs trained
@@ -815,7 +815,7 @@ DECISION_MAX_LENGTH=256 .venv/bin/python -m eval.report.run --specs routerbench 
   --mock --mock-latency-ms 2 --sweep --out data/competitors_routerbench.json
 ```
 
-Сводка результатов и воспроизведение — в [`docs/benchmarks.md`](docs/benchmarks.md); методика, `--sweep` и оговорки — в `docs/competitor-benchmark.md`. Коротко: обученные локальные головы (124M) дают 0.915 / 0.873 / 0.542 на `support` / AG News / RouterBench против 0.667 / 0.855 / 0.442 у Clef-Flash (9.4B) и 0.500 / 0.662 / 0.312 у Laya, при p50 10–46 мс против 130–310 мс. Каскад добавляет +3.4 п.п. на `support` и +3.7 п.п. на AG News, а на RouterBench политика по выгоде отказывается платить за модель, которая слабее локальной.
+Сводка результатов и воспроизведение — в [`docs/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/benchmarks.md); методика, `--sweep` и оговорки — в `docs/competitor-benchmark.md`. Коротко: обученные локальные головы (124M) дают 0.915 / 0.873 / 0.542 на `support` / AG News / RouterBench против 0.667 / 0.855 / 0.442 у Clef-Flash (9.4B) и 0.500 / 0.662 / 0.312 у Laya, при p50 10–46 мс против 130–310 мс. Каскад добавляет +3.4 п.п. на `support` и +3.7 п.п. на AG News, а на RouterBench политика по выгоде отказывается платить за модель, которая слабее локальной.
 
 ## Обучение голов
 
@@ -854,7 +854,7 @@ SFTTrainer(heads, lr=0.1).fit(
 
 На выходе `checkpoints/support/heads.pt` и `metadata.json`. Готовый end-to-end рецепт (gpt2 + SFT + RLCD-гейт, train/val/test) — в `training/recipe/train_reference_model.sh`: он сохраняет чекпоинт под **подписью схемы вопросов**, поэтому сервер подхватывает его автоматически.
 
-Если ручной разметки нет, датасет можно собрать из ответов сильной модели по протоколу SystemOne — `python -m training.labeling.run` (слабая разметка). Проверять такую голову нужно на настоящей разметке: метки учителя — не ground truth. Подробности и подводные камни — [`docs/weak-labeling.md`](docs/weak-labeling.md).
+Если ручной разметки нет, датасет можно собрать из ответов сильной модели по протоколу SystemOne — `python -m training.labeling.run` (слабая разметка). Проверять такую голову нужно на настоящей разметке: метки учителя — не ground truth. Подробности и подводные камни — [`docs/weak-labeling.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/weak-labeling.md).
 
 ### Дрейф домена: дообучение на обратной связи
 
@@ -867,7 +867,7 @@ SFTTrainer(heads, lr=0.1).fit(
   --out checkpoints/packs/public-gpt2-v2 --replay 0.5 --steps 100
 ```
 
-Пак принимается только если на **отложенной** части новых примеров стало не хуже порога, а старый домен не просел больше 1 п.п.; иначе остаются прежние головы, а в отчёте видно, почему. Сколько примеров нужно и что бывает без replay — [`docs/drift.md`](docs/drift.md).
+Пак принимается только если на **отложенной** части новых примеров стало не хуже порога, а старый домен не просел больше 1 п.п.; иначе остаются прежние головы, а в отчёте видно, почему. Сколько примеров нужно и что бывает без replay — [`docs/drift.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/drift.md).
 
 Матрица «несколько моделей × несколько датасетов» обучается одной командой (`training/recipe/train_weight_packs.sh`); каждый пак — отдельный каталог `checkpoints/packs/<dataset>-<model>/`, пригодный как `DECISION_CHECKPOINT_DIR`:
 
@@ -882,8 +882,8 @@ bash training/recipe/train_weight_packs.sh
 Обученные веса весят мало и публикуются как **артефакт GitHub Release** (а не в git) — либо один пак, либо вся матрица одним архивом + манифестом:
 
 ```bash
-training/recipe/publish_release.sh v1.3.0 checkpoints/support       # один пак
-training/recipe/publish_weight_packs.sh v1.3.0 checkpoints/packs    # матрица + manifest.json
+training/recipe/publish_release.sh v1.4.0 checkpoints/support       # один пак
+training/recipe/publish_weight_packs.sh v1.4.0 checkpoints/packs    # матрица + manifest.json
 ```
 
 RLCD-калибровка `noul`-голов на реальных признаках энкодера принимает изменение только если оно улучшает калибровку на **отложенном** val (гейт «не навреди»):
@@ -896,7 +896,7 @@ RLCD-калибровка `noul`-голов на реальных признак
 
 ### Готовые паки весов (release)
 
-Релиз [`v1.3.0`](https://github.com/slavabars/decision-cascade/releases/tag/v1.3.0) содержит архив `v1.3.0-weights.tar.gz` (и `v1.3.0-manifest.json`) с семью обученными паками: `{support, public} × {gpt2, distilgpt2, gpt2-medium}` плюс `routerbench-gpt2`. Все числа — на честном train/val/test (для `public` — настоящий test-сплит AG News):
+Релиз [`v1.4.0`](https://github.com/slavabars/decision-cascade/releases/tag/v1.4.0) содержит архив `v1.4.0-weights.tar.gz` (и `v1.4.0-manifest.json`) с семью обученными паками: `{support, public} × {gpt2, distilgpt2, gpt2-medium}` плюс `routerbench-gpt2`. Все числа — на честном train/val/test (для `public` — настоящий test-сплит AG News):
 
 | Пак | Энкодер | dim | Датасет | test acc |
 |-----|---------|----:|---------|---------:|
@@ -922,8 +922,8 @@ RLCD-калибровка `noul`-голов на реальных признак
 Температура хранится в чекпоинте (`"temperature"` рядом с `state_dict`), поэтому сервер и замерный харнесс применяют её автоматически; старые чекпоинты без этого поля читаются как `T = 1.0`. Значение никогда не опускается ниже 1.0 — калибровка только смягчает вероятности. Перед сохранением работает гейт «не навреди»: `T` применяется, только если ECE на val улучшился и Brier не ухудшился, иначе остаётся `T = 1.0` (так `business` в public-паках остаётся неоткалиброванным). На `routerbench-gpt2` это снижает ECE с 0.547 до 0.024 (`route`), на `public-gpt2` — с 0.144 до 0.024 (`topic`); после неё каскад даёт +3.4 п.п. на `support` и +1.7 п.п. на `public` (подробности — в `docs/competitor-benchmark.md`).
 
 ```bash
-tar -xzf v1.3.0-weights.tar.gz               # -> v1.3.0-weights/<pack>/
-DECISION_CHECKPOINT_DIR=v1.3.0-weights/support-gpt2 \
+tar -xzf v1.4.0-weights.tar.gz               # -> v1.4.0-weights/<pack>/
+DECISION_CHECKPOINT_DIR=v1.4.0-weights/support-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   .venv/bin/python -m uvicorn api.server.main:app --port 8000
 ```
@@ -967,7 +967,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 799 passed, 14 skipped (без GPU)
+.venv/bin/python -m pytest                          # 838 passed, 14 skipped (без GPU)
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
@@ -994,7 +994,7 @@ systemctl status decision-api@api.service
 
 Обе сборки используют общий `deploy/lib/common.sh`: детект дистрибутива по `/etc/os-release`, установка пакетов, `ensure_venv`, рендер юнита `decision-api@.service` под фактический каталог и пользователя (uvicorn, порт 8080, автозапуск, graceful shutdown по `SIGTERM`). Установщик разворачивает закоммиченное состояние в `/opt/decision-model` (`DECISION_INSTALL_DIR`) и создаёт системного пользователя `decision` (`DECISION_SERVICE_USER`).
 
-Обновление, откат и состав бэкапа — [`docs/deploy.md`](docs/deploy.md). Типовые ошибки (`UNTRAINED_HEADS`, `MODALITY_NOT_SUPPORTED`, `/ready` 503) — [`docs/troubleshooting.md`](docs/troubleshooting.md).
+Обновление, откат и состав бэкапа — [`docs/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/deploy.md). Типовые ошибки (`UNTRAINED_HEADS`, `MODALITY_NOT_SUPPORTED`, `/ready` 503) — [`docs/troubleshooting.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/troubleshooting.md).
 
 ## Наблюдаемость
 
@@ -1011,7 +1011,7 @@ DECISION_LOG_FORMAT=json DECISION_LOG_LEVEL=INFO \
   .venv/bin/python -m uvicorn api.server.main:app --port 8000
 ```
 
-Тела запросов (`state`, изображения, фидбэк) в метрики и логи не попадают. Скрейп, алерты и формат JSON-лога — [`docs/observability.md`](docs/observability.md).
+Тела запросов (`state`, изображения, фидбэк) в метрики и логи не попадают. Скрейп, алерты и формат JSON-лога — [`docs/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/observability.md).
 
 ## Структура репозитория
 
@@ -1031,7 +1031,7 @@ docs/           — методика бенчмарков (competitor-benchmark.
                   risk-aware-cascade.md, option-scoring.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
                   SystemOne, каскады, vision, интеграции, эксплуатация, игры)
-tests/          — pytest-набор (841 тест + opt-in GPU/модель)
+tests/          — pytest-набор (852 теста + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh) и smoke wheel
 README.md       — этот файл
@@ -1046,12 +1046,12 @@ CHANGELOG.md, SECURITY.md
 
 ## Ограничения и планы
 
-- **Качество по умолчанию**: головы по умолчанию случайные; осмысленные решения требуют SFT+RLCD на вашей разметке. Есть рецепты и обученные паки весов (`v1.3.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family плюс `routerbench-gpt2`); в git веса не кладутся, поэтому после чистого клона «из коробки» — случайные головы, пока не скачаете пак или не обучите свои.
+- **Качество по умолчанию**: головы по умолчанию случайные; осмысленные решения требуют SFT+RLCD на вашей разметке. Есть рецепты и обученные паки весов (`v1.4.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family плюс `routerbench-gpt2`); в git веса не кладутся, поэтому после чистого клона «из коробки» — случайные головы, пока не скачаете пак или не обучите свои.
 - **Устройство**: `DECISION_DEVICE`/`DECISION_DTYPE` выбирают CPU/GPU и тип; gemma-4-12B требует ~24 ГБ и CUDA, на CPU используйте gpt2.
 - **Мультимодальность**: локальная CLIP поддерживает только изображения; видео требует отдельного декодирования кадров.
 - **Честная оценка**: синтетические сплиты тривиально разделимы (`1.000` — это про конвейер, а не про домен). Публичные числа — на AG News (accuracy 0.425 → 0.88) и в бенчмарке против конкурентов; для своего домена нужна своя разметка.
 - **Публикация весов**: релизом через `training/recipe/publish_release.sh` (один пак) или `training/recipe/publish_weight_packs.sh` (матрица).
-- **Выход из беты**: критерии `1.0` (контракт, покрытие, эксплуатация, политика депрекации) — в [`docs/stability.md`](docs/stability.md).
+- **Выход из беты**: критерии `1.0` (контракт, покрытие, эксплуатация, политика депрекации) — в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
 
 ## Лицензия
 
