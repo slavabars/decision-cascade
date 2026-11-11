@@ -8,26 +8,15 @@
 
 [Русский](README.md) · **English**
 
-A local, machine-native decision engine in the spirit of **Jev (TypeSafe AI)** —
-open source, running entirely on your hardware, with the full loop
-"train → calibrate → evaluate → deploy".
+A local, machine-native decision engine in the spirit of **Jev (TypeSafe AI)** — open source, running entirely on your hardware, with the full loop "train → calibrate → evaluate → deploy".
 
-Instead of asking an LLM to generate an answer, the model **decides**: a state
-becomes features, and decision heads return **typed, probabilistic, calibrated**
-answers — Noul (yes/no), Choice (pick an option), Score (value on a scale) —
-without generating a single token.
+Instead of asking an LLM to generate an answer, the model **decides**: a state becomes features, and decision heads return **typed, probabilistic, calibrated** answers — Noul (yes/no), Choice (pick an option), Score (value on a scale) — without generating a single token.
 
-**Status: stable (1.3.0).** The API contract (`schema_version = "1"`), the pack
-format and the meaning of `DECISION_*` variables do not break inside `1.x`:
-changes land only in a major, with a two-minor deprecation window. What exactly
-is promised, which surfaces are still beta and how deprecation is announced —
-see [`docs/stability.md`](docs/stability.md).
+**Status: stable (1.3.0).** The API contract (`schema_version = "1"`), the pack format and the meaning of `DECISION_*` variables do not break inside `1.x`: changes land only in a major, with a two-minor deprecation window. What exactly is promised, which surfaces are still beta and how deprecation is announced — see [`docs/stability.md`](docs/stability.md).
 
 ## Demo: two games
 
-The engine does not generate an answer as text — it **decides**: it proposes
-candidates and chooses when to pay for a deeper search. Games show the whole loop,
-and the result is measured in points rather than labels.
+The engine does not generate an answer as text — it **decides**: it proposes candidates and chooses when to pay for a deeper search. Games show the whole loop, and the result is measured in points rather than labels.
 
 | Chess vs Stockfish | Pac-Man-style maze |
 | :---: | :---: |
@@ -35,15 +24,11 @@ and the result is measured in points rather than labels.
 | 19% escalations close half the gap to "always deep" at 38% of its cost | 94% of the cautious policy's score at 33% escalations; twice the greedy score |
 | [code, data and numbers](examples/games/chess/README.md) | [code, data and numbers](examples/games/maze/README.md) |
 
-Both games are ours: map, environment and rules are written in this repository,
-no third-party assets. The heads learn from outcomes, not from hints: in chess,
-when the engine's fast search is unreliable; in the maze, when a greedy step will
-cost a life.
+Both games are ours: map, environment and rules are written in this repository, no third-party assets. The heads learn from outcomes, not from hints: in chess, when the engine's fast search is unreliable; in the maze, when a greedy step will cost a life.
 
 ## Quick start (2 minutes)
 
-You need Python 3.11+ and network access only to install the package: no model
-download, no GPU, no trained weights — the server starts on a `hash` encoder.
+You need Python 3.11+ and network access only to install the package: no model download, no GPU, no trained weights — the server starts on a `hash` encoder.
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -93,10 +78,7 @@ The response is typed decisions with probabilities (real output, unabridged):
 }
 ```
 
-The near-uniform probabilities and `trained: false` are honest: the encoder is
-`hash` and the heads are untrained. The point of this step is the shape of the
-response and the fact that everything runs locally and deterministically.
-Meaningful numbers require a trained pack (~0.5 GB encoder):
+The near-uniform probabilities and `trained: false` are honest: the encoder is `hash` and the heads are untrained. The point of this step is the shape of the response and the fact that everything runs locally and deterministically. Meaningful numbers require a trained pack (~0.5 GB encoder):
 
 ```bash
 gh release download v1.3.0 --pattern '*-weights.tar.gz' \
@@ -112,9 +94,7 @@ DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
 
 ## Benchmarks on public datasets
 
-Same question set, one run, n=200, one 16 GB GPU. Ours is 124M (gpt2 + heads
-trained for the domain); the competitors are real releases: `Clef-Flash` 9.4B
-(GGUF Q4_K_M in `llama-server`) and `Laya` 421M (ModernBERT-large).
+Same question set, one run, n=200, one 16 GB GPU. Ours is 124M (gpt2 + heads trained for the domain); the competitors are real releases: `Clef-Flash` 9.4B (GGUF Q4_K_M in `llama-server`) and `Laya` 421M (ModernBERT-large).
 
 | Public dataset | decision-cascade 124M | Clef-Flash 9.4B | Laya 421M |
 | --- | ---: | ---: | ---: |
@@ -123,47 +103,22 @@ trained for the domain); the competitors are real releases: `Clef-Flash` 9.4B
 | RouterBench — accuracy | **0.542** | 0.442 | 0.312 |
 | RouterBench — p50 | **21 ms** | 170 ms | 27 ms |
 
-On AG News the local heads match a model 75× larger while being 13× faster. On
-RouterBench the gap is smaller: the dataset is counterfactual, absolute numbers
-are low for everyone (the trivial "always yes" constant scores 0.775), so the
-comparison is between participants, not against 1.0.
+On AG News the local heads match a model 75× larger while being 13× faster. On RouterBench the gap is smaller: the dataset is counterfactual, absolute numbers are low for everyone (the trivial "always yes" constant scores 0.775), so the comparison is between participants, not against 1.0.
 
 Two things people usually ask next:
 
-- **cascade**: +3.4 pp on `support` and +3.7 pp on AG News at 11–18% escalation
-  rate; on RouterBench the benefit policy refuses to pay for a model that is
-  weaker than the local one;
-- **calibration**: temperature scaling drops ECE from 0.144 to 0.024 on AG
-  News and from 0.547 to 0.024 on RouterBench without changing accuracy; on the
-  Russian dataset from 0.176 to 0.022.
+- **cascade**: +3.4 pp on `support` and +3.7 pp on AG News at 11–18% escalation rate; on RouterBench the benefit policy refuses to pay for a model that is weaker than the local one;
+- **calibration**: temperature scaling drops ECE from 0.144 to 0.024 on AG News and from 0.547 to 0.024 on RouterBench without changing accuracy; on the Russian dataset from 0.176 to 0.022.
 
-The synthetic `support` domain (0.915 vs 0.667 and 0.500), three escalation
-policies, reliability diagrams and caveats are in
-[`docs/benchmarks.md`](docs/benchmarks.md) (Russian); methodology and `--sweep`
-in [`docs/competitor-benchmark.md`](docs/competitor-benchmark.md). Reproduce with
-one command: `eval/competitors/reproduce_real.sh`. Raw JSON ships in
-`*-benchmarks.tar.gz` of every release.
+The synthetic `support` domain (0.915 vs 0.667 and 0.500), three escalation policies, reliability diagrams and caveats are in [`docs/benchmarks.md`](docs/benchmarks.md) (Russian); methodology and `--sweep` in [`docs/competitor-benchmark.md`](docs/competitor-benchmark.md). Reproduce with one command: `eval/competitors/reproduce_real.sh`. Raw JSON ships in `*-benchmarks.tar.gz` of every release.
 
 ## Why this is different
 
-- **No generation.** The whole path is `encode → heads → decide`; latency is
-  bounded and there is no token loop to run away. gpt2 on GPU: 9–25 ms p50 per
-  request depending on input truncation, 0.2 ms per state in a batch on a small
-  encoder ([`docs/latency.md`](docs/latency.md)).
-- **Probabilities that mean something.** Temperature scaling is fitted on a
-  held-out slice and accepted only if ECE and Brier do not get worse
-  (`accept_calibration`). `confidence` is a probability, not a logit in
-  disguise.
-- **Typed answers.** Noul / Choice / Score with a JSON schema
-  (`schema_version = "1"`), validated on the server and in the SDK. Downstream
-  code switches on types instead of parsing prose.
-- **Cascade instead of a bigger model.** Local heads answer what they know;
-  only uncertain questions escalate to a remote model. With
-  `DECISION_CASCADE_RISK_BUDGET` escalation is driven by an error budget
-  (`P(mistake)` model) instead of a raw confidence threshold.
-- **Feedback loop.** `POST /v1/feedback` collects labelled decisions, retrains
-  the risk model per question and re-fits temperature; the "do not harm" gate
-  compares against a control run before accepting the new pack.
+- **No generation.** The whole path is `encode → heads → decide`; latency is bounded and there is no token loop to run away. gpt2 on GPU: 9–25 ms p50 per request depending on input truncation, 0.2 ms per state in a batch on a small encoder ([`docs/latency.md`](docs/latency.md)).
+- **Probabilities that mean something.** Temperature scaling is fitted on a held-out slice and accepted only if ECE and Brier do not get worse (`accept_calibration`). `confidence` is a probability, not a logit in disguise.
+- **Typed answers.** Noul / Choice / Score with a JSON schema (`schema_version = "1"`), validated on the server and in the SDK. Downstream code switches on types instead of parsing prose.
+- **Cascade instead of a bigger model.** Local heads answer what they know; only uncertain questions escalate to a remote model. With `DECISION_CASCADE_RISK_BUDGET` escalation is driven by an error budget (`P(mistake)` model) instead of a raw confidence threshold.
+- **Feedback loop.** `POST /v1/feedback` collects labelled decisions, retrains the risk model per question and re-fits temperature; the "do not harm" gate compares against a control run before accepting the new pack.
 
 ## Use it from Python
 
@@ -185,8 +140,7 @@ with DecisionClient("http://127.0.0.1:8000") as client:
     print(body["decisions"]["urgent"]["noul"])
 ```
 
-The response is validated against the schema before you see it
-(`validate_response`), so a contract break fails loudly instead of silently.
+The response is validated against the schema before you see it (`validate_response`), so a contract break fails loudly instead of silently.
 
 ## Train your own heads
 
@@ -202,10 +156,7 @@ The response is validated against the schema before you see it
   --checkpoint-dir checkpoints/packs/public-gpt2
 ```
 
-Russian sentiment (`--specs ru_sentiment`, rubert-tiny2, 0.708 vs 0.584
-majority baseline) — [`docs/ru-benchmark.md`](docs/ru-benchmark.md).
-Feedback retraining with an automatic re-calibration and a "do not harm" gate —
-[`docs/drift.md`](docs/drift.md).
+Russian sentiment (`--specs ru_sentiment`, rubert-tiny2, 0.708 vs 0.584 majority baseline) — [`docs/ru-benchmark.md`](docs/ru-benchmark.md). Feedback retraining with an automatic re-calibration and a "do not harm" gate — [`docs/drift.md`](docs/drift.md).
 
 ## Deploy
 
@@ -213,17 +164,11 @@ Feedback retraining with an automatic re-calibration and a "do not harm" gate �
 sudo bash deploy/ubuntu/install.sh   # or deploy/centos/install.sh
 ```
 
-Installs a venv, a systemd template unit (`decision-api@api`) and reads
-`DECISION_*` from `.env` (`EnvironmentFile=-<project>/.env`; without the file the
-service runs on defaults). Production variable set with comments:
-[`.env.example`](.env.example). `GET /info` shows what was actually applied
-(`config`: encoder, device, dtype, truncation, batch, packs). Upgrade, rollback,
-backup and restore — [`docs/deploy.md`](docs/deploy.md).
+Installs a venv, a systemd template unit (`decision-api@api`) and reads `DECISION_*` from `.env` (`EnvironmentFile=-<project>/.env`; without the file the service runs on defaults). Production variable set with comments: [`.env.example`](.env.example). `GET /info` shows what was actually applied (`config`: encoder, device, dtype, truncation, batch, packs). Upgrade, rollback, backup and restore — [`docs/deploy.md`](docs/deploy.md).
 
 ## Documentation
 
-Detailed docs are currently in Russian; the API, CLI and code comments are
-self-explanatory, and this page covers the essentials.
+Detailed docs are currently in Russian; the API, CLI and code comments are self-explanatory, and this page covers the essentials.
 
 | Doc | What is there |
 | --- | --- |
@@ -244,11 +189,8 @@ self-explanatory, and this page covers the essentials.
 .venv/bin/python -m pytest --cov=src --cov=api  # coverage gate 90% (pyproject)
 ```
 
-CI runs ruff, shellcheck, `uv lock --check`, the full test suite with the
-coverage gate, a wheel smoke test, and a nightly regression on the released packs
-(quality deltas and a latency budget).
+CI runs ruff, shellcheck, `uv lock --check`, the full test suite with the coverage gate, a wheel smoke test, and a nightly regression on the released packs (quality deltas and a latency budget).
 
 ## License
 
-Apache-2.0. `SystemOne` is an external protocol (Jev / TypeSafe AI); the names
-are kept as-is for compatibility.
+Apache-2.0. `SystemOne` is an external protocol (Jev / TypeSafe AI); the names are kept as-is for compatibility.

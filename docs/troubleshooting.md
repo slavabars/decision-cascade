@@ -1,7 +1,6 @@
 # Troubleshooting
 
-Типовые ошибки сервиса: что означает код, откуда он берётся и что делать.
-Для эксплуатации (systemd, upgrade/rollback) — [`deploy.md`](deploy.md).
+Типовые ошибки сервиса: что означает код, откуда он берётся и что делать. Для эксплуатации (systemd, upgrade/rollback) — [`deploy.md`](deploy.md).
 
 ## 1. Быстрая триада
 
@@ -12,10 +11,7 @@ curl -fsS http://127.0.0.1:8080/info      # бэкенд, модальности
 journalctl -u decision-api@api -n 100 --no-pager
 ```
 
-`/health` отвечает всегда, пока жив процесс. Если он молчит — смотрите
-`systemctl status decision-api@api.service` и порт (`ss -ltnp | grep 8080`).
-`/ready` — единственный правильный источник для балансировщика: `503` означает
-«не шли трафик».
+`/health` отвечает всегда, пока жив процесс. Если он молчит — смотрите `systemctl status decision-api@api.service` и порт (`ss -ltnp | grep 8080`). `/ready` — единственный правильный источник для балансировщика: `503` означает «не шли трафик».
 
 ## 2. Коды ошибок API
 
@@ -37,9 +33,7 @@ journalctl -u decision-api@api -n 100 --no-pager
            "checkpoint_dir": "checkpoints"}}
 ```
 
-Головы есть, но обученного пака под **подпись вопросов** нет. Подпись считается
-по именам, типам, инструкциям, вариантам и критериям — изменение любого из них
-даёт другую подпись.
+Головы есть, но обученного пака под **подпись вопросов** нет. Подпись считается по именам, типам, инструкциям, вариантам и критериям — изменение любого из них даёт другую подпись.
 
 Что проверить:
 
@@ -61,8 +55,7 @@ EOF
 
 - переобучить головы под текущие вопросы (`python -m training.recipe.train_heads ...`);
 - положить пак с совпадающей подписью;
-- для демо/отладки разрешить необученные головы: `DECISION_UNTRAINED=allow`
-  (в ответе будет `trained: false`, числа случайные).
+- для демо/отладки разрешить необученные головы: `DECISION_UNTRAINED=allow` (в ответе будет `trained: false`, числа случайные).
 
 Лог при старте подсказывает точнее:
 
@@ -77,8 +70,7 @@ WARNING no checkpoint <sig>.pt for questions signature <sig>; serving untrained 
 - `options`/`levels` с дублями — варианты обязаны быть уникальны;
 - `criteria` у `score` не совпадает по длине с `levels`;
 - `states` в `/decisions/batch` содержит пустую строку;
-- `confidence`/`probabilities` в `/v1/feedback` вне `[0, 1]` или не суммируются
-  в 1 (примеры с негодным решением не принимаются, чтобы не учить на них).
+- `confidence`/`probabilities` в `/v1/feedback` вне `[0, 1]` или не суммируются в 1 (примеры с негодным решением не принимаются, чтобы не учить на них).
 
 Тело ответа FastAPI содержит `detail[].loc` — путь до поля.
 
@@ -96,9 +88,7 @@ DECISION_VISION_MODEL_ID=openai/clip-vit-base-patch32 \
   .venv/bin/uvicorn api.server.main:app --port 8000
 ```
 
-`/info` → `modalities` показывает фактический набор. Видео требует
-`DECISION_VISION_MODEL_ID` и декодирования кадров; локальный CLIP видео не
-поддерживает.
+`/info` → `modalities` показывает фактический набор. Видео требует `DECISION_VISION_MODEL_ID` и декодирования кадров; локальный CLIP видео не поддерживает.
 
 ## 6. `BACKEND_UNAVAILABLE`
 
@@ -106,8 +96,7 @@ DECISION_VISION_MODEL_ID=openai/clip-vit-base-patch32 \
 {"error": {"code": "BACKEND_UNAVAILABLE", "backend": "systemone", "status_code": null}}
 ```
 
-Внешний сервис (`DECISION_BACKEND=http` или fallback каскада) не ответил в
-бюджет вызова. Тело запроса (`state`, `images`) в ответ и лог не попадает.
+Внешний сервис (`DECISION_BACKEND=http` или fallback каскада) не ответил в бюджет вызова. Тело запроса (`state`, `images`) в ответ и лог не попадает.
 
 ```bash
 # жив ли внешний сервис и тот ли URL
@@ -117,25 +106,18 @@ echo "$DECISION_BACKEND_TIMEOUT $DECISION_BACKEND_RETRIES"
 journalctl -u decision-api@api -n 50 --no-pager | grep -i unavailable
 ```
 
-- `status_code: 4xx` — внешний сервис отверг запрос; повторов не будет, чините
-  контракт/авторизацию.
-- `status_code: 5xx` или `null` — сеть/таймаут/перегрузка; увеличьте
-  `DECISION_BACKEND_TIMEOUT`, проверьте сеть.
-- Каскад при недоступном fallback продолжает отвечать локально, а `/ready`
-  показывает `degraded: true` — это не ошибка, но эскалации не работают.
+- `status_code: 4xx` — внешний сервис отверг запрос; повторов не будет, чините контракт/авторизацию.
+- `status_code: 5xx` или `null` — сеть/таймаут/перегрузка; увеличьте `DECISION_BACKEND_TIMEOUT`, проверьте сеть.
+- Каскад при недоступном fallback продолжает отвечать локально, а `/ready` показывает `degraded: true` — это не ошибка, но эскалации не работают.
 
 ## 7. `FEEDBACK_UNSUPPORTED`
 
-`/v1/feedback` — не универсальный приём разметки, а транспорт для каскада.
-Нужен один из режимов:
+`/v1/feedback` — не универсальный приём разметки, а транспорт для каскада. Нужен один из режимов:
 
-- `DECISION_BACKEND=cascade` + `DECISION_CASCADE_RISK_BUDGET` +
-  `DECISION_RISK_FEW_SHOT_N >= 2` — few-shot переобучение риск-модели;
-- `DECISION_BACKEND=cascade` + `DECISION_CASCADE_POLICY=benefit` — уточнение
-  точности внешней модели `q`.
+- `DECISION_BACKEND=cascade` + `DECISION_CASCADE_RISK_BUDGET` + `DECISION_RISK_FEW_SHOT_N >= 2` — few-shot переобучение риск-модели;
+- `DECISION_BACKEND=cascade` + `DECISION_CASCADE_POLICY=benefit` — уточнение точности внешней модели `q`.
 
-Проверьте `/info` → `accepts_feedback`. Обычный порог уверенности обратную связь
-не принимает.
+Проверьте `/info` → `accepts_feedback`. Обычный порог уверенности обратную связь не принимает.
 
 ## 8. Каскад не стартует: нет `q`, риск-модели или URL
 
@@ -160,8 +142,7 @@ journalctl -u decision-api@api -n 50 --no-pager | grep -i unavailable
 | `no trained checkpoints for untrained_policy=refuse` | политика требует пак, паков нет | положить пак или `DECISION_UNTRAINED=allow` |
 | `checkpoints are not readable by this service` | паки есть, но ни один не подошёл | см. §10 (dim/choice_head/подпись) |
 
-`heads_loaded` и `checkpoints` в ответе показывают, сколько паков видит сервис и
-сколько реально загружено.
+`heads_loaded` и `checkpoints` в ответе показывают, сколько паков видит сервис и сколько реально загружено.
 
 ## 10. Пак не подхватился: `dim` или `choice_head`
 
@@ -172,20 +153,13 @@ WARNING skip checkpoint heads.pt: choice_head=option_scoring, service choice_hea
 WARNING checkpoint dim=768 does not match features dim=64; ignoring ...
 ```
 
-- `DECISION_FEATURE_DIM` должен совпадать с `feature_dim` из `metadata.json`
-  пака (gpt2 — 768, hash-энкодер — 64).
-- Режим голов задаётся `DECISION_CHOICE_HEAD` (`linear` или `option_scoring`) и
-  должен совпадать с тем, как пак обучен. Переобучить под другой режим:
-  `python -m training.recipe.train_heads --choice-head ...`.
-- Подпись вопросов (`questions_signature`) должна совпадать: сверьте `questions`
-  в `metadata.json` с запросом.
+- `DECISION_FEATURE_DIM` должен совпадать с `feature_dim` из `metadata.json` пака (gpt2 — 768, hash-энкодер — 64).
+- Режим голов задаётся `DECISION_CHOICE_HEAD` (`linear` или `option_scoring`) и должен совпадать с тем, как пак обучен. Переобучить под другой режим: `python -m training.recipe.train_heads --choice-head ...`.
+- Подпись вопросов (`questions_signature`) должна совпадать: сверьте `questions` в `metadata.json` с запросом.
 
 ## 11. Первый запрос медленный
 
-По умолчанию паки прогреваются на старте (`DECISION_WARMUP=1`). Если прогрев
-выключен (`DECISION_WARMUP=0`), первый запрос платит за чтение чекпоинтов и
-загрузку энкодера — это ожидаемо, но `/ready` в этом режиме не гарантирует, что
-головы уже в памяти.
+По умолчанию паки прогреваются на старте (`DECISION_WARMUP=1`). Если прогрев выключен (`DECISION_WARMUP=0`), первый запрос платит за чтение чекпоинтов и загрузку энкодера — это ожидаемо, но `/ready` в этом режиме не гарантирует, что головы уже в памяти.
 
 ## 12. Порт занят
 
@@ -198,13 +172,11 @@ ss -ltnp | grep 8080
 systemctl status decision-api@api.service
 ```
 
-Один инстанс на порт; для нескольких — `decision-api@<instance>.service` с
-разными портами в юните.
+Один инстанс на порт; для нескольких — `decision-api@<instance>.service` с разными портами в юните.
 
 ## 13. Несколько доменов: пак не тот
 
-`DECISION_CHECKPOINT_DIR` может указывать на каталог с паками
-(`checkpoints/packs/`), где каждый домен лежит отдельно:
+`DECISION_CHECKPOINT_DIR` может указывать на каталог с паками (`checkpoints/packs/`), где каждый домен лежит отдельно:
 
 ```
 checkpoints/packs/
@@ -212,8 +184,7 @@ checkpoints/packs/
   routerbench-gpt2/ heads.pt + metadata.json
 ```
 
-Пак выбирается по `questions_signature` из `metadata.json`, а не по имени
-каталога. Проверить, какой пак реально обслуживает запрос:
+Пак выбирается по `questions_signature` из `metadata.json`, а не по имени каталога. Проверить, какой пак реально обслуживает запрос:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/info | \
@@ -221,8 +192,7 @@ curl -fsS http://127.0.0.1:8080/info | \
 ```
 
 - `trained: false` или `source: null` — под подпись вопросов пака нет;
-- два пака с одной подписью: побеждает первый по сортировке, в лог пишется
-  `skip checkpoint ... already served by ...` — уберите дубль;
+- два пака с одной подписью: побеждает первый по сортировке, в лог пишется `skip checkpoint ... already served by ...` — уберите дубль;
 - каталог без `metadata.json` паком не считается (не гадаем по `heads.pt`).
 
 Метрики и request id — [`observability.md`](observability.md).

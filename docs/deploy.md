@@ -1,9 +1,6 @@
 # Деплой, обновление и откат
 
-Сервис ставится в `/opt/decision-model` (переопределяется `DECISION_INSTALL_DIR`),
-юнит `decision-api@.service` рендерится под этот каталог и пользователя сервиса.
-Ubuntu и CentOS/RHEL-семейство идут одним путём: различия только в установке
-пакетов (`apt` против `dnf`), всё остальное — общий `deploy/lib/common.sh`.
+Сервис ставится в `/opt/decision-model` (переопределяется `DECISION_INSTALL_DIR`), юнит `decision-api@.service` рендерится под этот каталог и пользователя сервиса. Ubuntu и CentOS/RHEL-семейство идут одним путём: различия только в установке пакетов (`apt` против `dnf`), всё остальное — общий `deploy/lib/common.sh`.
 
 ## 1. Установка
 
@@ -18,33 +15,24 @@ sudo bash deploy/centos/install.sh
 Что делает установщик:
 
 1. ставит Python 3.11+ (Ubuntu — `python3`/`venv`, CentOS — `python3.11`), pip, curl и git;
-2. разворачивает **закоммиченное** состояние в `/opt/decision-model`
-   (`git clone` из чекаута, из которого запущен скрипт; грязное дерево —
-   ошибка, чтобы на сервер не уехало непроверенное);
+2. разворачивает **закоммиченное** состояние в `/opt/decision-model` (`git clone` из чекаута, из которого запущен скрипт; грязное дерево — ошибка, чтобы на сервер не уехало непроверенное);
 3. собирает `.venv` из `requirements.txt` уже в каталоге установки;
-4. создаёт системного пользователя `decision` без логина и отдаёт ему чтение
-   дерева (владелец — `root`, чтобы `upgrade.sh` мог делать `git pull`);
-5. рендерит юнит `decision-api@.service` под фактический каталог и
-   пользователя и запускает инстанс `api` на `127.0.0.1:8080`.
+4. создаёт системного пользователя `decision` без логина и отдаёт ему чтение дерева (владелец — `root`, чтобы `upgrade.sh` мог делать `git pull`);
+5. рендерит юнит `decision-api@.service` под фактический каталог и пользователя и запускает инстанс `api` на `127.0.0.1:8080`.
 
 | Переменная | По умолчанию | Назначение |
 | --- | --- | --- |
 | `DECISION_INSTALL_DIR` | `/opt/decision-model` | каталог установки |
 | `DECISION_SERVICE_USER` | `decision` | пользователь сервиса (создаётся, если нет) |
 
-Если ставить прямо из рабочего дерева (`DECISION_INSTALL_DIR` равен каталогу
-чекаута), сервис запускается под пользователем, вызвавшим `sudo`, а права на
-исходники не меняются — удобно для одноразовой VM, но не для продакшена.
+Если ставить прямо из рабочего дерева (`DECISION_INSTALL_DIR` равен каталогу чекаута), сервис запускается под пользователем, вызвавшим `sudo`, а права на исходники не меняются — удобно для одноразовой VM, но не для продакшена.
 
 ```bash
 # проверить установку, не трогая /opt
 sudo DECISION_INSTALL_DIR=/srv/decision-model bash deploy/ubuntu/install.sh
 ```
 
-Состояние (`.env`, паки, риск-модель) установщик не создаёт: на новом сервере
-его привозят из бэкапа (`deploy/restore.sh`) или из релизных паков. Без `.env`
-сервис стартует на дефолтах — файл необязателен, поэтому «забыли скопировать»
-не превращается в неработающий сервис.
+Состояние (`.env`, паки, риск-модель) установщик не создаёт: на новом сервере его привозят из бэкапа (`deploy/restore.sh`) или из релизных паков. Без `.env` сервис стартует на дефолтах — файл необязателен, поэтому «забыли скопировать» не превращается в неработающий сервис.
 
 Проверка после установки:
 
@@ -55,9 +43,7 @@ curl -fsS http://127.0.0.1:8080/metrics  # Prometheus (см. observability.md)
 journalctl -u decision-api@api -n 50 --no-pager
 ```
 
-`/ready` отвечает `503`, пока сервис не готов; в теле — `reasons`. Для
-диагностики причин см. [`troubleshooting.md`](troubleshooting.md), метрики и
-логи — [`observability.md`](observability.md).
+`/ready` отвечает `503`, пока сервис не готов; в теле — `reasons`. Для диагностики причин см. [`troubleshooting.md`](troubleshooting.md), метрики и логи — [`observability.md`](observability.md).
 
 ## 2. Что считается состоянием сервиса
 
@@ -69,12 +55,9 @@ journalctl -u decision-api@api -n 50 --no-pager
 | `checkpoints/packs/` | обученные паки голов (`heads.pt`, `metadata.json`, `temperature.json`) |
 | `checkpoints/risk.json` | обученная риск-модель (если включён risk-aware каскад) |
 
-Не входят: `.venv` (пересобирается), веса энкодеров (качаются из HF или
-релиза), `checkpoints/finetune/` (воспроизводится рецептом и весит гигабайты).
+Не входят: `.venv` (пересобирается), веса энкодеров (качаются из HF или релиза), `checkpoints/finetune/` (воспроизводится рецептом и весит гигабайты).
 
-Архивы складываются в `/var/backups/decision-cascade` (переопределяется
-`DECISION_BACKUP_ROOT`). Имя — `decision-cascade-<UTC timestamp>.tar.gz`,
-внутри — `.installed-version` с версией на момент бэкапа.
+Архивы складываются в `/var/backups/decision-cascade` (переопределяется `DECISION_BACKUP_ROOT`). Имя — `decision-cascade-<UTC timestamp>.tar.gz`, внутри — `.installed-version` с версией на момент бэкапа.
 
 ```bash
 sudo bash deploy/backup.sh /opt/decision-model
@@ -97,10 +80,7 @@ sudo bash deploy/upgrade.sh /opt/decision-model
 5. перезапускает `decision-api@api.service`;
 6. ждёт `200` от `/ready` (по умолчанию 60 с).
 
-Если `/ready` не поднялся — скрипт **сам откатывает** данные из бэкапа, код на
-предыдущий коммит (`git checkout --detach <old>`), пересобирает venv,
-перезапускает сервис и завершается с кодом `1`. После автоматического отката
-репозиторий остаётся в detached HEAD на старом коммите — вернуться на ветку:
+Если `/ready` не поднялся — скрипт **сам откатывает** данные из бэкапа, код на предыдущий коммит (`git checkout --detach <old>`), пересобирает venv, перезапускает сервис и завершается с кодом `1`. После автоматического отката репозиторий остаётся в detached HEAD на старом коммите — вернуться на ветку:
 
 ```bash
 sudo git -C /opt/decision-model checkout main
@@ -133,8 +113,7 @@ sudo bash -c 'source deploy/lib/common.sh; ensure_venv /opt/decision-model; rest
 curl -fsS http://127.0.0.1:8080/ready
 ```
 
-`restore.sh` сам перезапускает сервис и ждёт `/ready`; если сервис не поднялся —
-печатает команду для `systemctl status` и выходит с ошибкой.
+`restore.sh` сам перезапускает сервис и ждёт `/ready`; если сервис не поднялся — печатает команду для `systemctl status` и выходит с ошибкой.
 
 ## 5. Паритет Ubuntu/CentOS
 
@@ -150,45 +129,26 @@ curl -fsS http://127.0.0.1:8080/ready
 
 Что проверяется автоматически (`tests/test_deploy.py`):
 
-- `distro_from_release` распознаёт `ubuntu`/`debian` и
-  `centos`/`rocky`/`almalinux`/`rhel`, а неизвестный дистрибутив — отклоняет;
+- `distro_from_release` распознаёт `ubuntu`/`debian` и `centos`/`rocky`/`almalinux`/`rhel`, а неизвестный дистрибутив — отклоняет;
 - бэкап и восстановление `.env`, паков и риск-модели на временном каталоге;
 - `shellcheck -x` для всех `deploy/**/*.sh`;
-- `render_unit` подставляет в юнит фактический каталог и пользователя и
-  отклоняет нераскрытые placeholder'ы;
-- `ensure_project_dir` разворачивает только закоммиченное состояние, не
-  копирует `.venv`/`checkpoints` и не перезаписывает непустой каталог;
-- systemd-юнит: `KillSignal=SIGTERM`, `TimeoutStopSec=30`,
-  `--timeout-graceful-shutdown 30`.
+- `render_unit` подставляет в юнит фактический каталог и пользователя и отклоняет нераскрытые placeholder'ы;
+- `ensure_project_dir` разворачивает только закоммиченное состояние, не копирует `.venv`/`checkpoints` и не перезаписывает непустой каталог;
+- systemd-юнит: `KillSignal=SIGTERM`, `TimeoutStopSec=30`, `--timeout-graceful-shutdown 30`.
 
-Реальный прогон на VM не автоматизирован: скрипты требуют root и systemd.
-Перед выкаткой на новый дистрибутив прогоните `install.sh` → `upgrade.sh` →
-`restore.sh` на одноразовой VM и сверьте `/ready`.
+Реальный прогон на VM не автоматизирован: скрипты требуют root и systemd. Перед выкаткой на новый дистрибутив прогоните `install.sh` → `upgrade.sh` → `restore.sh` на одноразовой VM и сверьте `/ready`.
 
-Интерпретатор выбирается один раз и одинаково для install и upgrade:
-`DECISION_PYTHON`, иначе первый доступный `python3.13`/`python3.12`/`python3.11`/
-`python3` с версией ≥ 3.11. Если подходящего нет, скрипт падает с подсказкой
-(`dnf install python3.11`), а не собирает venv на 3.9. На Ubuntu 22.04
-`python3` — это 3.10, поэтому нужен `python3.11` (deadsnakes) или 24.04.
+Интерпретатор выбирается один раз и одинаково для install и upgrade: `DECISION_PYTHON`, иначе первый доступный `python3.13`/`python3.12`/`python3.11`/ `python3` с версией ≥ 3.11. Если подходящего нет, скрипт падает с подсказкой (`dnf install python3.11`), а не собирает venv на 3.9. На Ubuntu 22.04 `python3` — это 3.10, поэтому нужен `python3.11` (deadsnakes) или 24.04.
 
-Проверено вживую на обоих дистрибутивах: `install.sh` → `/health`, `/ready`,
-`/metrics`, `X-Request-ID`, `POST /decisions` → `upgrade.sh` → `backup.sh` →
-порча `.env` → `restore.sh` → teardown — **PASS**. Юнит рендерится под
-`/opt/decision-model`, сервис работает под пользователем `decision`, после
-teardown не остаётся ни юнита, ни каталога, ни пользователя.
+Проверено вживую на обоих дистрибутивах: `install.sh` → `/health`, `/ready`, `/metrics`, `X-Request-ID`, `POST /decisions` → `upgrade.sh` → `backup.sh` → порча `.env` → `restore.sh` → teardown — **PASS**. Юнит рендерится под `/opt/decision-model`, сервис работает под пользователем `decision`, после teardown не остаётся ни юнита, ни каталога, ни пользователя.
 
 | Дата | Дистрибутив | Версия | Что проверялось |
 | --- | --- | --- | --- |
 | 2026-10-29 | Ubuntu 24.04.5, systemd 255 | `0.15.0` | полный цикл |
 | 2026-11-10 | CentOS Stream 9 (cloud VM) | `1.0.0` (`11fe196`) | полный цикл, `python3.11` из AppStream |
 
-CentOS-прогон закрыл реальную поломку: `python3` там — 3.9, и установка
-собирала venv на нём. Теперь `python_bin` требует ≥ 3.11 и подсказывает
-`dnf install python3.11`; на Stream 9 ставится `python3.11` (3.11.13).
+CentOS-прогон закрыл реальную поломку: `python3` там — 3.9, и установка собирала venv на нём. Теперь `python_bin` требует ≥ 3.11 и подсказывает `dnf install python3.11`; на Stream 9 ставится `python3.11` (3.11.13).
 
 ## 6. Аккуратное завершение
 
-`systemctl restart`/`stop` посылает `SIGTERM`. uvicorn перестаёт принимать новые
-соединения, но доводит уже принятые запросы; `TimeoutStopSec=30` — верхняя
-граница. Контракт закреплён тестом `tests/test_graceful_shutdown.py`: запрос,
-начатый до `SIGTERM`, получает `200`, а не обрыв.
+`systemctl restart`/`stop` посылает `SIGTERM`. uvicorn перестаёт принимать новые соединения, но доводит уже принятые запросы; `TimeoutStopSec=30` — верхняя граница. Контракт закреплён тестом `tests/test_graceful_shutdown.py`: запрос, начатый до `SIGTERM`, получает `200`, а не обрыв.
