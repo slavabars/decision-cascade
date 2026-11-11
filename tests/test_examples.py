@@ -51,6 +51,10 @@ HELP_CASES = [
     ("examples/cascade/client_fallback.py", ["--help"]),
     ("examples/ops/weight_pack.py", ["--help"]),
     ("examples/integrations/chat_agent.py", ["--help"]),
+    # шахматы: нужен бинарник Stockfish, поэтому проверяется только разбор аргументов
+    ("examples/games/chess/play.py", ["--help"]),
+    ("examples/games/chess/dataset.py", ["--help"]),
+    ("examples/games/chess/evaluate.py", ["--help"]),
 ]
 
 

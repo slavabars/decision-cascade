@@ -456,6 +456,32 @@ bash examples/ops/health_check.sh
 
 ---
 
+## Игры
+
+### `games/chess/` — сервер: нет (нужен бинарник Stockfish)
+
+Партия в шахматы, где движок предлагает три лучших хода, а **обученная голова
+решает, когда быстрому просчёту нельзя верить** и нужен глубокий. Ход — это
+типизированное решение (`Choice` из кандидатов), а не текст.
+
+```bash
+bash examples/games/chess/fetch_engine.sh            # Stockfish в .tools/, без sudo
+.venv/bin/pip install "decision-cascade[games]"      # python-chess для доски
+
+.venv/bin/python -m examples.games.chess.dataset --engine .tools/stockfish --out-dir data/chess
+.venv/bin/python -m training.recipe.train_heads --specs chess --dataset data/chess \
+  --encoder hash --dim 256 --out-dir checkpoints/packs/chess
+.venv/bin/python -m examples.games.chess.evaluate --pack checkpoints/packs/chess --data data/chess
+.venv/bin/python -m examples.games.chess.play --engine .tools/stockfish \
+  --pack checkpoints/packs/chess --skill 0
+```
+
+Честная рамка: это не «мы научили модель играть в шахматы». Движок играет
+сильнее нас; наш вклад — слой решений над его кандидатами: сколько думать и
+когда рискнуть. Подробности, числа и ограничения — в `games/chess/README.md`.
+
+---
+
 ## Smoke-проверка
 
 Быстрая проверка, что примеры действительно запускаются (offline-примеры

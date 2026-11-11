@@ -1056,6 +1056,13 @@ AG News / RouterBench против 0.667 / 0.855 / 0.442 у Clef-Flash (9.4B) и
 добавляет +3.4 п.п. на `support` и +3.7 п.п. на AG News, а на RouterBench
 политика по выгоде отказывается платить за модель, которая слабее локальной.
 
+### Игровой пример: шахматы
+
+Партия против Stockfish, где головы решают, когда быстрому просчёту движка
+нельзя верить: 19% эскалаций закрывают половину разрыва до «всегда глубоко» при
+38% цены полного просчёта. Код, данные, GIF и числа —
+в [`examples/games/chess/`](examples/games/chess/README.md).
+
 ## Обучение голов
 
 ### SFT — учим на размеченных данных
@@ -1349,8 +1356,8 @@ deploy/         — Ubuntu/CentOS + systemd
 docs/           — методика бенчмарков (competitor-benchmark.md, routerbench.md,
                   risk-aware-cascade.md, option-scoring.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
-                  SystemOne, каскады, vision, интеграции, эксплуатация)
-tests/          — pytest-набор (604 теста + opt-in GPU/модель)
+                  SystemOne, каскады, vision, интеграции, эксплуатация, игры)
+tests/          — pytest-набор (820 тестов + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh) и smoke wheel
 README.md       — этот файл

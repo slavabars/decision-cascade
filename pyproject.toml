@@ -27,6 +27,11 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
+[project.optional-dependencies]
+# Игра-демо (examples/games/chess): доска, легальность ходов, FEN.
+# В основную установку не входит — сервису шахматы не нужны.
+games = ["chess>=1.10"]
+
 [project.urls]
 Homepage = "https://github.com/slavabars/decision-cascade"
 Repository = "https://github.com/slavabars/decision-cascade"

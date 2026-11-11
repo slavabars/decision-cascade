@@ -24,7 +24,10 @@ jobs:
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          # опциональный extra для игрового примера: в основную установку не входит
+          pip install "chess>=1.10"
 
       - name: Lint (ruff)
         run: ruff check src api eval training tests examples scripts

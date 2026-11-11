@@ -43,7 +43,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Temperature scaling of heads")
     parser.add_argument(
         "--specs",
-        choices=["support", "public", "routerbench", "ru_sentiment"],
+        choices=["support", "public", "routerbench", "ru_sentiment", "chess"],
         default="support",
     )
     parser.add_argument(
@@ -61,6 +61,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="куда сохранить головы с температурой (по умолчанию — в --checkpoint-dir)",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help="для --specs chess: каталог со сплитами train/val/test",
     )
     parser.add_argument("--seed", type=int, default=0)
     return parser
@@ -86,6 +92,14 @@ def _load_splits(args):
             seed=args.seed,
         )
         return RU_SPECS, carved["train"], carved["val"], base["test"]
+
+    if args.specs == "chess":
+        from eval.datasets.chess import CHESS_SPECS, load_splits
+
+        if args.dataset is None:
+            raise SystemExit("--specs chess requires --dataset")
+        splits = load_splits(args.dataset, seed=args.seed)
+        return CHESS_SPECS, splits["train"], splits["val"], splits["test"]
 
     if args.specs == "public":
         from eval.datasets.public_dataset import PUBLIC_SPECS, load_ag_news

@@ -78,9 +78,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--specs",
-        choices=["support", "public", "routerbench", "ru_sentiment"],
+        choices=["support", "public", "routerbench", "ru_sentiment", "chess"],
         default="support",
-        help="набор вопросов: тикеты, AG News, RouterBench или русская тональность",
+        help=(
+            "набор вопросов: тикеты, AG News, RouterBench, русская тональность "
+            "или шахматное демо"
+        ),
     )
     parser.add_argument(
         "--limit", type=int, default=0, help="для public: ограничение train-сплита"
@@ -163,6 +166,21 @@ def _load_data(
         write_jsonl(dataset_path, examples)
         specs = {name: spec_from_api(data) for name, data in RU_QUESTIONS.items()}
         return specs, splits, dataset_path, "ru_sentiment"
+
+    if args.specs == "chess":
+        from eval.datasets.chess import CHESS_SPECS, load_splits
+
+        if args.dataset is None:
+            raise SystemExit(
+                "--specs chess requires --dataset (каталог из "
+                "examples.games.chess.dataset)"
+            )
+        splits = load_splits(Path(args.dataset), seed=args.seed)
+        combined = out_dir / "dataset.jsonl"
+        write_jsonl(
+            combined, splits["train"] + splits["val"] + splits["test"]
+        )
+        return CHESS_SPECS, splits, combined, "chess"
 
     if args.specs == "routerbench":
         from eval.datasets.routerbench import ROUTERBENCH_QUESTIONS, load_routerbench
