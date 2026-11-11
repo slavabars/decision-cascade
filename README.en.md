@@ -23,6 +23,23 @@ changes land only in a major, with a two-minor deprecation window. What exactly
 is promised, which surfaces are still beta and how deprecation is announced —
 see [`docs/stability.md`](docs/stability.md).
 
+## Demo: two games
+
+The engine does not generate an answer as text — it **decides**: it proposes
+candidates and chooses when to pay for a deeper search. Games show the whole loop,
+and the result is measured in points rather than labels.
+
+| Chess vs Stockfish | Pac-Man-style maze |
+| :---: | :---: |
+| [![Chess: the head decides when to think deeper](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](examples/games/chess/README.md) | [![Maze: the head decides when to play it safe](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/maze/demo.gif)](examples/games/maze/README.md) |
+| 19% escalations close half the gap to "always deep" at 38% of its cost | 94% of the cautious policy's score at 33% escalations; twice the greedy score |
+| [code, data and numbers](examples/games/chess/README.md) | [code, data and numbers](examples/games/maze/README.md) |
+
+Both games are ours: map, environment and rules are written in this repository,
+no third-party assets. The heads learn from outcomes, not from hints: in chess,
+when the engine's fast search is unreliable; in the maze, when a greedy step will
+cost a life.
+
 ## Quick start (2 minutes)
 
 You need Python 3.11+ and network access only to install the package: no model
