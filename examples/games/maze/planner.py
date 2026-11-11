@@ -115,3 +115,34 @@ def cautious_move(maze: Maze, *, danger_cost: int = 4) -> tuple[Pos, int]:
                 counter += 1
                 heapq.heappush(heap, (candidate, counter, 0, nxt))
     return _fallback(maze), nodes
+
+
+#: Штраф за смерть при просчёте вперёд: смерть дороже любой пачки точек.
+DEATH_PENALTY = 500
+
+
+def lookahead_move(maze: Maze, *, horizon: int = 5) -> tuple[Pos, int]:
+    """Просчёт вперёд: каждый первый шаг доигрывается `horizon` шагов.
+
+    Это дорогая политика (в разы больше работы, чем BFS), зато она видит, что
+    призрак за углом, а жадная — нет. Именно её включает каскад.
+    """
+    best_gain = None
+    best_move = None
+    work = 0
+    for direction in maze.legal_moves(maze.hero):
+        game = maze.copy()
+        deaths = game.deaths
+        move = direction
+        for _ in range(horizon):
+            if game.done:
+                break
+            game.step(move)
+            work += 1
+            move, _ = greedy_move(game)
+        gain = (game.score - maze.score) - DEATH_PENALTY * (game.deaths - deaths)
+        if best_gain is None or gain > best_gain:
+            best_gain = gain
+            best_move = direction
+    return (best_move or _fallback(maze)), work
+

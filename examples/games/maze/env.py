@@ -112,10 +112,13 @@ class Maze:
         *,
         max_steps: int = 400,
         lives: int = 3,
-        ghost_speed: int = 2,
+        ghost_speed: int = 1,
+        ghost_scatter: float = 0.3,
     ):
         self.rows = MAZE
         self.ghost_speed = ghost_speed
+        #: Доля случайных ходов у призрака: без неё погоня не оставляет шансов.
+        self.ghost_scatter = ghost_scatter
         (
             self.walls,
             self.pellets,
@@ -247,20 +250,23 @@ class Maze:
         options = self.legal_moves(ghost.pos)
         if not options:
             return
-        # разворот назад разрешён, чтобы призрак не застревал в тупике
-        if len(options) > 1 and ghost.direction in options:
-            options = [move for move in options if move != ghost.direction] or options
-        if ghost.scared > 0:
+        # Призрак не разворачивается на 180°, но и не обязан сворачивать:
+        # иначе в прямом коридоре он дёргается на месте вместо погони.
+        reverse = (-ghost.direction[0], -ghost.direction[1])
+        if len(options) > 1:
+            options = [move for move in options if move != reverse] or options
+        if ghost.scared > 0 or self.rng.random() < self.ghost_scatter:
             choice = self.rng.choice(options)
         else:
             target = self.hero
-            choice = min(
-                options,
-                key=lambda move: (
-                    abs(ghost.pos[0] + move[0] - target[0])
-                    + abs(ghost.pos[1] + move[1] - target[1]),
-                    self.rng.random(),
-                ),
+            distances = [
+                abs(ghost.pos[0] + move[0] - target[0])
+                + abs(ghost.pos[1] + move[1] - target[1])
+                for move in options
+            ]
+            best = min(distances)
+            choice = self.rng.choice(
+                [move for move, distance in zip(options, distances) if distance == best]
             )
         ghost.direction = choice
         ghost.pos = (ghost.pos[0] + choice[0], ghost.pos[1] + choice[1])
@@ -277,6 +283,7 @@ class Maze:
         clone.rng.setstate(self.rng.getstate())
         clone.max_steps = self.max_steps
         clone.ghost_speed = self.ghost_speed
+        clone.ghost_scatter = self.ghost_scatter
         clone.hero = self.hero
         clone.ghosts = [ghost.copy() for ghost in self.ghosts]
         clone.score = self.score

@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=300)
     # порог выбран по кривой из evaluate.py (см. README примера)
-    parser.add_argument("--threshold", type=float, default=0.6)
+    parser.add_argument("--threshold", type=float, default=0.3)
     parser.add_argument("--demo", action="store_true", help="цвет, паузы, очистка экрана")
     parser.add_argument("--delay", type=float, default=0.08)
     args = parser.parse_args(argv)
