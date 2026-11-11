@@ -116,3 +116,100 @@ def test_latency_and_russian_docs_linked():
     russian = (ROOT / "docs" / "ru-benchmark.md").read_text(encoding="utf-8")
     assert "ru_sentiment" in russian
     assert "cointegrated/rubert-tiny2" in russian
+
+
+BADGES = (
+    "actions/workflows/ci.yml/badge.svg",
+    "img.shields.io/pypi/v/decision-cascade",
+    "img.shields.io/pypi/pyversions/decision-cascade",
+    "img.shields.io/pypi/l/decision-cascade",
+    "coverage_gate",
+)
+
+
+def test_readme_has_badges_and_language_switch():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for badge in BADGES:
+        assert badge in readme, f"нет бейджа {badge}"
+    assert "README.en.md" in readme
+
+
+def test_english_readme_is_parity():
+    en = (ROOT / "README.en.md").read_text(encoding="utf-8")
+    assert "README.md" in en, "английский README должен ссылаться на русский"
+    assert "pip install decision-cascade" in en
+    assert "uvicorn api.server.main:app" in en
+    for badge in BADGES:
+        assert badge in en
+    # те же числа, что и в русской таблице: расхождение — это ложь в одном из файлов
+    for number in ("0.873", "0.855", "0.662", "0.542", "0.442", "0.312"):
+        assert number in en
+
+
+def test_quickstart_stays_near_the_top():
+    """Установка не должна снова уехать за сотню строк позиционирования."""
+    lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+    head = "\n".join(lines[:120])
+    assert "## Быстрый старт" in head
+    assert "pip install decision-cascade" in head
+    assert "curl -sS -X POST http://127.0.0.1:8000/decisions" in head
+    # пример ответа в README — реальный вывод сервиса, а не выдумка
+    assert '"schema_version": "1"' in head
+    assert '"trained": false' in head
+
+
+def test_readme_benchmark_table_matches_benchmarks_doc():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    benchmarks = (ROOT / "docs" / "benchmarks.md").read_text(encoding="utf-8")
+    for number in ("0.873", "0.855", "0.662", "0.542", "0.442", "0.312"):
+        assert number in readme
+        assert number in benchmarks, f"{number} нет в docs/benchmarks.md"
+    # синтетический домен не должен попадать в таблицу публичных наборов
+    top = readme.split("## Бенчмарки: публичные наборы", 1)[1].split("## Что это", 1)[0]
+    table = [line for line in top.splitlines() if line.startswith("|")]
+    assert table, "верхняя таблица бенчмарков не найдена"
+    assert not any("0.915" in line for line in table)
+    assert any("AG News" in line for line in table)
+    assert any("RouterBench" in line for line in table)
+
+
+def test_readme_toc_anchors_exist():
+    import re
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    toc = readme.split("<summary><b>Оглавление</b></summary>", 1)[1].split("</details>", 1)[0]
+    anchors = set(re.findall(r"\]\(#([^)]+)\)", toc))
+    assert anchors, "оглавление не содержит ссылок"
+
+    def slug(heading: str) -> str:
+        value = heading.strip().lower()
+        value = re.sub(r"[^\w\s-]", "", value, flags=re.UNICODE)
+        return value.replace(" ", "-")
+
+    known = {
+        slug(line[3:]) for line in readme.splitlines() if line.startswith("## ")
+    }
+    missing = sorted(anchor for anchor in anchors if anchor not in known)
+    assert not missing, f"битые якоря в оглавлении: {missing}"
+
+
+def test_env_example_documents_core_vars_and_has_no_secrets():
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    for name in (
+        "DECISION_MODEL_ID",
+        "DECISION_DEVICE",
+        "DECISION_DTYPE",
+        "DECISION_MAX_LENGTH",
+        "DECISION_CHECKPOINT_DIR",
+    ):
+        assert f"{name}=" in text, f"нет {name} в .env.example"
+    for secret in ("TOKEN", "PASSWORD", "SECRET", "API_KEY"):
+        assert secret not in text.upper(), f"в .env.example похоже на секрет: {secret}"
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert ".env.example" in readme
+
+
+def test_info_config_is_documented():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "GET /info" in readme
+    assert "блок `config`" in readme
