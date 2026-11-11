@@ -91,6 +91,9 @@ def test_offline_example(rel_path: str, argv: list[str], tmp_path: Path) -> None
 
 @pytest.mark.parametrize("rel_path,argv", HELP_CASES, ids=_ids(HELP_CASES))
 def test_network_example_help(rel_path: str, argv: list[str]) -> None:
+    # шахматы требуют необязательного extra `games`; без него — пропуск, а не падение
+    if "games/chess" in rel_path:
+        pytest.importorskip("chess")
     with pytest.raises(SystemExit) as excinfo:
         _run_module(rel_path, argv)
     assert excinfo.value.code == 0

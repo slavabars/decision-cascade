@@ -11,14 +11,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from eval.datasets.chess import CHESS_QUESTIONS, CHESS_SPECS, load_splits
-from examples.games.chess import dataset, evaluate
-from examples.games.chess.engine import Candidate, parse_info
-
+# Опциональный extra `games`: без него весь файл пропускается. importorskip идёт
+# до импортов examples — они тянут `chess` на уровне модуля, и упал бы сбор тестов.
 pytest.importorskip("chess")
+
 import chess
 
-from examples.games.chess import play, state
+from eval.datasets.chess import CHESS_QUESTIONS, CHESS_SPECS, load_splits
+from examples.games.chess import dataset, evaluate, play, state
+from examples.games.chess.engine import Candidate, parse_info
 
 
 # --- UCI -------------------------------------------------------------------
