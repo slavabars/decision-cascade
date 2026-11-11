@@ -1058,9 +1058,11 @@ AG News / RouterBench против 0.667 / 0.855 / 0.442 у Clef-Flash (9.4B) и
 
 ### Игровой пример: шахматы
 
+[![Партия против Stockfish: голова решает, когда быстрому просчёту нельзя верить](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](examples/games/chess/README.md)
+
 Партия против Stockfish, где головы решают, когда быстрому просчёту движка
 нельзя верить: 19% эскалаций закрывают половину разрыва до «всегда глубоко» при
-38% цены полного просчёта. Код, данные, GIF и числа —
+38% цены полного просчёта. Код, данные, числа и запись —
 в [`examples/games/chess/`](examples/games/chess/README.md).
 
 ## Обучение голов
@@ -1357,7 +1359,7 @@ docs/           — методика бенчмарков (competitor-benchmark.
                   risk-aware-cascade.md, option-scoring.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
                   SystemOne, каскады, vision, интеграции, эксплуатация, игры)
-tests/          — pytest-набор (820 тестов + opt-in GPU/модель)
+tests/          — pytest-набор (821 тест + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh) и smoke wheel
 README.md       — этот файл
