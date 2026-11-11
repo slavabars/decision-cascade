@@ -480,6 +480,24 @@ bash examples/games/chess/fetch_engine.sh            # Stockfish в .tools/, б�
 сильнее нас; наш вклад — слой решений над его кандидатами: сколько думать и
 когда рискнуть. Подробности, числа и ограничения — в `games/chess/README.md`.
 
+### `games/maze/` — сервер: нет
+
+Своя аркада в духе Pac-Man: призраки, точки, энергайзеры. Голова `need_deep`
+предсказывает, что жадный шаг к точке закончится потерей жизни, и только тогда
+включает осторожный маршрут. Это вторая половина истории: в шахматах решалась
+цена хода, здесь — риск в реальном времени.
+
+```bash
+.venv/bin/python -m examples.games.maze.dataset --out data/maze/maze.jsonl
+.venv/bin/python -m examples.games.maze.train \
+  --data data/maze/maze.jsonl --out checkpoints/packs/maze
+.venv/bin/python -m examples.games.maze.evaluate --pack checkpoints/packs/maze
+.venv/bin/python -m examples.games.maze.play --pack checkpoints/packs/maze --seed 3
+```
+
+Каскад при пороге 0.3 собирает 95% очков осторожной политики, тратя 42%
+эскалаций. Числа, запись и ограничения — в `games/maze/README.md`.
+
 ---
 
 ## Smoke-проверка

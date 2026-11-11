@@ -1056,7 +1056,7 @@ AG News / RouterBench против 0.667 / 0.855 / 0.442 у Clef-Flash (9.4B) и
 добавляет +3.4 п.п. на `support` и +3.7 п.п. на AG News, а на RouterBench
 политика по выгоде отказывается платить за модель, которая слабее локальной.
 
-### Игровой пример: шахматы
+### Игровые примеры: шахматы и лабиринт
 
 [![Партия против Stockfish: голова решает, когда быстрому просчёту нельзя верить](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](examples/games/chess/README.md)
 
@@ -1064,6 +1064,13 @@ AG News / RouterBench против 0.667 / 0.855 / 0.442 у Clef-Flash (9.4B) и
 нельзя верить: 19% эскалаций закрывают половину разрыва до «всегда глубоко» при
 38% цены полного просчёта. Код, данные, числа и запись —
 в [`examples/games/chess/`](examples/games/chess/README.md).
+
+Лабиринт в духе Pac-Man добавляет то, чего в шахматах нет: риск в реальном
+времени. Голова предсказывает, что жадный шаг к точке закончится потерей жизни,
+и только тогда включается осторожный маршрут. Каскад собирает **87% очков**
+осторожной политики (и на 78% больше, чем жадная), тратя 29% эскалаций и 22 узла
+BFS на ход вместо 35. Числа и запись — в
+[`examples/games/maze/`](examples/games/maze/README.md).
 
 ## Обучение голов
 
@@ -1359,7 +1366,7 @@ docs/           — методика бенчмарков (competitor-benchmark.
                   risk-aware-cascade.md, option-scoring.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
                   SystemOne, каскады, vision, интеграции, эксплуатация, игры)
-tests/          — pytest-набор (821 тест + opt-in GPU/модель)
+tests/          — pytest-набор (841 тест + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh) и smoke wheel
 README.md       — этот файл

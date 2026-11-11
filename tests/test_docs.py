@@ -222,10 +222,12 @@ def test_readme_embeds_game_demo_with_absolute_url():
     из индекса, и `demo.gif` там превращается в битую картинку.
     """
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "### Игровой пример: шахматы" in readme
+    assert "### Игровые примеры: шахматы и лабиринт" in readme
     assert (
         "https://raw.githubusercontent.com/slavabars/decision-cascade/main/"
         "examples/games/chess/demo.gif"
     ) in readme
     assert "examples/games/chess/README.md" in readme
+    assert "examples/games/maze/README.md" in readme
     assert (ROOT / "examples" / "games" / "chess" / "demo.gif").is_file()
+    assert (ROOT / "examples" / "games" / "maze" / "demo.gif").is_file()
