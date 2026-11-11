@@ -27,6 +27,14 @@ def test_readme_status_matches_version():
     assert f"**Статус: {expected} ({VERSION}).**" in readme
 
 
+def test_english_readme_status_matches_version():
+    """Английская версия не должна отставать от версии — иначе она врёт."""
+    readme = (ROOT / "README.en.md").read_text(encoding="utf-8")
+    major = int(VERSION.split(".")[0])
+    expected = "stable" if major >= 1 else "beta"
+    assert f"**Status: {expected} ({VERSION}).**" in readme
+
+
 def test_changelog_has_release_section_and_link():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert f"## [{VERSION}]" in changelog

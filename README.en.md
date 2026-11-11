@@ -17,7 +17,7 @@ becomes features, and decision heads return **typed, probabilistic, calibrated**
 answers — Noul (yes/no), Choice (pick an option), Score (value on a scale) —
 without generating a single token.
 
-**Status: stable (1.2.0).** The API contract (`schema_version = "1"`), the pack
+**Status: stable (1.3.0).** The API contract (`schema_version = "1"`), the pack
 format and the meaning of `DECISION_*` variables do not break inside `1.x`:
 changes land only in a major, with a two-minor deprecation window. What exactly
 is promised, which surfaces are still beta and how deprecation is announced —
@@ -82,11 +82,11 @@ response and the fact that everything runs locally and deterministically.
 Meaningful numbers require a trained pack (~0.5 GB encoder):
 
 ```bash
-gh release download v1.2.0 --pattern '*-weights.tar.gz' \
+gh release download v1.3.0 --pattern '*-weights.tar.gz' \
   --repo slavabars/decision-cascade
-tar -xzf v1.2.0-weights.tar.gz
+tar -xzf v1.3.0-weights.tar.gz
 
-DECISION_CHECKPOINT_DIR=v1.2.0-weights/public-gpt2 \
+DECISION_CHECKPOINT_DIR=v1.3.0-weights/public-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   python -m uvicorn api.server.main:app --port 8000
 ```
@@ -223,7 +223,7 @@ self-explanatory, and this page covers the essentials.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest                     # 798 passed, 14 skipped (no GPU)
+.venv/bin/python -m pytest                     # 799 passed, 14 skipped (no GPU)
 .venv/bin/python -m pytest --cov=src --cov=api  # coverage gate 90% (pyproject)
 ```
 

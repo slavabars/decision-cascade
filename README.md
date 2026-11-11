@@ -17,7 +17,7 @@ state-состояние превращается в признаки, а гол
 **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет),
 Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: stable (1.2.0).** Контракт API (`schema_version = "1"`), формат
+**Статус: stable (1.3.0).** Контракт API (`schema_version = "1"`), формат
 паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major,
 с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие
 поверхности остаются beta и как объявляется депрекация —
@@ -82,11 +82,11 @@ curl -sS -X POST http://127.0.0.1:8000/decisions \
 релиза, ~0.5 ГБ модели):
 
 ```bash
-gh release download v1.2.0 --pattern '*-weights.tar.gz' \
+gh release download v1.3.0 --pattern '*-weights.tar.gz' \
   --repo slavabars/decision-cascade
-tar -xzf v1.2.0-weights.tar.gz
+tar -xzf v1.3.0-weights.tar.gz
 
-DECISION_CHECKPOINT_DIR=v1.2.0-weights/public-gpt2 \
+DECISION_CHECKPOINT_DIR=v1.3.0-weights/public-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   python -m uvicorn api.server.main:app --port 8000
 ```
@@ -1135,8 +1135,8 @@ bash training/recipe/train_weight_packs.sh
 git) — либо один пак, либо вся матрица одним архивом + манифестом:
 
 ```bash
-training/recipe/publish_release.sh v1.2.0 checkpoints/support       # один пак
-training/recipe/publish_weight_packs.sh v1.2.0 checkpoints/packs    # матрица + manifest.json
+training/recipe/publish_release.sh v1.3.0 checkpoints/support       # один пак
+training/recipe/publish_weight_packs.sh v1.3.0 checkpoints/packs    # матрица + manifest.json
 ```
 
 RLCD-калибровка `noul`-голов на реальных признаках энкодера принимает изменение
@@ -1150,8 +1150,8 @@ RLCD-калибровка `noul`-голов на реальных признак
 
 ### Готовые паки весов (release)
 
-Релиз [`v1.2.0`](https://github.com/slavabars/decision-cascade/releases/tag/v1.2.0)
-содержит архив `v1.2.0-weights.tar.gz` (и `v1.2.0-manifest.json`) с семью
+Релиз [`v1.3.0`](https://github.com/slavabars/decision-cascade/releases/tag/v1.3.0)
+содержит архив `v1.3.0-weights.tar.gz` (и `v1.3.0-manifest.json`) с семью
 обученными паками: `{support, public} × {gpt2, distilgpt2, gpt2-medium}` плюс
 `routerbench-gpt2`. Все числа — на честном train/val/test (для `public` —
 настоящий test-сплит AG News):
@@ -1199,8 +1199,8 @@ Brier не ухудшился, иначе остаётся `T = 1.0` (так `bu
 `docs/competitor-benchmark.md`).
 
 ```bash
-tar -xzf v1.2.0-weights.tar.gz               # -> v1.2.0-weights/<pack>/
-DECISION_CHECKPOINT_DIR=v1.2.0-weights/support-gpt2 \
+tar -xzf v1.3.0-weights.tar.gz               # -> v1.3.0-weights/<pack>/
+DECISION_CHECKPOINT_DIR=v1.3.0-weights/support-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   .venv/bin/python -m uvicorn api.server.main:app --port 8000
 ```
@@ -1270,7 +1270,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 798 passed, 14 skipped (без GPU)
+.venv/bin/python -m pytest                          # 799 passed, 14 skipped (без GPU)
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
@@ -1367,7 +1367,7 @@ CHANGELOG.md, SECURITY.md
 
 - **Качество по умолчанию**: головы по умолчанию случайные; осмысленные решения
   требуют SFT+RLCD на вашей разметке. Есть рецепты и обученные паки весов
-  (`v1.2.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family
+  (`v1.3.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family
   плюс `routerbench-gpt2`);
   в git веса не кладутся, поэтому после чистого клона «из коробки» — случайные
   головы, пока не скачаете пак или не обучите свои.

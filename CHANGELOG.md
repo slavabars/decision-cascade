@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-11-11
+
 ### Added
 
 - **Быстрый старт в начале README**: `pip install` → `uvicorn` → `curl` с
@@ -30,8 +32,18 @@
   носителем `DECISION_*`: на сервере конфигурация из `.env` молча игнорировалась.
   Добавлен `EnvironmentFile=-<project>/.env` (файл необязателен — без него
   сервис работает на дефолтах).
-- Устаревшие ссылки на релиз `v0.2.0` в разделе паков весов (сейчас `v1.2.0`,
+- Устаревшие ссылки на релиз `v0.2.0` в разделе паков весов (сейчас `v1.3.0`,
   семь паков, включая `routerbench-gpt2`).
+
+### Compatibility
+
+- Ломающих изменений нет: `schema_version` остаётся `"1"`, блок `config` в
+  `/info` аддитивен (клиенты, которые его не читают, работают как раньше),
+  новых зависимостей и переменных окружения нет.
+- Юнит теперь читает `.env`: если файл существовал и раньше игнорировался,
+  сервис начнёт применять значения из него. Это и есть исправление, но при
+  апгрейде стоит сверить содержимое `.env` с тем, что вы ожидали
+  (`GET /info → config`).
 
 ## [1.2.0] — 2026-11-10
 
@@ -782,7 +794,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/slavabars/decision-cascade/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/slavabars/decision-cascade/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/slavabars/decision-cascade/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/slavabars/decision-cascade/compare/v0.16.0...v1.0.0
