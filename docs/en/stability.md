@@ -4,7 +4,7 @@
 
 The project has been stable since `1.0.0`. Every exit criterion is closed and has been checked automatically ever since, not just claimed: the API contract, the pack format and the meaning of `DECISION_*` variables do not break inside the `1.x` line — changes land only in a major, with a two-minor deprecation window.
 
-Stability is about the **contract and reproducibility**, not about universality: some surfaces (the benefit cascade, the option-scoring head, encoder fine-tuning and feedback retraining) remain beta — they are measured, but they depend on the domain and may change in minor releases. The risk-aware cascade is stable since `1.1`: its contract is described in §7. The full list is in §2.
+Stability is about the **contract and reproducibility**, not about universality: some surfaces (the option-scoring head, encoder fine-tuning and feedback retraining) remain beta — they are measured, but they depend on the domain and may change in minor releases. The risk-aware cascade is stable since `1.1`: its contract is described in §7. The benefit cascade is stable since `1.6`: its contract is described in §8. The full list is in §2.
 
 ## 1. What "stable" means for this project
 
@@ -29,7 +29,7 @@ Stability does **not** mean: universality (zero-shot), beating LLMs in open doma
 | `DECISION_*` variables from the README | stable | new ones are added, old ones keep their meaning |
 | Confidence threshold (`DECISION_CASCADE_THRESHOLD`) | stable | the default policy |
 | Risk-aware cascade (`DECISION_CASCADE_RISK_BUDGET`) | stable since 1.1 | §7 contract: variables, `/info`, `usage.reason`, `/v1/feedback`, hard gate |
-| Benefit cascade (`DECISION_CASCADE_POLICY=benefit`) | beta | new, needs `q` and feedback |
+| Benefit cascade (`DECISION_CASCADE_POLICY=benefit`) | stable since 1.6 | §8 contract: variables, `/info`, `usage.reason`, `/v1/feedback`, precedence over the risk budget |
 | Option-scoring head | beta | option transfer is measured, not used in the published packs |
 | Encoder fine-tuning (`finetune_encoder`) | beta | measured (+5 pp), weights ship as a release asset |
 | Feedback retraining (`training.feedback`) | beta | "do not harm" gate and drift numbers — `../drift.md` |
@@ -173,3 +173,52 @@ A rejected certificate (`risk.json -> gate.accepted = false`) is **not relaxed**
 Fields `weights`, `bias`, `feature_names`, `gate`. The default feature names are `confidence`, `entropy`, `margin`. Files without `gate` are read as "no measurements were made" (the gate does not reject).
 
 The contract is pinned by `tests/test_risk_contract.py`, which also checks that the documentation and the code have not drifted apart.
+
+## 8. Benefit cascade contract (stable since 1.6)
+
+Enabled by `DECISION_BACKEND=cascade` + `DECISION_CASCADE_POLICY=benefit`. The policy answers not "how confident is the local head" but "is it worth paying for the external model": escalation pays off when `p < q - C / (1 + D)`, where `p` is the calibrated confidence of the local decision, `q` is the measured accuracy of the external model on this question, `D` is the error cost and `C` is the escalation cost in "correct answer = 1" units. If the external model is weaker than the local one on a question, the cascade does not escalate at all. Everything below is a `1.x` promise: changing it requires a major.
+
+### Environment variables
+
+| Variable | Meaning | Accepted values | Default |
+| --- | --- | --- | --- |
+| `DECISION_CASCADE_POLICY` | escalation policy | `""`/`threshold`/`confidence` — threshold; `benefit`/`benefit-aware` — benefit | `""` (threshold) |
+| `DECISION_CASCADE_REMOTE_ACCURACY` | external accuracy `q`: a number, a JSON path or the JSON itself | a number in `(0, 1]` or `fit_remote_accuracy` JSON | — (required for benefit) |
+| `DECISION_CASCADE_REMOTE_ACCURACY_BOUND` | which `q` estimate to take from JSON | `point` — point estimate, `lower` — Wilson lower bound | `point` |
+| `DECISION_CASCADE_ESCALATION_COST` | external call cost `C` | `>= 0` | `0.05` |
+| `DECISION_CASCADE_ERROR_COST` | error cost `D` | `>= 0` | `1.0` |
+| `DECISION_CASCADE_FEEDBACK_SHRINKAGE` | prior `q` weight in pseudo-observations `W` | `> 0` | `50` |
+
+An unknown policy, an invalid `q` bound, `q` outside `(0, 1]`, negative costs and `W <= 0` are startup errors, not a silent fallback to the confidence threshold. `DECISION_CASCADE_POLICY=benefit` takes precedence over `DECISION_CASCADE_RISK_BUDGET`: when both are set, benefit runs and no `risk.json` is needed.
+
+### `GET /info -> engine`
+
+| Key | Type | When present |
+| --- | --- | --- |
+| `policy` | `"benefit"` | always with the benefit cascade |
+| `remote_accuracy` | float or "question → q" mapping | always; same shape as configured |
+| `remote_accuracy_default` | float | always: `q` for a question outside the mapping (the mean of the configured ones) |
+| `escalation_cost` | float | always |
+| `error_cost` | float | always |
+| `feedback_shrinkage` | float | always |
+| `benefit_threshold` | float | always: threshold `p` for a question outside the mapping |
+| `benefit_thresholds` | "question → threshold" mapping | always; empty when `q` is a number |
+| `benefit_feedback` | "question → total observations" mapping | always; empty until feedback arrives |
+
+Keys may be added, but never renamed or removed.
+
+### `usage` in the decision response
+
+- `escalated` — how many questions went outside (int);
+- `reason` — `"benefit"`; the field appears only on escalation;
+- `fallback` — `usage` of the external call.
+
+### `POST /v1/feedback`
+
+Same transport as the risk cascade, different meaning: the model is not retrained (`retrained = false`), `q` for the question is refined instead. Each question in the response has `question`, `accepted`, `examples`, `reference`, `retrained`, `remote_accuracy` — the updated `q`. Only decisions that actually went to the external model count: local head answers do not change `q`, and repeated feedback for the same returned decision is not counted twice. The estimate shifts in a Bayesian way: `q_new = (q_prior * W + correct) / (W + total)`. A backend without feedback support returns `409 FEEDBACK_UNSUPPORTED`, and the same is visible in `GET /info -> accepts_feedback`.
+
+### How `q` is obtained
+
+`q` is measured on a held-out slice of the domain, not on the same test where the gain is computed (`python -m eval.competitors.fit_remote_accuracy`). The JSON may contain `accuracy` (a single number) and `per_question` (a mapping), and with `..._BOUND=lower` — `accuracy_lower` and `per_question_lower`; if the lower bounds are missing, the point estimates are used. A question outside the mapping falls back to the mean over the configured questions.
+
+The contract is pinned by `tests/test_benefit_contract.py`, which also checks that the documentation and the code have not drifted apart.

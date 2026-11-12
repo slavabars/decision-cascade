@@ -130,6 +130,8 @@ These are configuration errors at startup (the process does not come up), not HT
 | `DECISION_BACKEND=http requires DECISION_BACKEND_URL` | set the external SystemOne URL |
 | `DECISION_BACKEND=cascade requires DECISION_CASCADE_FALLBACK_URL` | set the fallback URL |
 | `DECISION_CASCADE_POLICY=benefit requires DECISION_CASCADE_REMOTE_ACCURACY` | fit `q`: `python -m eval.competitors.fit_remote_accuracy ...`, put the JSON/number into the variable |
+| `DECISION_CASCADE_POLICY must be one of ...` | a typo in the policy: `""`, `threshold`, `confidence`, `benefit` or `benefit-aware` |
+| `DECISION_CASCADE_REMOTE_ACCURACY_BOUND must be 'point' or 'lower'` | a typo in the `q` bound; only `point` and `lower` are accepted |
 | `DECISION_CASCADE_RISK_BUDGET requires a fitted risk model at ...` | train `risk.json` (`python -m eval.risk.run`) or point `DECISION_RISK_MODEL_PATH` at it |
 | `DECISION_UNTRAINED must be one of (...)` | `allow`, `refuse`, `fallback` or `auto` |
 

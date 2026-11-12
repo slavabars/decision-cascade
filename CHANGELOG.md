@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-11-12
+
+### Added
+
+- **Benefit-каскад стабилен с 1.6.** `DECISION_CASCADE_POLICY=benefit` переведён из beta в stable: зафиксирован контракт `docs/stability.md` §8 — переменные окружения, ключи `GET /info -> engine`, `usage.reason = "benefit"`, обратная связь по `q` и приоритет над risk-бюджетом. Поведение политики не менялось, обещание теперь проверяется `tests/test_benefit_contract.py`.
+- `GET /info -> engine` при benefit-каскаде отдаёт `policy`, `remote_accuracy`, `remote_accuracy_default`, `escalation_cost`, `error_cost`, `feedback_shrinkage`, `benefit_threshold`, `benefit_thresholds` и `benefit_feedback` — видно, с каким `q` и ценами работает каскад и сколько фидбэка накоплено.
+- Валидация `DECISION_CASCADE_REMOTE_ACCURACY_BOUND`: допустимы только `point` и `lower`, остальное — ошибка старта.
+- Английский §8 в `docs/en/stability.md`, строки про ошибки политики и границы `q` в `docs/troubleshooting.md` и `docs/en/troubleshooting.md`, переменные benefit в `.env.example`.
+
+### Changed
+
+- README описывает `/info` benefit-каскада, приоритет над risk-бюджетом и ссылку на контракт.
+- `409 FEEDBACK_UNSUPPORTED` объясняет оба режима обратной связи — benefit и few-shot risk, а не только risk.
+
+### Fixed
+
+- **Неизвестная `DECISION_CASCADE_POLICY` больше не откатывается молча на порог уверенности.** Опечатка в политике — ошибка старта с перечнем допустимых значений, как и недопустимая граница `q`.
+
+### Compatibility
+
+- Ломающих изменений нет: `schema_version` остаётся `"1"`, смысл переменных и формат паков прежние. Benefit-политика важнее risk-бюджета и раньше — теперь это закреплено тестом и документацией.
+
 ## [1.5.0] — 2026-11-12
 
 ### Added
@@ -361,7 +383,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/slavabars/decision-cascade/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/slavabars/decision-cascade/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/slavabars/decision-cascade/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/slavabars/decision-cascade/compare/v1.2.0...v1.3.0

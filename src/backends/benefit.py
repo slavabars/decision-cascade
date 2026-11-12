@@ -173,6 +173,42 @@ class BenefitAwareCascadeBackend(CascadeBackend):
     def escalation_reason(self) -> str | None:
         return "benefit"
 
+    @property
+    def policy(self) -> str:
+        """Имя политики для ``/info``: benefit-каскад нельзя спутать с risk."""
+        return "benefit"
+
+    def benefit_info(self) -> dict[str, Any]:
+        """Параметры политики для ``GET /info -> engine``.
+
+        Ключи — часть контракта 1.x: их можно добавлять, но не переименовывать
+        и не убирать. ``remote_accuracy`` отдаётся в той форме, в которой задан
+        (число или словарь по вопросам), а ``remote_accuracy_default`` — всегда
+        число: это ``q`` для вопроса, которого нет в словаре.
+        """
+        thresholds = {
+            name: self.threshold_for(name) for name in sorted(self.remote_accuracy)
+        }
+        with self._lock:
+            feedback = {
+                name: stats[1] for name, stats in sorted(self._observed.items())
+            }
+        return {
+            "policy": self.policy,
+            "remote_accuracy": (
+                dict(self.remote_accuracy)
+                if self.remote_accuracy
+                else self.default_remote_accuracy
+            ),
+            "remote_accuracy_default": self.default_remote_accuracy,
+            "escalation_cost": self.escalation_cost,
+            "error_cost": self.error_cost,
+            "feedback_shrinkage": self.feedback_shrinkage,
+            "benefit_threshold": self.threshold_for(""),
+            "benefit_thresholds": thresholds,
+            "benefit_feedback": feedback,
+        }
+
     def remote_accuracy_for(self, question: str) -> float:
         """``q`` для вопроса: априорная точность, сдвинутая обратной связью.
 

@@ -130,6 +130,8 @@ journalctl -u decision-api@api -n 50 --no-pager | grep -i unavailable
 | `DECISION_BACKEND=http requires DECISION_BACKEND_URL` | задать URL внешнего SystemOne |
 | `DECISION_BACKEND=cascade requires DECISION_CASCADE_FALLBACK_URL` | задать fallback URL |
 | `DECISION_CASCADE_POLICY=benefit requires DECISION_CASCADE_REMOTE_ACCURACY` | снять `q`: `python -m eval.competitors.fit_remote_accuracy ...`, положить JSON/число в переменную |
+| `DECISION_CASCADE_POLICY must be one of ...` | опечатка в политике: `""`, `threshold`, `confidence`, `benefit` или `benefit-aware` |
+| `DECISION_CASCADE_REMOTE_ACCURACY_BOUND must be 'point' or 'lower'` | опечатка в границе `q`; допустимы только `point` и `lower` |
 | `DECISION_CASCADE_RISK_BUDGET requires a fitted risk model at ...` | обучить `risk.json` (`python -m eval.risk.run`) или указать `DECISION_RISK_MODEL_PATH` |
 | `DECISION_UNTRAINED must be one of (...)` | `allow`, `refuse`, `fallback` или `auto` |
 

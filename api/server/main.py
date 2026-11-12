@@ -295,12 +295,15 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     эскалируется, только если ожидаемая выгода внешней модели превышает цену
     вызова. Точность внешней модели ``q`` берётся из
     ``DECISION_CASCADE_REMOTE_ACCURACY`` (число или JSON, снятый
-    ``python -m eval.competitors.fit_remote_accuracy``), цена эскалации — из
+    ``python -m eval.competitors.fit_remote_accuracy``; ``..._BOUND=lower``
+    берёт нижнюю границу Уилсона), цена эскалации — из
     ``DECISION_CASCADE_ESCALATION_COST`` (0.05), цена ошибки — из
     ``DECISION_CASCADE_ERROR_COST`` (1.0). Обратная связь (``POST /v1/feedback``)
     уточняет ``q`` по реальным ответам внешней модели: вес априорной оценки в
     псевдонаблюдениях — ``DECISION_CASCADE_FEEDBACK_SHRINKAGE`` (50). Политика
-    benefit важнее risk-бюджета.
+    benefit важнее risk-бюджета: если заданы обе, работает benefit. Неизвестная
+    политика и недопустимая граница ``q`` — ошибка старта, а не молчаливый
+    откат на порог уверенности (контракт — ``docs/stability.md`` §8).
     """
     url = os.environ.get("DECISION_CASCADE_FALLBACK_URL")
     if not url:
@@ -318,6 +321,11 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     )
     threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
     policy = os.environ.get("DECISION_CASCADE_POLICY", "").strip().lower()
+    if policy not in {"", "threshold", "confidence", "benefit", "benefit-aware"}:
+        raise RuntimeError(
+            "DECISION_CASCADE_POLICY must be one of '', 'threshold', "
+            f"'confidence', 'benefit', 'benefit-aware'; got {policy!r}"
+        )
     if policy in {"benefit", "benefit-aware"}:
         raw_accuracy = os.environ.get("DECISION_CASCADE_REMOTE_ACCURACY")
         if not raw_accuracy:
@@ -325,6 +333,16 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
                 "DECISION_CASCADE_POLICY=benefit requires "
                 "DECISION_CASCADE_REMOTE_ACCURACY (см. "
                 "python -m eval.competitors.fit_remote_accuracy)"
+            )
+        bound = (
+            os.environ.get("DECISION_CASCADE_REMOTE_ACCURACY_BOUND", "point")
+            .strip()
+            .lower()
+        )
+        if bound not in {"point", "lower"}:
+            raise RuntimeError(
+                "DECISION_CASCADE_REMOTE_ACCURACY_BOUND must be 'point' or "
+                f"'lower'; got {bound!r}"
             )
         from src.backends.benefit import (
             BenefitAwareCascadeBackend,
@@ -334,13 +352,7 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
         return BenefitAwareCascadeBackend(
             primary,
             fallback,
-            load_remote_accuracy(
-                raw_accuracy,
-                conservative=os.environ.get(
-                    "DECISION_CASCADE_REMOTE_ACCURACY_BOUND", "point"
-                ).strip().lower()
-                == "lower",
-            ),
+            load_remote_accuracy(raw_accuracy, conservative=bound == "lower"),
             escalation_cost=float(
                 os.environ.get("DECISION_CASCADE_ESCALATION_COST", "0.05")
             ),
@@ -645,10 +657,12 @@ def _feedback_unsupported() -> JSONResponse:
             "error": {
                 "code": "FEEDBACK_UNSUPPORTED",
                 "message": (
-                    "backend does not accept labelled examples; few-shot risk "
-                    "retraining requires a risk-aware cascade "
-                    "(DECISION_BACKEND=cascade with DECISION_CASCADE_RISK_BUDGET "
-                    "and DECISION_RISK_FEW_SHOT_N >= 2)"
+                    "backend does not accept labelled examples; feedback needs "
+                    "either a benefit-aware cascade "
+                    "(DECISION_BACKEND=cascade with DECISION_CASCADE_POLICY=benefit "
+                    "and DECISION_CASCADE_REMOTE_ACCURACY) or few-shot risk "
+                    "retraining (DECISION_CASCADE_RISK_BUDGET with "
+                    "DECISION_RISK_FEW_SHOT_N >= 2)"
                 ),
             }
         },
@@ -682,6 +696,9 @@ def _engine_info(backend: Backend) -> dict[str, Any] | None:
                 info["risk_few_shot"] = getattr(
                     backend, "few_shot_questions", []
                 )
+        benefit_info = getattr(backend, "benefit_info", None)
+        if callable(benefit_info):
+            info.update(benefit_info())
         return info
     return None
 
