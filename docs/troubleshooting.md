@@ -1,5 +1,7 @@
 # Troubleshooting
 
+**Русский** · [English](en/troubleshooting.md)
+
 Типовые ошибки сервиса: что означает код, откуда он берётся и что делать. Для эксплуатации (systemd, upgrade/rollback) — [`deploy.md`](deploy.md).
 
 ## 1. Быстрая триада

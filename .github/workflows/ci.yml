@@ -11,12 +11,18 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      # Одна упавшая версия не должна скрывать результат остальных.
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    name: test (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       # CPU-only torch: заметно легче и быстрее, чем CUDA-сборка по умолчанию.
@@ -29,19 +35,25 @@ jobs:
           # опциональный extra для игрового примера: в основную установку не входит
           pip install "chess>=1.10"
 
+      # Линт, аудит, блокировка и сборка не зависят от версии Python:
+      # гоняем их один раз на минимальной поддерживаемой версии.
       - name: Lint (ruff)
+        if: matrix.python-version == '3.11'
         run: ruff check src api eval training tests examples scripts
 
       - name: Lint shell (shellcheck)
+        if: matrix.python-version == '3.11'
         run: shellcheck -x $(git ls-files '*.sh')
 
       - name: Check lockfile
+        if: matrix.python-version == '3.11'
         run: |
           pip install uv
           uv lock --check
 
       # Аудит зависимостей: известные CVE в requirements.txt — красный CI.
       - name: Audit dependencies
+        if: matrix.python-version == '3.11'
         run: |
           pip install pip-audit
           pip-audit -r requirements.txt
@@ -50,7 +62,9 @@ jobs:
         run: pytest -q --cov=src --cov=api --cov-report=term-missing:skip-covered
 
       - name: Build wheel
+        if: matrix.python-version == '3.11'
         run: pip wheel . --no-deps -w dist
 
       - name: Smoke installed wheel
+        if: matrix.python-version == '3.11'
         run: scripts/smoke_wheel.sh dist/decision_cascade-*.whl

@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-12
+
+### Added
+
+- **Python 3.12 и 3.13 в CI.** Тестовая матрица гоняет 3.11, 3.12 и 3.13; классификаторы пакета перечисляют все три версии. Линт, аудит зависимостей и сборка wheel остаются однократными на минимальной версии — матрица проверяет именно совместимость.
+- **Английские версии ключевых доков** в `docs/en/`: `stability.md`, `deploy.md`, `troubleshooting.md` и `risk-aware-cascade.md`. У каждой страницы есть переключатель языка в обе стороны, `README.en.md` ссылается на английские версии. В `risk-aware-cascade.md` переведены контракт, референсные числа и выводы, а полный журнал замеров остаётся в русском оригинале.
+
+### Changed
+
+- В README указано, что CI проверяет 3.11–3.13, а не только 3.11.
+- Ночной регресс по-прежнему идёт на 3.11: он не зависит от версии Python, матрицу держит CI.
+
+### Compatibility
+
+- Ломающих изменений нет: `schema_version` остаётся `"1"`, переменные, формат паков и зависимости прежние. Python 3.12 и 3.13 теперь проверяются, а не просто разрешены в `requires-python`.
+
 ## [1.4.0] — 2026-11-11
 
 ### Added
@@ -345,5 +361,25 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.4.0...HEAD
-[1.4.0]: https://github.com/slavabars/decision-cascade/compare/v1.3.0...v1.4.0 [1.3.0]: https://github.com/slavabars/decision-cascade/compare/v1.2.0...v1.3.0 [1.2.0]: https://github.com/slavabars/decision-cascade/compare/v1.1.0...v1.2.0 [1.1.0]: https://github.com/slavabars/decision-cascade/compare/v1.0.0...v1.1.0 [1.0.0]: https://github.com/slavabars/decision-cascade/compare/v0.16.0...v1.0.0 [0.16.0]: https://github.com/slavabars/decision-cascade/compare/v0.15.0...v0.16.0 [0.15.0]: https://github.com/slavabars/decision-cascade/compare/v0.14.0...v0.15.0 [0.14.0]: https://github.com/slavabars/decision-cascade/compare/v0.13.0...v0.14.0 [0.13.0]: https://github.com/slavabars/decision-cascade/compare/v0.12.0...v0.13.0 [0.12.0]: https://github.com/slavabars/decision-cascade/compare/v0.11.0...v0.12.0 [0.11.0]: https://github.com/slavabars/decision-cascade/compare/v0.10.0...v0.11.0 [0.10.0]: https://github.com/slavabars/decision-cascade/compare/v0.9.0...v0.10.0 [0.9.0]: https://github.com/slavabars/decision-cascade/compare/v0.8.0...v0.9.0 [0.8.0]: https://github.com/slavabars/decision-cascade/compare/v0.7.0...v0.8.0 [0.7.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.7.0 [0.6.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.6.0 [0.4.0]: https://github.com/slavabars/decision-cascade/compare/v0.3.0...v0.4.0 [0.3.0]: https://github.com/slavabars/decision-cascade/compare/v0.2.0...v0.3.0 [0.2.0]: https://github.com/slavabars/decision-cascade/compare/v0.1.0...v0.2.0 [0.1.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.1.0
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/slavabars/decision-cascade/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/slavabars/decision-cascade/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/slavabars/decision-cascade/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/slavabars/decision-cascade/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/slavabars/decision-cascade/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/slavabars/decision-cascade/compare/v0.16.0...v1.0.0
+[0.16.0]: https://github.com/slavabars/decision-cascade/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/slavabars/decision-cascade/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/slavabars/decision-cascade/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/slavabars/decision-cascade/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/slavabars/decision-cascade/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/slavabars/decision-cascade/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/slavabars/decision-cascade/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/slavabars/decision-cascade/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/slavabars/decision-cascade/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.7.0
+[0.6.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.6.0
+[0.4.0]: https://github.com/slavabars/decision-cascade/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/slavabars/decision-cascade/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/slavabars/decision-cascade/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/slavabars/decision-cascade/releases/tag/v0.1.0

@@ -256,3 +256,58 @@ def test_readme_links_are_absolute_for_pypi():
     assert images, "в README не осталось картинок"
     for src in images:
         assert src.startswith("https://"), f"картинка с относительным путём: {src}"
+
+
+ENGLISH_DOCS = (
+    "stability",
+    "deploy",
+    "troubleshooting",
+    "risk-aware-cascade",
+)
+
+
+def test_english_docs_exist_and_switch_language():
+    """Английские версии ключевых доков не должны отставать от русских.
+
+    Переключатель в обе стороны — часть контракта: читатель не должен искать
+    английскую страницу по угадыванию пути.
+    """
+    for name in ENGLISH_DOCS:
+        ru = ROOT / "docs" / f"{name}.md"
+        en = ROOT / "docs" / "en" / f"{name}.md"
+        assert ru.is_file(), f"нет русского оригинала {ru}"
+        assert en.is_file(), f"нет английской версии {en}"
+        assert f"[English](en/{name}.md)" in ru.read_text(encoding="utf-8")
+        assert f"[Русский](../{name}.md)" in en.read_text(encoding="utf-8")
+
+
+def test_english_docs_relative_links_resolve():
+    """Ссылки внутри docs/en ведут на существующие файлы, а не в пустоту."""
+    import re
+
+    for path in (ROOT / "docs" / "en").glob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        stripped = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+        for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", stripped):
+            if target.startswith(("http://", "https://", "mailto:")):
+                continue
+            resolved = (path.parent / target).resolve()
+            assert resolved.is_file(), f"{path.name}: битая ссылка {target}"
+
+
+def test_english_readme_links_english_docs():
+    en = (ROOT / "README.en.md").read_text(encoding="utf-8")
+    for name in ENGLISH_DOCS:
+        assert f"docs/en/{name}.md" in en, f"README.en.md не ссылается на docs/en/{name}.md"
+
+
+def test_markdown_reference_definitions_stay_on_their_own_lines():
+    """Склейка абзацев не должна склеивать ссылочные определения.
+
+    Две ссылки вида `[1.2.0]: https://...` в одной строке — это одна рабочая
+    ссылка и одна битая: markdown читает только первое определение.
+    """
+    for name in ("CHANGELOG.md", "README.md", "README.en.md"):
+        for number, line in enumerate((ROOT / name).read_text(encoding="utf-8").splitlines(), 1):
+            definitions = re.findall(r"^\[[^\]]+\]:\s", line)
+            assert len(definitions) <= 1, f"{name}:{number}: склеены ссылочные определения"

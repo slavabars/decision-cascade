@@ -12,7 +12,7 @@ A local, machine-native decision engine in the spirit of **Jev (TypeSafe AI)** �
 
 Instead of asking an LLM to generate an answer, the model **decides**: a state becomes features, and decision heads return **typed, probabilistic, calibrated** answers — Noul (yes/no), Choice (pick an option), Score (value on a scale) — without generating a single token.
 
-**Status: stable (1.4.0).** The API contract (`schema_version = "1"`), the pack format and the meaning of `DECISION_*` variables do not break inside `1.x`: changes land only in a major, with a two-minor deprecation window. What exactly is promised, which surfaces are still beta and how deprecation is announced — see [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
+**Status: stable (1.5.0).** The API contract (`schema_version = "1"`), the pack format and the meaning of `DECISION_*` variables do not break inside `1.x`: changes land only in a major, with a two-minor deprecation window. What exactly is promised, which surfaces are still beta and how deprecation is announced — see [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
 
 ## Demo: two games
 
@@ -28,7 +28,7 @@ Both games are ours: map, environment and rules are written in this repository, 
 
 ## Quick start (2 minutes)
 
-You need Python 3.11+ and network access only to install the package: no model download, no GPU, no trained weights — the server starts on a `hash` encoder.
+You need Python 3.11+ (CI runs 3.11, 3.12 and 3.13) and network access only to install the package: no model download, no GPU, no trained weights — the server starts on a `hash` encoder.
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -81,11 +81,11 @@ The response is typed decisions with probabilities (real output, unabridged):
 The near-uniform probabilities and `trained: false` are honest: the encoder is `hash` and the heads are untrained. The point of this step is the shape of the response and the fact that everything runs locally and deterministically. Meaningful numbers require a trained pack (~0.5 GB encoder):
 
 ```bash
-gh release download v1.4.0 --pattern '*-weights.tar.gz' \
+gh release download v1.5.0 --pattern '*-weights.tar.gz' \
   --repo slavabars/decision-cascade
-tar -xzf v1.4.0-weights.tar.gz
+tar -xzf v1.5.0-weights.tar.gz
 
-DECISION_CHECKPOINT_DIR=v1.4.0-weights/public-gpt2 \
+DECISION_CHECKPOINT_DIR=v1.5.0-weights/public-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   python -m uvicorn api.server.main:app --port 8000
 ```
@@ -168,24 +168,26 @@ Installs a venv, a systemd template unit (`decision-api@api`) and reads `DECISIO
 
 ## Documentation
 
-Detailed docs are currently in Russian; the API, CLI and code comments are self-explanatory, and this page covers the essentials.
+The contract, deployment, troubleshooting and risk-aware cascade docs are available in English. The measurement-heavy pages remain in Russian for now; the API, CLI and code comments are self-explanatory, and this page covers the essentials.
 
 | Doc | What is there |
 | --- | --- |
-| [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md) | what `1.x` promises, beta surfaces, deprecation policy |
-| [`docs/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/benchmarks.md) | competitor comparison, cascade policies, calibration |
-| [`docs/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/latency.md) | batching, input truncation, dtype budgets (CPU and GPU) |
-| [`docs/ru-benchmark.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/ru-benchmark.md) | Russian sentiment benchmark |
-| [`docs/risk-aware-cascade.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/risk-aware-cascade.md) | error-budget cascade, hard gate, `risk.json` |
-| [`docs/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/deploy.md) | Ubuntu/CentOS install, upgrade, backup |
-| [`docs/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/observability.md) | metrics, alerts, log format |
-| [`docs/troubleshooting.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/troubleshooting.md) | error codes and known failure modes |
-| [`docs/release.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/release.md) | release process (version → tag → PyPI → GitHub) |
+| [`docs/en/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/stability.md) | what `1.x` promises, beta surfaces, deprecation policy |
+| [`docs/en/risk-aware-cascade.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/risk-aware-cascade.md) | error-budget cascade, hard gate, `risk.json`, reference numbers |
+| [`docs/en/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/deploy.md) | Ubuntu/CentOS install, upgrade, backup, rollback |
+| [`docs/en/troubleshooting.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/troubleshooting.md) | error codes and known failure modes |
+| [`docs/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/benchmarks.md) (Russian) | competitor comparison, cascade policies, calibration |
+| [`docs/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/latency.md) (Russian) | batching, input truncation, dtype budgets (CPU and GPU) |
+| [`docs/ru-benchmark.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/ru-benchmark.md) (Russian) | Russian sentiment benchmark |
+| [`docs/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/observability.md) (Russian) | metrics, alerts, log format |
+| [`docs/release.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/release.md) (Russian) | release process (version → tag → PyPI → GitHub) |
+
+The Russian originals of the translated pages are in [`docs/`](https://github.com/slavabars/decision-cascade/tree/main/docs); the risk-aware cascade page there also carries the full measurement log.
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest                     # 838 passed, 14 skipped (no GPU)
+.venv/bin/python -m pytest                     # 842 passed, 14 skipped (no GPU)
 .venv/bin/python -m pytest --cov=src --cov=api  # coverage gate 90% (pyproject)
 ```
 

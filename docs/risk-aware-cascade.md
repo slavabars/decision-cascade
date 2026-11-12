@@ -1,5 +1,7 @@
 # Risk-aware каскад: эскалация по вероятности ошибки
 
+**Русский** · [English](en/risk-aware-cascade.md)
+
 > **Контракт.** С `1.1` risk-aware каскад стабилен: переменные окружения,
 > ключи `/info`, словарь `usage.reason`, ответ `/v1/feedback` и поведение
 > hard gate зафиксированы в [`stability.md` §7](stability.md#7-контракт-risk-aware-каскада-стабилен-с-11)

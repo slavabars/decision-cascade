@@ -12,7 +12,7 @@ Machine-native система принятия решений в духе **Jev 
 
 Вместо того чтобы заставлять LLM генерировать текст ответа, модель **решает**: state-состояние превращается в признаки, а головы решений возвращают **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет), Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: stable (1.4.0).** Контракт API (`schema_version = "1"`), формат паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major, с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие поверхности остаются beta и как объявляется депрекация — в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
+**Статус: stable (1.5.0).** Контракт API (`schema_version = "1"`), формат паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major, с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие поверхности остаются beta и как объявляется депрекация — в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
 
 ## Демо: две игры
 
@@ -28,7 +28,7 @@ Machine-native система принятия решений в духе **Jev 
 
 ## Быстрый старт (2 минуты)
 
-Нужен Python 3.11+ и интернет только для установки пакета: модель не скачивается, GPU и обученные веса не нужны — сервер стартует на `hash`-энкодере.
+Нужен Python 3.11+ (CI гоняет 3.11, 3.12 и 3.13) и интернет только для установки пакета: модель не скачивается, GPU и обученные веса не нужны — сервер стартует на `hash`-энкодере.
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -81,11 +81,11 @@ curl -sS -X POST http://127.0.0.1:8000/decisions \
 Вероятности почти равномерные и `trained: false` — это честно: энкодер `hash`, головы не обучены, шаг нужен, чтобы увидеть форму ответа и то, что всё работает локально и детерминированно. Осмысленные числа — с обученным паком (веса из релиза, ~0.5 ГБ модели):
 
 ```bash
-gh release download v1.4.0 --pattern '*-weights.tar.gz' \
+gh release download v1.5.0 --pattern '*-weights.tar.gz' \
   --repo slavabars/decision-cascade
-tar -xzf v1.4.0-weights.tar.gz
+tar -xzf v1.5.0-weights.tar.gz
 
-DECISION_CHECKPOINT_DIR=v1.4.0-weights/public-gpt2 \
+DECISION_CHECKPOINT_DIR=v1.5.0-weights/public-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   python -m uvicorn api.server.main:app --port 8000
 ```
@@ -882,8 +882,8 @@ bash training/recipe/train_weight_packs.sh
 Обученные веса весят мало и публикуются как **артефакт GitHub Release** (а не в git) — либо один пак, либо вся матрица одним архивом + манифестом:
 
 ```bash
-training/recipe/publish_release.sh v1.4.0 checkpoints/support       # один пак
-training/recipe/publish_weight_packs.sh v1.4.0 checkpoints/packs    # матрица + manifest.json
+training/recipe/publish_release.sh v1.5.0 checkpoints/support       # один пак
+training/recipe/publish_weight_packs.sh v1.5.0 checkpoints/packs    # матрица + manifest.json
 ```
 
 RLCD-калибровка `noul`-голов на реальных признаках энкодера принимает изменение только если оно улучшает калибровку на **отложенном** val (гейт «не навреди»):
@@ -896,7 +896,7 @@ RLCD-калибровка `noul`-голов на реальных признак
 
 ### Готовые паки весов (release)
 
-Релиз [`v1.4.0`](https://github.com/slavabars/decision-cascade/releases/tag/v1.4.0) содержит архив `v1.4.0-weights.tar.gz` (и `v1.4.0-manifest.json`) с семью обученными паками: `{support, public} × {gpt2, distilgpt2, gpt2-medium}` плюс `routerbench-gpt2`. Все числа — на честном train/val/test (для `public` — настоящий test-сплит AG News):
+Релиз [`v1.5.0`](https://github.com/slavabars/decision-cascade/releases/tag/v1.5.0) содержит архив `v1.5.0-weights.tar.gz` (и `v1.5.0-manifest.json`) с семью обученными паками: `{support, public} × {gpt2, distilgpt2, gpt2-medium}` плюс `routerbench-gpt2`. Все числа — на честном train/val/test (для `public` — настоящий test-сплит AG News):
 
 | Пак | Энкодер | dim | Датасет | test acc |
 |-----|---------|----:|---------|---------:|
@@ -922,8 +922,8 @@ RLCD-калибровка `noul`-голов на реальных признак
 Температура хранится в чекпоинте (`"temperature"` рядом с `state_dict`), поэтому сервер и замерный харнесс применяют её автоматически; старые чекпоинты без этого поля читаются как `T = 1.0`. Значение никогда не опускается ниже 1.0 — калибровка только смягчает вероятности. Перед сохранением работает гейт «не навреди»: `T` применяется, только если ECE на val улучшился и Brier не ухудшился, иначе остаётся `T = 1.0` (так `business` в public-паках остаётся неоткалиброванным). На `routerbench-gpt2` это снижает ECE с 0.547 до 0.024 (`route`), на `public-gpt2` — с 0.144 до 0.024 (`topic`); после неё каскад даёт +3.4 п.п. на `support` и +1.7 п.п. на `public` (подробности — в `docs/competitor-benchmark.md`).
 
 ```bash
-tar -xzf v1.4.0-weights.tar.gz               # -> v1.4.0-weights/<pack>/
-DECISION_CHECKPOINT_DIR=v1.4.0-weights/support-gpt2 \
+tar -xzf v1.5.0-weights.tar.gz               # -> v1.5.0-weights/<pack>/
+DECISION_CHECKPOINT_DIR=v1.5.0-weights/support-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   .venv/bin/python -m uvicorn api.server.main:app --port 8000
 ```
@@ -967,7 +967,7 @@ trainer.train(features, outcomes, steps=300)
 ## Тесты, линт, покрытие
 
 ```bash
-.venv/bin/python -m pytest                          # 838 passed, 14 skipped (без GPU)
+.venv/bin/python -m pytest                          # 842 passed, 14 skipped (без GPU)
 .venv/bin/python -m ruff check src api eval training tests examples scripts
 .venv/bin/python -m pytest --cov=src --cov=api      # гейт 90% из pyproject.toml
 .venv/bin/python -m pytest -m gpu                   # GPU-тесты (auto-skip без CUDA)
@@ -1031,7 +1031,7 @@ docs/           — методика бенчмарков (competitor-benchmark.
                   risk-aware-cascade.md, option-scoring.md)
 examples/       — готовые примеры (см. examples/README.md: quickstart, батчи,
                   SystemOne, каскады, vision, интеграции, эксплуатация, игры)
-tests/          — pytest-набор (852 теста + opt-in GPU/модель)
+tests/          — pytest-набор (856 тестов + opt-in GPU/модель)
 data/           — сгенерированные датасеты и отчёты бенчмарков (в .gitignore)
 scripts/        — bootstrap окружения (bootstrap-user.sh) и smoke wheel
 README.md       — этот файл
@@ -1046,7 +1046,7 @@ CHANGELOG.md, SECURITY.md
 
 ## Ограничения и планы
 
-- **Качество по умолчанию**: головы по умолчанию случайные; осмысленные решения требуют SFT+RLCD на вашей разметке. Есть рецепты и обученные паки весов (`v1.4.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family плюс `routerbench-gpt2`); в git веса не кладутся, поэтому после чистого клона «из коробки» — случайные головы, пока не скачаете пак или не обучите свои.
+- **Качество по умолчанию**: головы по умолчанию случайные; осмысленные решения требуют SFT+RLCD на вашей разметке. Есть рецепты и обученные паки весов (`v1.5.0-weights.tar.gz` в GitHub Release: `support-*`/`public-*` × gpt2-family плюс `routerbench-gpt2`); в git веса не кладутся, поэтому после чистого клона «из коробки» — случайные головы, пока не скачаете пак или не обучите свои.
 - **Устройство**: `DECISION_DEVICE`/`DECISION_DTYPE` выбирают CPU/GPU и тип; gemma-4-12B требует ~24 ГБ и CUDA, на CPU используйте gpt2.
 - **Мультимодальность**: локальная CLIP поддерживает только изображения; видео требует отдельного декодирования кадров.
 - **Честная оценка**: синтетические сплиты тривиально разделимы (`1.000` — это про конвейер, а не про домен). Публичные числа — на AG News (accuracy 0.425 → 0.88) и в бенчмарке против конкурентов; для своего домена нужна своя разметка.
