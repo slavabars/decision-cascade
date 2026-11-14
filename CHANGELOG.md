@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-11-14
+
+### Added
+
+- **Conformal-каскад: selective prediction с гарантией доли ошибок.** `DECISION_CASCADE_POLICY=conformal` берёт порог на `P(ошибка)` из сертификата `conformal.json`, посчитанного на отложенной калибровке: split-conformal плюс точная верхняя граница Клоппера–Пирсона. С вероятностью `1 − delta` доля ошибок среди локально принятых решений не выше `alpha`, причём по каждому вопросу одновременно — уровень `delta` делится между вопросами по Бонферрони, потому что решения разных вопросов на одном состоянии коррелированы. Если данных не хватает, сертификат честно отдаёт покрытие 0, а не выдумывает порог. Контракт — `docs/stability.md` §9, методика и числа — `docs/conformal.md`.
+- `python -m eval.conformal.run`: CLI сертификата. Делит val на риск-модель и калибровку, пишет `conformal.json` и `metrics.json`, проверяет порог на отложенном тесте. На публичном наборе с gpt2 (`alpha=0.1`, `delta=0.1`) покрытие 0.915 при риске 0.0711 и верхней границе 0.0999; на тесте — 0.918 и 0.0785. Строгий `alpha=0.05` даёт покрытие 0.547 и риск 0.0175 (тест: 0.534 и 0.0226 против 0.0413 у уверенности).
+- Гейт «не навреди» на отложенном тесте: покрытие не ниже `min_coverage`, риск не выше `alpha` с допуском и не хуже ранжирования по уверенности при том же покрытии. При отказе каскад фолбэчит на `DECISION_CASCADE_THRESHOLD`, `usage.reason = "conformal_gate"`, причина видна в `GET /info → engine.conformal_gate_worse`.
+- `GET /info → engine` при conformal-каскаде отдаёт `policy`, `conformal_alpha`, `conformal_delta`, `conformal_threshold`, `conformal_coverage`, `conformal_risk`, `conformal_upper_bound`, `conformal_calibration_n`, `conformal_gate`, `conformal_gate_worse` и `conformal_test` со срезом гейта и по-вопросными числами.
+- `DECISION_CONFORMAL_PATH` в `.env.example`, таблице переменных README и troubleshooting; английские `docs/en/conformal.md` и §9 в `docs/en/stability.md`.
+- Строка conformal в `docs/benchmarks.md` и тест контракта `tests/test_conformal_contract.py`; статистика границы и файла — `tests/test_conformal.py`.
+
+### Changed
+
+- Приоритет политик зафиксирован: benefit > conformal > risk-бюджет. `DECISION_CASCADE_POLICY=conformal` важнее `DECISION_CASCADE_RISK_BUDGET`, но уступает benefit.
+- `409 FEEDBACK_UNSUPPORTED` объясняет, что conformal-каскад с фиксированным сертификатом обратную связь не принимает.
+- `GET /info` conformal-каскада не смешивает risk-ключи (`risk_budget`, `risk_gate`) с conformal-параметрами.
+
+### Fixed
+
+- Подбор conformal-порога считается по кумулятивным счётчикам по вопросам, а не пересчитывает группы на каждом кандидате: на 10k решений это O(n), а не O(n²).
+
+### Compatibility
+
+- Ломающих изменений нет: `schema_version` остаётся `"1"`, смысл существующих переменных и формат паков прежние. Conformal-политика — новый режим; без `DECISION_CASCADE_POLICY=conformal` поведение сервиса не меняется.
+
 ## [1.6.0] — 2026-11-12
 
 ### Added
@@ -383,7 +408,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/slavabars/decision-cascade/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/slavabars/decision-cascade/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/slavabars/decision-cascade/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/slavabars/decision-cascade/compare/v1.3.0...v1.4.0

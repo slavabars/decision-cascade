@@ -12,7 +12,7 @@ Machine-native система принятия решений в духе **Jev 
 
 Вместо того чтобы заставлять LLM генерировать текст ответа, модель **решает**: state-состояние превращается в признаки, а головы решений возвращают **типизированные, вероятностные и калибруемые** ответы — Noul (да/нет), Choice (выбор из опций) и Score (оценка на шкале) — без единого токена генерации.
 
-**Статус: stable (1.6.0).** Контракт API (`schema_version = "1"`), формат паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major, с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие поверхности остаются beta и как объявляется депрекация — в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
+**Статус: stable (1.7.0).** Контракт API (`schema_version = "1"`), формат паков и смысл переменных `DECISION_*` не ломаются: изменения — только в major, с окном депрекации в две минорные версии. Что именно обещает `1.x`, какие поверхности остаются beta и как объявляется депрекация — в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
 
 ## Демо: две игры
 
@@ -321,6 +321,8 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_RISK_MODEL_PATH` | файл обученного оценщика `P(ошибка)` | `<checkpoint>/risk.json` |
 | `DECISION_RISK_FEW_SHOT_N` | примеров до переобучения риск-модели под вопрос (`>= 2`; `0`/`1` — выключено) | `10` |
 | `DECISION_RISK_GATE_DELTA` | допуск к сертификату hard gate (`> 0` ослабляет, `< 0` ужесточает) | `0.0` |
+| `DECISION_CASCADE_POLICY` | политика эскалации: `""`/`threshold`/`confidence`, `benefit`, `conformal` | `""` (порог) |
+| `DECISION_CONFORMAL_PATH` | файл conformal-сертификата (порог с гарантией доли ошибок) | `<checkpoint>/conformal.json` |
 | `DECISION_VISION_MODEL_ID` | CLIP/SigLIP для локальных `images` | — (без vision) |
 | `DECISION_VISION_DIM` | размерность признаков vision-энкодера (1–8192) | `512` |
 | `DECISION_MEDIA_ROOT` | allow-list каталог для чтения `images`/`videos` с диска | — (любой путь) |
@@ -464,6 +466,27 @@ curl -s -X POST http://127.0.0.1:8000/v1/feedback -H 'Content-Type: application/
 `retrained = false` — модель не переобучается, меняется только оценка качества внешней модели; новое `q` сразу применяется к следующим решениям. `W` — это сколько наблюдений нужно, чтобы сдвинуть оценку: 50 (по умолчанию) — поток фидбэка меняет политику за десятки ответов, пара случайных — нет.
 
 Политика видна в `GET /info → engine`: `policy`, `remote_accuracy` и `remote_accuracy_default`, стоимости `escalation_cost`/`error_cost`, `feedback_shrinkage`, пороги `benefit_threshold`/`benefit_thresholds` и накопленный фидбэк `benefit_feedback`. Benefit важнее risk-бюджета: если заданы обе настройки, работает benefit, и файл `risk.json` не нужен. Неизвестная политика и недопустимая граница `q` — ошибка старта, а не молчаливый откат на порог уверенности. Контракт зафиксирован в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md) §8.
+
+**Conformal-эскалация (гарантия доли ошибок).** Порог уверенности и бюджет ошибок говорят, чего мы **хотим**, но не с какой вероятностью это выдержит на новых данных. Conformal-политика даёт обещание: с вероятностью `1 − delta` доля ошибок среди локально принятых решений не выше `alpha`, причём по каждому вопросу одновременно (уровень делится по Бонферрони). Порог берётся из сертификата `conformal.json`, посчитанного на отложенной калибровке: split-conformal плюс точная верхняя граница Клоппера–Пирсона. Если данных не хватает, сертификат честно отдаёт покрытие 0, а не выдумывает порог:
+
+```bash
+# сертификат: alpha=0.1, delta=0.1, покрытие не ниже 0.5
+python -m eval.conformal.run --specs public --encoder openai-community/gpt2 \
+    --dim 768 --train-steps 300 --limit 16000 \
+    --alpha 0.1 --delta 0.1 --min-coverage 0.5 \
+    --out-dir data/conformal_public
+```
+
+```bash
+DECISION_BACKEND=cascade \
+DECISION_CASCADE_POLICY=conformal \
+DECISION_CONFORMAL_PATH=data/conformal_public/conformal.json \
+DECISION_RISK_MODEL_PATH=checkpoints/risk.json \
+DECISION_CASCADE_FALLBACK_URL=http://127.0.0.1:30000 \
+  uvicorn api.server.main:app --port 8000
+```
+
+На публичном наборе с gpt2 сертификат даёт покрытие 0.915 при риске 0.0711 и верхней границе 0.0999 (`alpha=0.1`); на тесте — покрытие 0.918 и риск 0.0785. Строгий `alpha=0.05` держит покрытие 0.547 при риске 0.0175, а на тесте — 0.534 при риске 0.0226 против 0.0413 у ранжирования по уверенности. Сертификат несёт вердикт гейта «не навреди»: если на тесте порог хуже уверенности или не добирает покрытие, каскад фолбэчит на `DECISION_CASCADE_THRESHOLD`, `usage.reason = "conformal_gate"`, причина видна в `GET /info → engine.conformal_gate_worse`. Conformal важнее risk-бюджета, но уступает benefit; обратную связь такой каскад не принимает (`409 FEEDBACK_UNSUPPORTED`). Методика, числа и ограничения — в [`docs/conformal.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/conformal.md), контракт — в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md) §9.
 
 **Подстройка под новый вопрос (`POST /v1/feedback`).** На новом вопросе коэффициенты, снятые с других вопросов, работают хуже — модель нужно переобучать на примерах этого вопроса. Сервис принимает обратную связь: вы повторяете решение, которое вам отдали, и говорите, верным ли оно было; набрав `DECISION_RISK_FEW_SHOT_N` примеров (по умолчанию 10), каскад переобучает модель и применяет её к этому вопросу:
 

@@ -279,6 +279,22 @@ def create_backend(service: DecisionService | None = None) -> Backend:
     return LocalHeadsBackend(service or create_service())
 
 
+def _load_risk_model(reason: str):
+    """Прочитать оценщик ``P(ошибка)``; отсутствие файла — ошибка старта."""
+    from src.risk import ErrorRiskModel
+
+    model_path = os.environ.get("DECISION_RISK_MODEL_PATH") or str(
+        Path(os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR))
+        / "risk.json"
+    )
+    if not Path(model_path).exists():
+        raise RuntimeError(
+            f"{reason} requires a fitted risk model at {model_path} "
+            "(set DECISION_RISK_MODEL_PATH or train it via python -m eval.risk.run)"
+        )
+    return ErrorRiskModel.load(model_path)
+
+
 def create_cascade_backend(service: DecisionService | None = None) -> CascadeBackend:
     """Локальные головы как primary, внешний SystemOne как fallback.
 
@@ -304,6 +320,16 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     benefit важнее risk-бюджета: если заданы обе, работает benefit. Неизвестная
     политика и недопустимая граница ``q`` — ошибка старта, а не молчаливый
     откат на порог уверенности (контракт — ``docs/stability.md`` §8).
+
+    ``DECISION_CASCADE_POLICY=conformal`` включает conformal-каскад: порог на
+    ``P(ошибка)`` берётся из сертификата ``DECISION_CONFORMAL_PATH`` (по
+    умолчанию ``<DECISION_CHECKPOINT_DIR>/conformal.json``), посчитанного на
+    отложенной калибровке с гарантией доли ошибок среди принятых. Нужен и
+    оценщик ``P(ошибка)`` (``DECISION_RISK_MODEL_PATH``). Если гейт сертификата
+    отклонён, каскад фолбэчит на ``DECISION_CASCADE_THRESHOLD`` с причиной
+    ``conformal_gate``. Conformal важнее risk-бюджета, но уступает benefit.
+    Обратную связь conformal-каскад не принимает (контракт —
+    ``docs/stability.md`` §9).
     """
     url = os.environ.get("DECISION_CASCADE_FALLBACK_URL")
     if not url:
@@ -321,10 +347,17 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     )
     threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
     policy = os.environ.get("DECISION_CASCADE_POLICY", "").strip().lower()
-    if policy not in {"", "threshold", "confidence", "benefit", "benefit-aware"}:
+    if policy not in {
+        "",
+        "threshold",
+        "confidence",
+        "benefit",
+        "benefit-aware",
+        "conformal",
+    }:
         raise RuntimeError(
             "DECISION_CASCADE_POLICY must be one of '', 'threshold', "
-            f"'confidence', 'benefit', 'benefit-aware'; got {policy!r}"
+            f"'confidence', 'benefit', 'benefit-aware', 'conformal'; got {policy!r}"
         )
     if policy in {"benefit", "benefit-aware"}:
         raw_accuracy = os.environ.get("DECISION_CASCADE_REMOTE_ACCURACY")
@@ -361,22 +394,35 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
                 os.environ.get("DECISION_CASCADE_FEEDBACK_SHRINKAGE", "50")
             ),
         )
+    if policy == "conformal":
+        from src.backends.conformal import ConformalCascadeBackend
+        from src.conformal import load_certificate
+
+        certificate_path = os.environ.get("DECISION_CONFORMAL_PATH") or str(
+            Path(
+                os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
+            )
+            / "conformal.json"
+        )
+        if not Path(certificate_path).exists():
+            raise RuntimeError(
+                "DECISION_CASCADE_POLICY=conformal requires a certificate at "
+                f"{certificate_path} (set DECISION_CONFORMAL_PATH or fit it via "
+                "python -m eval.conformal.run)"
+            )
+        return ConformalCascadeBackend(
+            primary,
+            fallback,
+            _load_risk_model("DECISION_CASCADE_POLICY=conformal"),
+            load_certificate(certificate_path),
+            fallback_threshold=threshold,
+        )
     risk_budget = os.environ.get("DECISION_CASCADE_RISK_BUDGET")
     if risk_budget is not None:
         from src.backends.cascade import RiskAwareCascadeBackend
-        from src.risk import RISK_FEW_SHOT_MIN_N, ErrorRiskModel, gate_verdict
+        from src.risk import RISK_FEW_SHOT_MIN_N, gate_verdict
 
-        model_path = os.environ.get("DECISION_RISK_MODEL_PATH") or str(
-            Path(os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR))
-            / "risk.json"
-        )
-        if not Path(model_path).exists():
-            raise RuntimeError(
-                "DECISION_CASCADE_RISK_BUDGET requires a fitted risk model at "
-                f"{model_path} (set DECISION_RISK_MODEL_PATH or train it via "
-                "python -m eval.risk.run)"
-            )
-        risk_model = ErrorRiskModel.load(model_path)
+        risk_model = _load_risk_model("DECISION_CASCADE_RISK_BUDGET")
         gate_delta = float(os.environ.get("DECISION_RISK_GATE_DELTA", "0.0"))
         gate_accepted, gate_worse = gate_verdict(risk_model.gate, gate_delta)
         if not gate_accepted:
@@ -662,7 +708,8 @@ def _feedback_unsupported() -> JSONResponse:
                     "(DECISION_BACKEND=cascade with DECISION_CASCADE_POLICY=benefit "
                     "and DECISION_CASCADE_REMOTE_ACCURACY) or few-shot risk "
                     "retraining (DECISION_CASCADE_RISK_BUDGET with "
-                    "DECISION_RISK_FEW_SHOT_N >= 2)"
+                    "DECISION_RISK_FEW_SHOT_N >= 2); a conformal cascade uses a "
+                    "fixed certificate and does not accept feedback"
                 ),
             }
         },
@@ -683,7 +730,8 @@ def _engine_info(backend: Backend) -> dict[str, Any] | None:
             "fallback": _engine_info(fallback) if fallback is not None else None,
         }
         risk_budget = getattr(backend, "risk_budget", None)
-        if risk_budget is not None:
+        conformal_info = getattr(backend, "conformal_info", None)
+        if risk_budget is not None and not callable(conformal_info):
             info["risk_budget"] = risk_budget
             # видно ли в /info, что hard gate отклонил риск-вариант
             info["risk_gate"] = (
@@ -696,6 +744,8 @@ def _engine_info(backend: Backend) -> dict[str, Any] | None:
                 info["risk_few_shot"] = getattr(
                     backend, "few_shot_questions", []
                 )
+        if callable(conformal_info):
+            info.update(conformal_info())
         benefit_info = getattr(backend, "benefit_info", None)
         if callable(benefit_info):
             info.update(benefit_info())
@@ -826,7 +876,8 @@ def submit_feedback(req: FeedbackRequest) -> FeedbackResponse | JSONResponse:
 
     Отвечает ``409 FEEDBACK_UNSUPPORTED``, если бэкенд не принимает обратную
     связь: каскад не выбран, риск-вариант с few-shot выключен
-    (``DECISION_RISK_FEW_SHOT_N`` < 2) или это обычный порог уверенности.
+    (``DECISION_RISK_FEW_SHOT_N`` < 2), это обычный порог уверенности или
+    conformal-каскад с фиксированным сертификатом.
     """
     if not backend.capabilities.accepts_feedback:
         return _feedback_unsupported()

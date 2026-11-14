@@ -82,6 +82,17 @@ if [[ -f checkpoints/reference/temperature.json ]]; then
   cp checkpoints/reference/temperature.json "$root/calibration/reference.json"
 fi
 
+# Conformal-сертификаты: числа из docs/conformal.md и docs/benchmarks.md.
+shopt -s nullglob
+for d in data/conformal*/; do
+  [[ -f "$d/metrics.json" ]] || continue
+  name="$(basename "$d")"
+  mkdir -p "$root/conformal/$name"
+  cp "$d/metrics.json" "$root/conformal/$name/"
+  [[ -f "$d/conformal.json" ]] && cp "$d/conformal.json" "$root/conformal/$name/"
+done
+shopt -u nullglob
+
 cat > "$root/README.md" <<'EOF'
 # Прогоны сравнения с Clef-Flash и Laya
 
@@ -105,6 +116,9 @@ cat > "$root/README.md" <<'EOF'
 - `calibration/<pack>.json` — `temperature.json`: подобранные `T`,
   метрики до/после на val и test, список голов, отклонённых гейтом
   «не навреди».
+- `conformal/<run>/conformal.json` и `metrics.json` — сертификат
+  selective prediction, срез гейта «не навреди» на отложенном тесте и
+  по-вопросная статистика (`python -m eval.conformal.run`).
 - `manifest.json` — размеры и sha256 файлов.
 
 ## Окружение

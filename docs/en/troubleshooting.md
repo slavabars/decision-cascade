@@ -24,7 +24,7 @@ All errors are JSON `{"error": {"code": ..., "message": ...}}`.
 | `UNTRAINED_HEADS` | 409 | there is no trained pack for the question set, and `DECISION_UNTRAINED=refuse`/`auto` with an explicit `DECISION_CHECKPOINT_DIR` |
 | `MODALITY_NOT_SUPPORTED` | 422 | `images`/`videos` arrived at `/v1/systemone`, but the backend cannot handle them |
 | `BACKEND_UNAVAILABLE` | 502 | the external SystemOne did not answer within the `DECISION_BACKEND_TIMEOUT` budget (all retries exhausted) |
-| `FEEDBACK_UNSUPPORTED` | 409 | `/v1/feedback` was called without a cascade, without `DECISION_CASCADE_RISK_BUDGET`, or with `DECISION_RISK_FEW_SHOT_N < 2` |
+| `FEEDBACK_UNSUPPORTED` | 409 | `/v1/feedback` was called without a cascade, without `DECISION_CASCADE_RISK_BUDGET`, with `DECISION_RISK_FEW_SHOT_N < 2`, or with a conformal cascade whose certificate is fixed |
 | `INVALID_QUESTION` | 422 | a question from `/v1/systemone` could not be converted into a spec |
 | `422` (FastAPI) | 422 | the request body failed pydantic validation (see §4) |
 
@@ -119,7 +119,7 @@ journalctl -u decision-api@api -n 50 --no-pager | grep -i unavailable
 - `DECISION_BACKEND=cascade` + `DECISION_CASCADE_RISK_BUDGET` + `DECISION_RISK_FEW_SHOT_N >= 2` — few-shot retraining of the risk model;
 - `DECISION_BACKEND=cascade` + `DECISION_CASCADE_POLICY=benefit` — refining the external model accuracy `q`.
 
-Check `/info` → `accepts_feedback`. A plain confidence threshold does not accept feedback.
+The conformal cascade (`DECISION_CASCADE_POLICY=conformal`) does **not** accept feedback: the certificate is a property of the calibration sample, and retraining the threshold without recomputing the bound would break the guarantee. Check `/info` → `accepts_feedback`. A plain confidence threshold does not accept feedback either.
 
 ## 8. The cascade does not start: no `q`, risk model or URL
 
@@ -130,9 +130,11 @@ These are configuration errors at startup (the process does not come up), not HT
 | `DECISION_BACKEND=http requires DECISION_BACKEND_URL` | set the external SystemOne URL |
 | `DECISION_BACKEND=cascade requires DECISION_CASCADE_FALLBACK_URL` | set the fallback URL |
 | `DECISION_CASCADE_POLICY=benefit requires DECISION_CASCADE_REMOTE_ACCURACY` | fit `q`: `python -m eval.competitors.fit_remote_accuracy ...`, put the JSON/number into the variable |
-| `DECISION_CASCADE_POLICY must be one of ...` | a typo in the policy: `""`, `threshold`, `confidence`, `benefit` or `benefit-aware` |
+| `DECISION_CASCADE_POLICY must be one of ...` | a typo in the policy: `""`, `threshold`, `confidence`, `benefit`, `benefit-aware` or `conformal` |
 | `DECISION_CASCADE_REMOTE_ACCURACY_BOUND must be 'point' or 'lower'` | a typo in the `q` bound; only `point` and `lower` are accepted |
 | `DECISION_CASCADE_RISK_BUDGET requires a fitted risk model at ...` | train `risk.json` (`python -m eval.risk.run`) or point `DECISION_RISK_MODEL_PATH` at it |
+| `DECISION_CASCADE_POLICY=conformal requires a certificate at ...` | fit the certificate (`python -m eval.conformal.run`) or set `DECISION_CONFORMAL_PATH` |
+| `DECISION_CASCADE_POLICY=conformal requires a fitted risk model at ...` | train `risk.json` (`python -m eval.risk.run`) or point `DECISION_RISK_MODEL_PATH` at it |
 | `DECISION_UNTRAINED must be one of (...)` | `allow`, `refuse`, `fallback` or `auto` |
 
 ## 9. `/ready` answers `503`

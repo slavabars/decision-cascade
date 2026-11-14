@@ -12,7 +12,7 @@ A local, machine-native decision engine in the spirit of **Jev (TypeSafe AI)** �
 
 Instead of asking an LLM to generate an answer, the model **decides**: a state becomes features, and decision heads return **typed, probabilistic, calibrated** answers — Noul (yes/no), Choice (pick an option), Score (value on a scale) — without generating a single token.
 
-**Status: stable (1.6.0).** The API contract (`schema_version = "1"`), the pack format and the meaning of `DECISION_*` variables do not break inside `1.x`: changes land only in a major, with a two-minor deprecation window. What exactly is promised, which surfaces are still beta and how deprecation is announced — see [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
+**Status: stable (1.7.0).** The API contract (`schema_version = "1"`), the pack format and the meaning of `DECISION_*` variables do not break inside `1.x`: changes land only in a major, with a two-minor deprecation window. What exactly is promised, which surfaces are still beta and how deprecation is announced — see [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
 
 ## Demo: two games
 
@@ -174,6 +174,7 @@ The contract, deployment, troubleshooting and risk-aware cascade docs are availa
 | --- | --- |
 | [`docs/en/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/stability.md) | what `1.x` promises, beta surfaces, deprecation policy |
 | [`docs/en/risk-aware-cascade.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/risk-aware-cascade.md) | error-budget cascade, hard gate, `risk.json`, reference numbers |
+| [`docs/en/conformal.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/conformal.md) | conformal selective prediction, `conformal.json` certificate, "do no harm" gate |
 | [`docs/en/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/deploy.md) | Ubuntu/CentOS install, upgrade, backup, rollback |
 | [`docs/en/troubleshooting.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/troubleshooting.md) | error codes and known failure modes |
 | [`docs/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/benchmarks.md) (Russian) | competitor comparison, cascade policies, calibration |

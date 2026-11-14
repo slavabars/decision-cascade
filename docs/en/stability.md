@@ -4,7 +4,7 @@
 
 The project has been stable since `1.0.0`. Every exit criterion is closed and has been checked automatically ever since, not just claimed: the API contract, the pack format and the meaning of `DECISION_*` variables do not break inside the `1.x` line — changes land only in a major, with a two-minor deprecation window.
 
-Stability is about the **contract and reproducibility**, not about universality: some surfaces (the option-scoring head, encoder fine-tuning and feedback retraining) remain beta — they are measured, but they depend on the domain and may change in minor releases. The risk-aware cascade is stable since `1.1`: its contract is described in §7. The benefit cascade is stable since `1.6`: its contract is described in §8. The full list is in §2.
+Stability is about the **contract and reproducibility**, not about universality: some surfaces (the option-scoring head, encoder fine-tuning and feedback retraining) remain beta — they are measured, but they depend on the domain and may change in minor releases. The risk-aware cascade is stable since `1.1`: its contract is described in §7. The benefit cascade is stable since `1.6`: its contract is described in §8. The conformal cascade is stable since `1.7`: its contract is described in §9. The full list is in §2.
 
 ## 1. What "stable" means for this project
 
@@ -30,6 +30,7 @@ Stability does **not** mean: universality (zero-shot), beating LLMs in open doma
 | Confidence threshold (`DECISION_CASCADE_THRESHOLD`) | stable | the default policy |
 | Risk-aware cascade (`DECISION_CASCADE_RISK_BUDGET`) | stable since 1.1 | §7 contract: variables, `/info`, `usage.reason`, `/v1/feedback`, hard gate |
 | Benefit cascade (`DECISION_CASCADE_POLICY=benefit`) | stable since 1.6 | §8 contract: variables, `/info`, `usage.reason`, `/v1/feedback`, precedence over the risk budget |
+| Conformal cascade (`DECISION_CASCADE_POLICY=conformal`) | stable since 1.7 | §9 contract: `conformal.json` certificate, `/info`, `usage.reason`, hard gate, no feedback |
 | Option-scoring head | beta | option transfer is measured, not used in the published packs |
 | Encoder fine-tuning (`finetune_encoder`) | beta | measured (+5 pp), weights ship as a release asset |
 | Feedback retraining (`training.feedback`) | beta | "do not harm" gate and drift numbers — `../drift.md` |
@@ -222,3 +223,56 @@ Same transport as the risk cascade, different meaning: the model is not retraine
 `q` is measured on a held-out slice of the domain, not on the same test where the gain is computed (`python -m eval.competitors.fit_remote_accuracy`). The JSON may contain `accuracy` (a single number) and `per_question` (a mapping), and with `..._BOUND=lower` — `accuracy_lower` and `per_question_lower`; if the lower bounds are missing, the point estimates are used. A question outside the mapping falls back to the mean over the configured questions.
 
 The contract is pinned by `tests/test_benefit_contract.py`, which also checks that the documentation and the code have not drifted apart.
+
+## 9. Conformal cascade contract (stable since 1.7)
+
+Enabled by the pair `DECISION_BACKEND=cascade` + `DECISION_CASCADE_POLICY=conformal`. The policy answers a question that neither the confidence threshold nor the error budget asks: **with what probability the share of errors among locally accepted decisions stays below `alpha` on new data**. The threshold comes not from a wish but from the `conformal.json` certificate fitted on a held-out calibration split: split conformal plus the exact Clopper–Pearson upper bound. The promise is given for every question simultaneously (the `delta` level is split between questions by Bonferroni), because decisions on different questions for the same state are correlated. Everything below is a `1.x` promise: changing it requires a major.
+
+### Environment variables
+
+| Variable | Meaning | Allowed values | Default |
+| --- | --- | --- | --- |
+| `DECISION_CASCADE_POLICY` | escalation policy | `conformal` enables the mode | `""` (threshold) |
+| `DECISION_CONFORMAL_PATH` | certificate file | path | `<DECISION_CHECKPOINT_DIR>/conformal.json` |
+| `DECISION_RISK_MODEL_PATH` | file of the `P(error)` estimator | path | `<DECISION_CHECKPOINT_DIR>/risk.json` |
+| `DECISION_CASCADE_THRESHOLD` | confidence threshold the rejected certificate falls back to | `0…1` | `0.6` |
+
+The conformal cascade needs **both** files: the certificate sets the threshold, the estimator computes `P(error)` for every decision. A missing file is a startup error with a hint on how to train the model and fit the certificate, not a silent fallback to the confidence threshold. `DECISION_CASCADE_POLICY=conformal` takes precedence over `DECISION_CASCADE_RISK_BUDGET` but yields to benefit: policy precedence is benefit > conformal > risk budget.
+
+### `GET /info -> engine`
+
+| Key | Type | When present |
+| --- | --- | --- |
+| `policy` | `"conformal"` | always with the conformal cascade |
+| `conformal_alpha` | float | always |
+| `conformal_delta` | float | always |
+| `conformal_threshold` | float | always: threshold on `P(error)` |
+| `conformal_coverage` | float | always: coverage on the calibration split |
+| `conformal_risk` | float or `null` | always: empirical error share on calibration |
+| `conformal_upper_bound` | float | always: Clopper–Pearson upper bound |
+| `conformal_calibration_n` | int | always: decisions in calibration |
+| `conformal_gate` | `"ok"` / `"rejected"` | always |
+| `conformal_gate_worse` | list of strings | always; empty when `"ok"` |
+| `conformal_test` | mapping | when the certificate carried a test gate slice |
+
+`conformal_test` contains `n`, `coverage`, `risk`, `accuracy`, `baseline_risk` and `groups` — per-question `n`, `accepted`, `coverage`, `risk`. Keys may be added, but never renamed or removed; risk keys (`risk_budget`, `risk_gate`, …) do not appear in the `/info` of a conformal cascade.
+
+### `usage` in the decision response
+
+- `escalated` — how many questions went outside (int);
+- `reason` — `"conformal"` (threshold from the certificate) or `"conformal_gate"` (certificate rejected, escalation by `DECISION_CASCADE_THRESHOLD`); the field appears only on escalation;
+- `fallback` — `usage` of the external call.
+
+### Hard gate
+
+The certificate carries the "do no harm" verdict measured on the held-out test: coverage is at least `min_coverage`, risk is at most `alpha` with a tolerance and no worse than ranking by confidence at the same coverage. If the verdict is `accepted = false`, the conformal threshold is **not applied**: escalation follows `DECISION_CASCADE_THRESHOLD`, `reason = "conformal_gate"`. The gate cannot be relaxed by an environment variable — only by refitting the certificate on data where it passes.
+
+### `POST /v1/feedback`
+
+The conformal cascade does **not** accept feedback: the certificate is a property of the calibration sample, and "retraining" the threshold without recomputing the bound would break the promise. The endpoint returns `409 FEEDBACK_UNSUPPORTED`, and `GET /info -> accepts_feedback` shows `false`.
+
+### `conformal.json`
+
+Fields `schema_version = "1"`, `method = "split_conformal_clopper_pearson"`, `score = "p_error"`, `alpha`, `delta`, `n`, `min_coverage`, `threshold`, `accepted`, `coverage`, `empirical_risk`, `upper_bound`, `groups` (per-question calibration statistics) and `gate` (test verdict). The certificate is fitted by `python -m eval.conformal.run`; production only reads the finished file and does no statistics on the inference path. With zero coverage the certificate honestly refuses: `threshold = -1.0`, no decision is accepted locally.
+
+The contract is pinned by `tests/test_conformal_contract.py`, which also checks that the documentation and the code have not drifted apart.

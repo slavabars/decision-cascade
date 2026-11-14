@@ -263,6 +263,7 @@ ENGLISH_DOCS = (
     "deploy",
     "troubleshooting",
     "risk-aware-cascade",
+    "conformal",
 )
 
 

@@ -24,7 +24,7 @@ journalctl -u decision-api@api -n 100 --no-pager
 | `UNTRAINED_HEADS` | 409 | под набор вопросов нет обученного пака, а `DECISION_UNTRAINED=refuse`/`auto` с явным `DECISION_CHECKPOINT_DIR` |
 | `MODALITY_NOT_SUPPORTED` | 422 | в `/v1/systemone` пришли `images`/`videos`, а бэкенд их не умеет |
 | `BACKEND_UNAVAILABLE` | 502 | внешний SystemOne не ответил за бюджет `DECISION_BACKEND_TIMEOUT` (все retry исчерпаны) |
-| `FEEDBACK_UNSUPPORTED` | 409 | `/v1/feedback` вызван без каскада, без `DECISION_CASCADE_RISK_BUDGET` или с `DECISION_RISK_FEW_SHOT_N < 2` |
+| `FEEDBACK_UNSUPPORTED` | 409 | `/v1/feedback` вызван без каскада, без `DECISION_CASCADE_RISK_BUDGET`, с `DECISION_RISK_FEW_SHOT_N < 2` или с conformal-каскадом, у которого сертификат фиксирован |
 | `INVALID_QUESTION` | 422 | вопрос из `/v1/systemone` не удалось преобразовать в спеку |
 | `422` (FastAPI) | 422 | тело запроса не прошло pydantic-валидацию (см. §4) |
 
@@ -119,7 +119,7 @@ journalctl -u decision-api@api -n 50 --no-pager | grep -i unavailable
 - `DECISION_BACKEND=cascade` + `DECISION_CASCADE_RISK_BUDGET` + `DECISION_RISK_FEW_SHOT_N >= 2` — few-shot переобучение риск-модели;
 - `DECISION_BACKEND=cascade` + `DECISION_CASCADE_POLICY=benefit` — уточнение точности внешней модели `q`.
 
-Проверьте `/info` → `accepts_feedback`. Обычный порог уверенности обратную связь не принимает.
+Conformal-каскад (`DECISION_CASCADE_POLICY=conformal`) обратную связь **не принимает**: сертификат — свойство калибровочной выборки, и дообучение порога без пересчёта границы сломало бы гарантию. Проверьте `/info` → `accepts_feedback`. Обычный порог уверенности обратную связь тоже не принимает.
 
 ## 8. Каскад не стартует: нет `q`, риск-модели или URL
 
@@ -130,9 +130,11 @@ journalctl -u decision-api@api -n 50 --no-pager | grep -i unavailable
 | `DECISION_BACKEND=http requires DECISION_BACKEND_URL` | задать URL внешнего SystemOne |
 | `DECISION_BACKEND=cascade requires DECISION_CASCADE_FALLBACK_URL` | задать fallback URL |
 | `DECISION_CASCADE_POLICY=benefit requires DECISION_CASCADE_REMOTE_ACCURACY` | снять `q`: `python -m eval.competitors.fit_remote_accuracy ...`, положить JSON/число в переменную |
-| `DECISION_CASCADE_POLICY must be one of ...` | опечатка в политике: `""`, `threshold`, `confidence`, `benefit` или `benefit-aware` |
+| `DECISION_CASCADE_POLICY must be one of ...` | опечатка в политике: `""`, `threshold`, `confidence`, `benefit`, `benefit-aware` или `conformal` |
 | `DECISION_CASCADE_REMOTE_ACCURACY_BOUND must be 'point' or 'lower'` | опечатка в границе `q`; допустимы только `point` и `lower` |
 | `DECISION_CASCADE_RISK_BUDGET requires a fitted risk model at ...` | обучить `risk.json` (`python -m eval.risk.run`) или указать `DECISION_RISK_MODEL_PATH` |
+| `DECISION_CASCADE_POLICY=conformal requires a certificate at ...` | посчитать сертификат (`python -m eval.conformal.run`) или указать `DECISION_CONFORMAL_PATH` |
+| `DECISION_CASCADE_POLICY=conformal requires a fitted risk model at ...` | обучить `risk.json` (`python -m eval.risk.run`) или указать `DECISION_RISK_MODEL_PATH` |
 | `DECISION_UNTRAINED must be one of (...)` | `allow`, `refuse`, `fallback` или `auto` |
 
 ## 9. `/ready` отвечает `503`
