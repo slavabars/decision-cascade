@@ -9,6 +9,8 @@
     python -m eval.nightly --suite ag_news --device cuda
     python -m eval.nightly --suite all --packs-root checkpoints/packs \\
         --out data/nightly/report.json
+    python -m eval.nightly --suite all --device cuda --latency-profile gpu \\
+        --latency fail
 """
 from __future__ import annotations
 
@@ -26,6 +28,8 @@ from src.device import resolve_device
 from src.encoder.factory import create_state_encoder
 
 SUITES = ("ag_news", "routerbench")
+#: Профиль бюджета латентности: у CPU и GPU разные числа и разный разброс.
+LATENCY_PROFILES = ("cpu", "gpu")
 DEFAULT_BASELINE = Path("eval/nightly_baseline.json")
 DEFAULT_PACKS = Path("checkpoints/packs")
 #: 4000 -> train 3200 / val 800 / test 1000, ровно сплиты опубликованных паков.
@@ -78,15 +82,21 @@ def within_tolerance(accuracy: float, expected: float, allowed: float) -> bool:
 
 
 def check_latency(
-    entry: dict[str, Any], latency_ms: dict[str, float]
+    entry: dict[str, Any],
+    latency_ms: dict[str, float],
+    profile: str = "cpu",
 ) -> dict[str, Any] | None:
-    """Сверяет измеренные p50/p95 с бюджетом набора (``entry["latency"]``).
+    """Сверяет измеренные p50/p95 с бюджетом набора для профиля устройства.
+
+    ``profile="cpu"`` берёт ``entry["latency"]``, ``"gpu"`` — ``entry["gpu_latency"]``:
+    абсолютные числа на CUDA на порядок меньше, и общий бюджет скрыл бы
+    деградацию (например, тихий откат на CPU).
 
     ``None`` — бюджета нет или метрик нет: это не ошибка, просто нечего
-    проверять. Допуск задаётся множителем, потому что CPU-раннеры дают разброс
+    проверять. Допуск задаётся множителем, потому что раннеры дают разброс
     в десятки процентов на одинаковом коде.
     """
-    budget = entry.get("latency")
+    budget = entry.get("latency" if profile == "cpu" else f"{profile}_latency")
     if not budget or not latency_ms:
         return None
     factor = float(budget.get("tolerance", 1.25))
@@ -104,6 +114,7 @@ def check_latency(
     if not checks:
         return None
     return {
+        "profile": profile,
         "checks": checks,
         "passed": all(item["passed"] for item in checks.values()),
     }
@@ -118,6 +129,7 @@ def check_suite(
     limit: int,
     seed: int,
     tolerance: float | None,
+    latency_profile: str = "cpu",
 ) -> dict[str, Any]:
     """Меряет один пак и сравнивает с базовой линией."""
     pack_dir = packs_root / entry["pack"]
@@ -128,7 +140,7 @@ def check_suite(
     allowed = float(entry.get("tolerance", 0.01) if tolerance is None else tolerance)
     delta = metrics["overall_accuracy"] - expected
     passed = within_tolerance(metrics["overall_accuracy"], expected, allowed)
-    latency = check_latency(entry, metrics.get("latency_ms", {}))
+    latency = check_latency(entry, metrics.get("latency_ms", {}), latency_profile)
     return {
         "suite": suite,
         "pack": entry["pack"],
@@ -166,6 +178,12 @@ def main(argv: list[str] | None = None) -> int:
         help="проверка бюджета латентности: off — не считать, warn — печатать, "
         "fail — ронять job (в ночном workflow)",
     )
+    parser.add_argument(
+        "--latency-profile",
+        choices=list(LATENCY_PROFILES),
+        default="cpu",
+        help="чей бюджет сверять: cpu (ключ latency) или gpu (ключ gpu_latency)",
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -175,6 +193,11 @@ def main(argv: list[str] | None = None) -> int:
     missing = [suite for suite in selected if suite not in baseline]
     if missing:
         parser.error(f"baseline has no entry for {missing}")
+    if args.latency != "off" and args.latency_profile != "cpu":
+        budget_key = f"{args.latency_profile}_latency"
+        unbudgeted = [suite for suite in selected if not baseline[suite].get(budget_key)]
+        if unbudgeted:
+            parser.error(f"baseline has no {budget_key} budget for {unbudgeted}")
 
     device = resolve_device(args.device)
     results: list[dict[str, Any]] = []
@@ -187,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             seed=args.seed,
             tolerance=args.tolerance,
+            latency_profile=args.latency_profile,
         )
         results.append(result)
         status = "PASS" if result["passed"] else "REGRESSION"
@@ -220,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         "limit": args.limit,
         "seed": args.seed,
         "latency_mode": args.latency,
+        "latency_profile": args.latency_profile,
         "latency_passed": latency_passed,
         "suites": results,
         "passed": all(result["passed"] for result in results),

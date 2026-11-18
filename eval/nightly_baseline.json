@@ -9,6 +9,11 @@
       "p50_ms": 500,
       "p95_ms": 700,
       "tolerance": 1.3
+    },
+    "gpu_latency": {
+      "p50_ms": 50,
+      "p95_ms": 100,
+      "tolerance": 1.5
     }
   },
   "routerbench": {
@@ -20,6 +25,11 @@
       "p50_ms": 1300,
       "p95_ms": 1750,
       "tolerance": 1.3
+    },
+    "gpu_latency": {
+      "p50_ms": 80,
+      "p95_ms": 160,
+      "tolerance": 1.5
     }
   }
 }

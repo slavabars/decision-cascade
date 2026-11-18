@@ -1,0 +1,90 @@
+name: Nightly quality (GPU)
+
+# Тот же регресс, что и в nightly.yml, но на CUDA: качество на паках релиза
+# и бюджет латентности для GPU (ключ gpu_latency в eval/nightly_baseline.json).
+# GitHub-хостеры GPU не дают, поэтому job идёт на self-hosted раннере с меткой
+# gpu: [self-hosted, linux, x64, gpu].
+#
+# Включение: Settings → Secrets and variables → Actions → Variables →
+# NIGHTLY_GPU_ENABLED=true. Пока переменная не задана, job пропускается и не
+# висит в очереди на раннере, которого нет.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-gpu-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality-gpu:
+    if: vars.NIGHTLY_GPU_ENABLED == 'true'
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # venv в рабочем каталоге раннера: окружение не протекает в системный
+      # python, а pip-кэш переживает прогоны. CUDA-сборку torch ставим из PyPI
+      # как есть — на GPU-хосте нужна именно она.
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+
+      # Без CUDA ночной GPU-прогон бессмысленен: лучше упасть здесь с внятным
+      # сообщением, чем померить CPU и назвать это GPU-бюджетом.
+      - name: Check CUDA
+        run: |
+          .venv/bin/python - <<'PY'
+          import torch
+
+          if not torch.cuda.is_available():
+              raise SystemExit(
+                  "CUDA is not available: install a CUDA torch build on the runner"
+              )
+          print("device:", torch.cuda.get_device_name(0))
+          PY
+
+      # Паки берём из последнего релиза — того же артефакта, что получают
+      # пользователи. Нужен gh CLI, авторизованный через GH_TOKEN.
+      - name: Download published packs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist checkpoints/packs
+          gh release download --pattern '*-weights.tar.gz' --dir dist
+          tar -xzf dist/*-weights.tar.gz -C checkpoints/packs --strip-components=1
+          ls -1 checkpoints/packs
+
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-nightly-gpu-${{ runner.os }}-gpt2-v1
+
+      # --latency-profile gpu: сверяем с gpu_latency (p50/p95 для CUDA). CPU-бюджет
+      # на порядок больше измеренных GPU-чисел и скрыл бы деградацию.
+      # --latency fail: выход за бюджет делает job красным.
+      - name: Quality and latency regression on CUDA
+        run: |
+          .venv/bin/python -m eval.nightly --suite all --device cuda \
+            --latency-profile gpu --latency fail --out data/nightly/gpu-report.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-gpu-report
+          path: data/nightly/gpu-report.json
+          if-no-files-found: warn

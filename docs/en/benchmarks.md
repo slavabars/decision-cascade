@@ -150,3 +150,22 @@ Latency from the same run is checked against the budget in `eval/nightly_baselin
 | RouterBench | 1300 | 1750 | ×1.3 | p50 838–1235, p95 1121–1705 |
 
 Modes: `--latency off` (do not measure), `warn` (default: print and record in the report, job stays green) and `fail` (red in the nightly job).
+
+### GPU run
+
+CUDA has its own workflow, `.github/workflows/nightly-gpu.yml`: the same packs and splits, but `--device cuda --latency-profile gpu --latency fail`. GitHub-hosted runners have no GPU, so the job runs on a self-hosted runner labelled `[self-hosted, linux, x64, gpu]`; until the repository variable `NIGHTLY_GPU_ENABLED` is `true`, the job is skipped instead of queueing for a runner that does not exist.
+
+The GPU budget lives in the same `eval/nightly_baseline.json`, under the `gpu_latency` key: CPU numbers are an order of magnitude larger and would hide degradation (a silent fallback to CPU, for example). Measured on an RTX 5060 Ti (float32, `max_length=256`), tolerance ×1.5:
+
+| Dataset | p50, ms | p95, ms | tolerance | observed |
+| --- | ---: | ---: | ---: | --- |
+| AG News | 50 | 100 | ×1.5 | p50 9, p95 13–14 |
+| RouterBench | 80 | 160 | ×1.5 | p50 20–21, p95 25–27 |
+
+Accuracy on GPU matches CPU to the last digit (0.8800 and 0.5480): same float32 and the same weights, only speed changes. The run checks the CUDA path itself — that it works, has not slowed down and is not silently replaced by CPU. Locally:
+
+```bash
+python -m eval.nightly --suite all --device cuda --latency-profile gpu --latency fail
+```
+
+The runner is registered as a regular self-hosted one (Settings → Actions → Runners → New self-hosted runner) with the `gpu` label; it needs a CUDA torch build, the `gh` CLI and Python 3.11. Without a runner the job is simply skipped — the CPU nightly does not depend on it.

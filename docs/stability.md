@@ -71,7 +71,7 @@
 
 6. ✅ Политика депрекации опубликована (§5): реестр `api/server/deprecation.py`, заголовки `Deprecation`/`Sunset`/`Link`, предупреждение в лог один раз за процесс, проверка «не раньше +2 минорные» на старте и в тестах.
 7. ✅ Эталонный пак `tests/fixtures/pack_v0.8.0.pt` (собран кодом тега `v0.8.0`) читается текущей версией и отдаёт решения — `tests/test_pack_compat.py`.
-8. ✅ Ночной job `.github/workflows/nightly.yml`: паки из последнего релиза, AG News и RouterBench на закреплённых ревизиях и сидах, падение при регрессе больше 1 п.п., плюс бюджет латентности p50/p95 (`--latency fail`) и запуск на `push` в `main` по путям кода решений (`eval/nightly.py`, `eval/nightly_baseline.json`).
+8. ✅ Ночной job `.github/workflows/nightly.yml`: паки из последнего релиза, AG News и RouterBench на закреплённых ревизиях и сидах, падение при регрессе больше 1 п.п., плюс бюджет латентности p50/p95 (`--latency fail`) и запуск на `push` в `main` по путям кода решений (`eval/nightly.py`, `eval/nightly_baseline.json`). Отдельный GPU-прогон `.github/workflows/nightly-gpu.yml` проверяет тот же регресс на CUDA с бюджетом `gpu_latency`.
 9. ✅ Upgrade/rollback: `deploy/upgrade.sh` (бэкап → `git pull` → venv → restart → `/ready`, авто-откат данных и кода), `deploy/backup.sh`, `deploy/restore.sh`; паритет Ubuntu/CentOS проверяется `distro_from_release` на временных `os-release`, а полный цикл прогнан вживую на Ubuntu 24.04 и CentOS Stream 9 (`docs/deploy.md` §5).
 10. ✅ Troubleshooting: `docs/troubleshooting.md` — все коды ошибок API, `/ready` 503, отсутствие `q`, несовпадение `choice_head`/`dim`.
 11. ✅ Аккуратное завершение: `KillSignal=SIGTERM`, `TimeoutStopSec=30`, `--timeout-graceful-shutdown 30`; контракт закреплён `tests/test_graceful_shutdown.py`.

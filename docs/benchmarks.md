@@ -150,3 +150,22 @@ Job запускается не только по расписанию, но и 
 | RouterBench | 1300 | 1750 | ×1.3 | p50 838–1235, p95 1121–1705 |
 
 Режимы: `--latency off` (не считать), `warn` (по умолчанию: напечатать и записать в отчёт, job зелёный) и `fail` (в ночном job — красный).
+
+### GPU-прогон
+
+У CUDA отдельный workflow — `.github/workflows/nightly-gpu.yml`: те же паки и сплиты, но `--device cuda --latency-profile gpu --latency fail`. GitHub-хостеры GPU не дают, поэтому job идёт на self-hosted раннере с метками `[self-hosted, linux, x64, gpu]`; пока переменная репозитория `NIGHTLY_GPU_ENABLED` не равна `true`, job пропускается и не висит в очереди без раннера.
+
+Бюджет для GPU лежит в том же `eval/nightly_baseline.json`, но в ключе `gpu_latency`: CPU-числа на порядок больше и скрыли бы деградацию (например, тихий откат на CPU). Измерено на RTX 5060 Ti (float32, `max_length=256`), допуск ×1.5:
+
+| Набор | p50, мс | p95, мс | допуск | наблюдалось |
+| --- | ---: | ---: | ---: | --- |
+| AG News | 50 | 100 | ×1.5 | p50 9, p95 13–14 |
+| RouterBench | 80 | 160 | ×1.5 | p50 20–21, p95 25–27 |
+
+Точность на GPU совпадает с CPU до последнего знака (0.8800 и 0.5480): float32 и одни и те же веса, меняется только скорость. Прогон проверяет именно CUDA-путь — что он работает, не деградировал по латентности и не подменяется CPU. Локально:
+
+```bash
+python -m eval.nightly --suite all --device cuda --latency-profile gpu --latency fail
+```
+
+Раннер регистрируется как обычный self-hosted (Settings → Actions → Runners → New self-hosted runner) с меткой `gpu`; на нём нужны CUDA-сборка torch, `gh` CLI и Python 3.11. Если раннера нет, job просто пропускается — ночной CPU-прогон от этого не зависит.

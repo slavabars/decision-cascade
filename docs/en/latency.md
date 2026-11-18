@@ -85,7 +85,7 @@ Decision: **do not adopt**. A 1.35× speedup does not pay for a 2 pp loss on a s
 
 - CPU + `rubert-tiny2`: batch 8–16, `max_length=64–128`, `bfloat16` — single-digit milliseconds per state in a batch and tens of milliseconds for a single request.
 - CPU + gpt2: ~175 ms/state in a batch and 190–435 ms for a single request depending on truncation. This matches the nightly regression (p50 300–450 ms for three questions), so a `p95 < 1 s` budget on CPU is achievable only with truncation and batching.
-- GPU is an order of magnitude faster (p50 9–25 ms for gpt2 depending on truncation), and `float16`/`bfloat16` is the mandatory choice for GPU deployment. The nightly CPU budget and the production budget are different numbers; they must not be confused.
+- GPU is an order of magnitude faster (p50 9–25 ms for gpt2 depending on truncation), and `float16`/`bfloat16` is the mandatory choice for GPU deployment. Nightly budgets are split by profile: `--latency-profile cpu` checks against the CPU numbers, `gpu` against the `gpu_latency` key in `eval/nightly_baseline.json` (p50 50/80 ms, p95 100/160 ms). The production budget and both nightly ones are different numbers; they must not be confused.
 
 ## 7. Reproduction
 

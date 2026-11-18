@@ -178,3 +178,117 @@ def test_latency_off_mode_reports_none(tmp_path, monkeypatch):
     assert code == 0
     report = json.loads(out.read_text(encoding="utf-8"))
     assert report["latency_passed"] is None
+
+
+# --- GPU-профиль бюджета -----------------------------------------------------
+
+
+def test_baseline_has_gpu_latency_budget():
+    """У GPU свой бюджет: CPU-числа на порядок больше и скрыли бы деградацию."""
+    payload = json.loads(BASELINE.read_text(encoding="utf-8"))
+    for suite in nightly.SUITES:
+        entry = payload[suite]
+        gpu = entry["gpu_latency"]
+        assert 0 < gpu["p50_ms"] < gpu["p95_ms"]
+        assert gpu["tolerance"] >= 1.0
+        assert gpu["p50_ms"] < entry["latency"]["p50_ms"]
+        assert gpu["p95_ms"] < entry["latency"]["p95_ms"]
+
+
+def test_check_latency_selects_budget_by_profile():
+    entry = {
+        "latency": {"p50_ms": 500, "p95_ms": 700, "tolerance": 1.3},
+        "gpu_latency": {"p50_ms": 50, "p95_ms": 100, "tolerance": 1.5},
+    }
+    measured = {"p50": 60.0, "p95": 120.0}
+    cpu = nightly.check_latency(entry, measured)
+    gpu = nightly.check_latency(entry, measured, "gpu")
+    assert cpu["profile"] == "cpu"
+    assert gpu["profile"] == "gpu"
+    # 120 мс укладываются в GPU-бюджет (150) и с запасом в CPU-бюджет (910)
+    assert gpu["checks"]["p95_ms"]["limit_ms"] == pytest.approx(150.0)
+    assert cpu["checks"]["p95_ms"]["limit_ms"] == pytest.approx(910.0)
+    assert gpu["passed"] is True
+    # 120 мс при GPU-бюджете 100 без допуска — уже регресс
+    strict = {"gpu_latency": {"p50_ms": 50, "p95_ms": 80, "tolerance": 1.0}}
+    assert nightly.check_latency(strict, measured, "gpu")["passed"] is False
+
+
+def test_check_latency_gpu_without_budget_is_skipped():
+    entry = {"latency": {"p50_ms": 500, "p95_ms": 700, "tolerance": 1.3}}
+    assert nightly.check_latency(entry, {"p50": 10.0, "p95": 20.0}, "gpu") is None
+    assert nightly.check_latency(entry, {"p50": 10.0, "p95": 20.0}) is not None
+
+
+def test_main_records_latency_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly, "check_suite", _fake_check(True))
+    out = tmp_path / "report.json"
+    code = nightly.main(
+        ["--suite", "ag_news", "--latency-profile", "gpu", "--out", str(out)]
+    )
+    assert code == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["latency_profile"] == "gpu"
+
+
+def test_main_rejects_gpu_profile_without_gpu_budget(tmp_path, monkeypatch):
+    """GPU-прогон не должен молча остаться без бюджета латентности."""
+    monkeypatch.setattr(nightly, "check_suite", _fake_check(True))
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "ag_news": {
+                    "pack": "public-gpt2",
+                    "n": 10,
+                    "overall_accuracy": 0.88,
+                    "tolerance": 0.01,
+                    "latency": {"p50_ms": 500, "p95_ms": 700, "tolerance": 1.3},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit):
+        nightly.main(
+            [
+                "--suite",
+                "ag_news",
+                "--baseline",
+                str(baseline),
+                "--latency-profile",
+                "gpu",
+            ]
+        )
+    # с --latency off бюджет не нужен: это осознанный отказ от проверки
+    assert (
+        nightly.main(
+            [
+                "--suite",
+                "ag_news",
+                "--baseline",
+                str(baseline),
+                "--latency-profile",
+                "gpu",
+                "--latency",
+                "off",
+            ]
+        )
+        == 0
+    )
+
+
+def test_gpu_workflow_runs_on_self_hosted_gpu_runner():
+    """GPU-прогон не может идти на ubuntu-latest: там нет CUDA."""
+    text = (ROOT / ".github" / "workflows" / "nightly-gpu.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "self-hosted" in text
+    assert "gpu" in text
+    assert "NIGHTLY_GPU_ENABLED" in text
+    assert "--device cuda" in text
+    assert "--latency-profile gpu" in text
+    assert "--latency fail" in text
+    # без переменной job пропускается, а не висит в очереди без раннера
+    assert "vars.NIGHTLY_GPU_ENABLED == 'true'" in text
+
