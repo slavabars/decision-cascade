@@ -20,9 +20,9 @@ The engine does not generate an answer as text — it **decides**: it proposes c
 
 | Chess vs Stockfish | Pac-Man-style maze |
 | :---: | :---: |
-| [![Chess: the head decides when to think deeper](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.md) | [![Maze: the head decides when to play it safe](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/maze/demo.gif)](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.md) |
+| [![Chess: the head decides when to think deeper](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/chess/demo.gif)](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.en.md) | [![Maze: the head decides when to play it safe](https://raw.githubusercontent.com/slavabars/decision-cascade/main/examples/games/maze/demo.gif)](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.en.md) |
 | 19% escalations close half the gap to "always deep" at 38% of its cost | 94% of the cautious policy's score at 33% escalations; twice the greedy score |
-| [code, data and numbers](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.md) | [code, data and numbers](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.md) |
+| [code, data and numbers](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.en.md) | [code, data and numbers](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.en.md) |
 
 Both games are ours: map, environment and rules are written in this repository, no third-party assets. The heads learn from outcomes, not from hints: in chess, when the engine's fast search is unreliable; in the maze, when a greedy step will cost a life.
 
@@ -168,20 +168,22 @@ Installs a venv, a systemd template unit (`decision-api@api`) and reads `DECISIO
 
 ## Documentation
 
-The contract, deployment, troubleshooting and risk-aware cascade docs are available in English. The measurement-heavy pages remain in Russian for now; the API, CLI and code comments are self-explanatory, and this page covers the essentials.
+The contract, deployment, troubleshooting, cascade and measurement docs are available in English; the Russian sentiment benchmark remains in Russian for now. The API, CLI and code comments are self-explanatory, and this page covers the essentials.
 
 | Doc | What is there |
 | --- | --- |
 | [`docs/en/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/stability.md) | what `1.x` promises, beta surfaces, deprecation policy |
 | [`docs/en/risk-aware-cascade.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/risk-aware-cascade.md) | error-budget cascade, hard gate, `risk.json`, reference numbers |
 | [`docs/en/conformal.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/conformal.md) | conformal selective prediction, `conformal.json` certificate, "do no harm" gate |
+| [`docs/en/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/benchmarks.md) | competitor comparison, cascade policies, calibration, nightly regression |
+| [`docs/en/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/latency.md) | batching, input truncation, dtype budgets (CPU and GPU) |
+| [`docs/en/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/observability.md) | metrics, alerts, request id, log format |
 | [`docs/en/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/deploy.md) | Ubuntu/CentOS install, upgrade, backup, rollback |
 | [`docs/en/troubleshooting.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/troubleshooting.md) | error codes and known failure modes |
-| [`docs/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/benchmarks.md) (Russian) | competitor comparison, cascade policies, calibration |
-| [`docs/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/latency.md) (Russian) | batching, input truncation, dtype budgets (CPU and GPU) |
+| [`docs/en/release.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/release.md) | release process (version → tag → PyPI → GitHub) |
 | [`docs/ru-benchmark.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/ru-benchmark.md) (Russian) | Russian sentiment benchmark |
-| [`docs/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/observability.md) (Russian) | metrics, alerts, log format |
-| [`docs/release.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/release.md) (Russian) | release process (version → tag → PyPI → GitHub) |
+
+Game walkthroughs are available in English too: [chess](https://github.com/slavabars/decision-cascade/blob/main/examples/games/chess/README.en.md) and [maze](https://github.com/slavabars/decision-cascade/blob/main/examples/games/maze/README.en.md).
 
 The Russian originals of the translated pages are in [`docs/`](https://github.com/slavabars/decision-cascade/tree/main/docs); the risk-aware cascade page there also carries the full measurement log.
 

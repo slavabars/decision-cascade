@@ -264,6 +264,10 @@ ENGLISH_DOCS = (
     "troubleshooting",
     "risk-aware-cascade",
     "conformal",
+    "benchmarks",
+    "latency",
+    "observability",
+    "release",
 )
 
 
@@ -300,6 +304,45 @@ def test_english_readme_links_english_docs():
     en = (ROOT / "README.en.md").read_text(encoding="utf-8")
     for name in ENGLISH_DOCS:
         assert f"docs/en/{name}.md" in en, f"README.en.md не ссылается на docs/en/{name}.md"
+
+
+GAMES = ("chess", "maze")
+
+
+def test_games_readmes_have_english_parity():
+    """У игр английская версия README с переключателем в обе стороны."""
+    for name in GAMES:
+        base = ROOT / "examples" / "games" / name
+        ru = base / "README.md"
+        en = base / "README.en.md"
+        assert ru.is_file(), f"нет {ru}"
+        assert en.is_file(), f"нет {en}"
+        assert "[English](README.en.md)" in ru.read_text(encoding="utf-8")
+        assert "[Русский](README.md)" in en.read_text(encoding="utf-8")
+        # демо в обеих версиях — одна и та же запись
+        assert "demo.gif" in ru.read_text(encoding="utf-8")
+        assert "demo.gif" in en.read_text(encoding="utf-8")
+        assert (base / "demo.gif").is_file()
+
+    # главный README каждой локали ведёт на свою версию страниц игр
+    ru_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    en_readme = (ROOT / "README.en.md").read_text(encoding="utf-8")
+    for name in GAMES:
+        assert f"examples/games/{name}/README.md" in ru_readme
+        assert f"examples/games/{name}/README.en.md" in en_readme
+
+
+def test_games_english_readme_relative_links_resolve():
+    """Относительные ссылки в английских README игр ведут на существующие файлы."""
+    for name in GAMES:
+        path = ROOT / "examples" / "games" / name / "README.en.md"
+        text = path.read_text(encoding="utf-8")
+        stripped = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+        for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", stripped):
+            if target.startswith(("http://", "https://", "mailto:")):
+                continue
+            resolved = (path.parent / target).resolve()
+            assert resolved.is_file(), f"{path.name}: битая ссылка {target}"
 
 
 def test_markdown_reference_definitions_stay_on_their_own_lines():

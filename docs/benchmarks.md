@@ -1,5 +1,7 @@
 # Результаты: сравнение с конкурентами и качество
 
+**Русский** · [English](en/benchmarks.md)
+
 Сводка всех измерений проекта на 14 ноября 2026 (v1.7.0; базовые числа не менялись с 0.11.0, conformal добавлен в 1.7). Цифры получены реальными прогонами на одной GPU 16 ГБ; методика, команды и оговорки — в [`competitor-benchmark.md`](competitor-benchmark.md), [`routerbench.md`](routerbench.md), [`risk-aware-cascade.md`](risk-aware-cascade.md) и [`conformal.md`](conformal.md). Сырые JSON и `q`-файлы приложены к релизам (`*-benchmarks.tar.gz`), повторяется одной командой `eval/competitors/reproduce_real.sh`.
 
 Участники — настоящие релизы, не моки:

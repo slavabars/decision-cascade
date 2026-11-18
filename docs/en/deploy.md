@@ -45,7 +45,7 @@ curl -fsS http://127.0.0.1:8080/metrics  # Prometheus (see observability.md)
 journalctl -u decision-api@api -n 50 --no-pager
 ```
 
-`/ready` answers `503` while the service is not ready; the body contains `reasons`. For diagnosing the causes see [`troubleshooting.md`](troubleshooting.md); metrics and logs are in [`observability.md`](../observability.md).
+`/ready` answers `503` while the service is not ready; the body contains `reasons`. For diagnosing the causes see [`troubleshooting.md`](troubleshooting.md); metrics and logs are in [`observability.md`](observability.md).
 
 ## 2. What counts as service state
 

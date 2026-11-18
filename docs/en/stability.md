@@ -12,7 +12,7 @@ Three promises that `1.0` makes:
 
 1. **The API contract does not break.** `POST /decisions`, `/decisions/batch`, `/v1/systemone`, `/v1/feedback`, `GET /info` and `schema_version = "1"` change only with a major bump and a deprecation window (2 minor versions).
 2. **Artifacts stay readable.** A pack (`heads.pt` + `metadata.json` + `temperature.json`) and a checkpoint written under `schema_version` are read by every version of the `1.x` line.
-3. **The published numbers reproduce.** Any figure from [`benchmarks.md`](../benchmarks.md) is produced by a command from the documentation on Ubuntu 22.04+ with a 16 GB GPU, not "on the author's laptop".
+3. **The published numbers reproduce.** Any figure from [`benchmarks.md`](benchmarks.md) is produced by a command from the documentation on Ubuntu 22.04+ with a 16 GB GPU, not "on the author's laptop".
 
 Stability does **not** mean: universality (zero-shot), beating LLMs in open domains, or a cloud SLA. This is a local decision engine, and the promise covers only the contract, reproducibility and behaviour on your own domain.
 
@@ -52,7 +52,7 @@ Each item is verifiable, not a "feeling of maturity".
 | 8 | Operations: liveness/readiness, timeouts, graceful shutdown | `/health`, `/ready`, budget and retry, SIGTERM test | — |
 | 9 | Security: threat model, no PII in logs, dependency audit | `SECURITY.md`, log test, `pip-audit` in CI | — |
 | 10 | Documentation: quick start in a clean environment, Ubuntu/CentOS deploy, upgrade/rollback | `deploy.md`, `troubleshooting.md`, automatic rollback | — (a live VM run follows the checklist) |
-| 11 | Measurements published with raw data and commands | [`benchmarks.md`](../benchmarks.md) + release assets | — |
+| 11 | Measurements published with raw data and commands | [`benchmarks.md`](benchmarks.md) + release assets | — |
 | 12 | Two releases in a row without a fire (a hotfix for breaking behaviour) | 0.13 → 0.15 clean | — |
 
 Items 1 and 12 were closed by the `0.10 → 0.15` series: there were no breaking contract changes and no hotfixes for breaking behaviour. By `1.0.0` all twelve items were closed, and each one keeps being checked: contract tests and coverage in CI, the nightly regression on the current release packs, deploy and rollback by tests and the `deploy.md` checklist. If a criterion stops holding, CI or the nightly job will show it, not a user after a release.

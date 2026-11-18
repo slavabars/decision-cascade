@@ -201,4 +201,4 @@ curl -fsS http://127.0.0.1:8080/info | \
 - two packs with the same signature: the first in sort order wins, and the log gets `skip checkpoint ... already served by ...` — remove the duplicate;
 - a directory without `metadata.json` is not considered a pack (we do not guess from `heads.pt`).
 
-Metrics and request id — [`observability.md`](../observability.md).
+Metrics and request id — [`observability.md`](observability.md).
