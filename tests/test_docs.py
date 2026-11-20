@@ -135,23 +135,23 @@ def test_huggingface_doc_is_for_users_not_maintainers():
     assert "DECISION_PACK_REPO" in text
     assert "DECISION_FEATURE_DIM" in text
     assert "`transformers`-модель" in text or "not a `transformers` model" in text
-    assert "huggingface-publishing.md" in text
     # публикация и токены — забота мейнтейнера, не пользователя
     assert "publish_hf" not in text
     assert "HF_TOKEN" not in text
+    assert "huggingface-publishing" not in text
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "docs/huggingface.md" in readme
-    assert "docs/huggingface-publishing.md" in readme
     assert "decision-cascade-packs" in readme
 
 
-def test_huggingface_publishing_doc_covers_ci_and_tokens():
-    text = (ROOT / "docs" / "huggingface-publishing.md").read_text(encoding="utf-8")
-    assert "publish_hf" in text
-    assert "HF_TOKEN" in text
-    assert "HF_PUBLISH_ENABLED" in text
-    assert "--verify" in text
-    assert "manifest.json" in text
+def test_maintainer_docs_are_not_public():
+    """Инструкции по публикации и релизу — вне публичного git (internal/)."""
+    for name in ("release", "huggingface-publishing"):
+        assert not (ROOT / "docs" / f"{name}.md").exists(), name
+        assert not (ROOT / "docs" / "en" / f"{name}.md").exists(), name
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/release.md" not in readme
+    assert "huggingface-publishing" not in readme
 
 
 BADGES = (
@@ -303,10 +303,8 @@ ENGLISH_DOCS = (
     "benchmarks",
     "latency",
     "observability",
-    "release",
     "exploration",
     "huggingface",
-    "huggingface-publishing",
 )
 
 

@@ -82,10 +82,10 @@ def test_pypi_workflow_publishes_on_tags():
     assert "Verify install from PyPI" in workflow
 
 
-def test_release_doc_and_readme_install():
-    release = (ROOT / "docs" / "release.md").read_text(encoding="utf-8")
-    assert "git tag -a v" in release
-    assert "pypi.yml" in release
+def test_release_instructions_are_not_public():
+    """Процесс релиза — внутренняя инструкция, в публичном git её нет."""
+    assert not (ROOT / "docs" / "release.md").exists()
+    assert not (ROOT / "docs" / "en" / "release.md").exists()
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "pip install decision-cascade" in readme
-    assert "docs/release.md" in readme
+    assert "docs/release.md" not in readme

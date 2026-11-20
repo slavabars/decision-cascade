@@ -85,5 +85,4 @@ The code and the head weights are Apache-2.0. Dataset terms are separate: AG New
 ## More
 
 - Card with all packs and metrics: https://huggingface.co/slavabars/decision-cascade-packs
-- Publishing packs (maintainer): [`huggingface-publishing.md`](huggingface-publishing.md)
 - Measurements and competitor comparison: [`benchmarks.md`](benchmarks.md)

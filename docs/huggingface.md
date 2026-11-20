@@ -85,5 +85,4 @@ DECISION_MODEL_ID=openai-community/gpt2 \
 ## Ещё
 
 - Карточка со всеми паками и метриками: https://huggingface.co/slavabars/decision-cascade-packs
-- Публикация паков (для мейнтейнера): [`huggingface-publishing.md`](huggingface-publishing.md)
 - Замеры и сравнение с конкурентами: [`benchmarks.md`](benchmarks.md)

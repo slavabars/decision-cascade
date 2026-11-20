@@ -253,8 +253,6 @@ uv pip install --python .venv/bin/python -r requirements.txt
 uv pip install --python .venv/bin/python -e .
 ```
 
-Процесс релиза (версия → тег → PyPI → артефакты) — в [`docs/release.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/release.md).
-
 ## Запуск сервера
 
 ### Вариант 1 — без сети / для мгновенной проверки (hash-энкодер)
@@ -925,12 +923,7 @@ SFTTrainer(heads, lr=0.1).fit(
 bash training/recipe/train_weight_packs.sh
 ```
 
-Обученные веса весят мало и публикуются как **артефакт GitHub Release** (а не в git) — либо один пак, либо вся матрица одним архивом + манифестом:
-
-```bash
-training/recipe/publish_release.sh v1.5.0 checkpoints/support       # один пак
-training/recipe/publish_weight_packs.sh v1.5.0 checkpoints/packs    # матрица + manifest.json
-```
+Обученные веса в git не кладутся: готовые паки лежат в архиве GitHub Release и на [Hugging Face](https://huggingface.co/slavabars/decision-cascade-packs), как их скачать и запустить — в [`docs/huggingface.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/huggingface.md).
 
 RLCD-калибровка `noul`-голов на реальных признаках энкодера принимает изменение только если оно улучшает калибровку на **отложенном** val (гейт «не навреди»):
 
@@ -988,7 +981,7 @@ svc.save_heads(dim=768, questions=QUESTIONS)      # -> checkpoints/<schema>.pt
 
 При старте сервер читает каталог из `DECISION_CHECKPOINT_DIR` (по умолчанию `checkpoints/`) и, если для схемы есть чекпоинт с подходящей размерностью, загружает веса. Это делает качество воспроизводимым между перезапусками, а латентность — без повторного прогона энкодера по неизменному состоянию (кэш признаков по промпту).
 
-**Несколько доменов в одном процессе.** Помимо плоской раскладки `<dir>/<signature>.pt`, сервер понимает каталоги паков `<dir>/<домен>/heads.pt` + `metadata.json` (так их публикует `training/recipe/publish_weight_packs.sh`). Пак выбирается по `questions_signature` из `metadata.json`, а не по имени каталога, поэтому `DECISION_CHECKPOINT_DIR=checkpoints/packs` обслуживает сразу все домены: запрос с вопросами поддержки получает `support-*`, запрос с вопросами маршрутизации — `routerbench-*`. Если два пака объявляют одну подпись и одинаковую размерность, сервис сверяет `encoder` из метаданных с id загруженного энкодера (алиасы `gpt2` и `openai-community/gpt2` считаются одной моделью); без id энкодера остаётся сортировка, а в лог пишется `WARNING` — дубли не подменяют друг друга молча. Источник каждой загруженной головы виден в `GET /info` → `engine.heads[].source`.
+**Несколько доменов в одном процессе.** Помимо плоской раскладки `<dir>/<signature>.pt`, сервер понимает каталоги паков `<dir>/<домен>/heads.pt` + `metadata.json` . Пак выбирается по `questions_signature` из `metadata.json`, а не по имени каталога, поэтому `DECISION_CHECKPOINT_DIR=checkpoints/packs` обслуживает сразу все домены: запрос с вопросами поддержки получает `support-*`, запрос с вопросами маршрутизации — `routerbench-*`. Если два пака объявляют одну подпись и одинаковую размерность, сервис сверяет `encoder` из метаданных с id загруженного энкодера (алиасы `gpt2` и `openai-community/gpt2` считаются одной моделью); без id энкодера остаётся сортировка, а в лог пишется `WARNING` — дубли не подменяют друг друга молча. Источник каждой загруженной головы виден в `GET /info` → `engine.heads[].source`.
 
 Если под **новую** схему вопросов чекпоинта нет, головы создаются со случайной инициализацией — их `confidence` ничего не значит, и отдавать по ним решения (тем более эскалировать в каскаде) нельзя. Поэтому сервер явно сообщает статус (`trained: false`) и управляется переменной `DECISION_UNTRAINED`:
 
@@ -1098,7 +1091,6 @@ CHANGELOG.md, SECURITY.md
 - **Устройство**: `DECISION_DEVICE`/`DECISION_DTYPE` выбирают CPU/GPU и тип; gemma-4-12B требует ~24 ГБ и CUDA, на CPU используйте gpt2.
 - **Мультимодальность**: локальная CLIP поддерживает только изображения; видео требует отдельного декодирования кадров.
 - **Честная оценка**: синтетические сплиты тривиально разделимы (`1.000` — это про конвейер, а не про домен). Публичные числа — на AG News (accuracy 0.425 → 0.88) и в бенчмарке против конкурентов; для своего домена нужна своя разметка.
-- **Публикация весов**: релизом через `training/recipe/publish_release.sh` (один пак) или `training/recipe/publish_weight_packs.sh` (матрица); на Hugging Face — [`docs/huggingface-publishing.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/huggingface-publishing.md).
 - **Выход из беты**: критерии `1.0` (контракт, покрытие, эксплуатация, политика депрекации) — в [`docs/stability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/stability.md).
 
 ## Лицензия
