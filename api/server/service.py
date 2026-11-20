@@ -129,15 +129,23 @@ class DecisionService:
 
         Многодоменная раскладка — по каталогу на пак
         (``checkpoints/packs/<домен>/``); плоские ``*.pt`` в корне остаются
-        поддержанными для старых установок.
+        поддержанными для старых установок. Сам корень тоже считается паком,
+        если в нём лежат ``metadata.json`` и ``heads.pt``: так работает пак,
+        скачанный с Hugging Face в отдельный каталог и указанный в
+        ``DECISION_CHECKPOINT_DIR`` целиком (см. ``docs/huggingface.md``).
         """
         if self.checkpoint_dir is None or not self.checkpoint_dir.is_dir():
             return []
-        return [
+        packs = [
             metadata.parent
             for metadata in sorted(self.checkpoint_dir.glob("*/metadata.json"))
             if (metadata.parent / "heads.pt").is_file()
         ]
+        if (self.checkpoint_dir / "heads.pt").is_file() and (
+            self.checkpoint_dir / "metadata.json"
+        ).is_file():
+            packs.insert(0, self.checkpoint_dir)
+        return packs
 
     def _checkpoint_paths(self) -> list[Path]:
         """Все читаемые чекпоинты: корневые ``*.pt`` и паки в подкаталогах."""
@@ -145,7 +153,16 @@ class DecisionService:
             return []
         paths = sorted(self.checkpoint_dir.glob("*.pt"))
         paths.extend(pack / "heads.pt" for pack in self._pack_dirs())
-        return paths
+        # Пак в корне даёт ``heads.pt`` дважды: как ``*.pt`` и как пак.
+        unique: list[Path] = []
+        seen: set[Path] = set()
+        for path in paths:
+            key = path.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(path)
+        return unique
 
     def _find_checkpoint(
         self, questions: dict[str, QuestionSpec], dim: int | None = None

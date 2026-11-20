@@ -129,6 +129,18 @@ def test_exploration_doc_describes_measurement_and_switch():
     assert "DECISION_CASCADE_EXPLORE" in stability
 
 
+def test_huggingface_doc_describes_publishing_and_honest_limits():
+    text = (ROOT / "docs" / "huggingface.md").read_text(encoding="utf-8")
+    assert "publish_hf" in text
+    assert "snapshot_download" in text
+    assert "HF_TOKEN" in text
+    assert "not a `transformers` model" in text or "не** `transformers`-модель" in text
+    assert "DECISION_PACK_REPO" in text
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/huggingface.md" in readme
+    assert "decision-cascade-packs" in readme
+
+
 BADGES = (
     "actions/workflows/ci.yml/badge.svg",
     "img.shields.io/pypi/v/decision-cascade",
@@ -280,6 +292,7 @@ ENGLISH_DOCS = (
     "observability",
     "release",
     "exploration",
+    "huggingface",
 )
 
 

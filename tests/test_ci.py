@@ -32,3 +32,15 @@ def test_workflows_do_not_use_sudo():
     for path in WORKFLOWS.glob("*.yml"):
         text = path.read_text(encoding="utf-8")
         assert "sudo " not in text, f"{path.name} требует root"
+
+
+def test_publish_hf_is_gated_and_does_not_leak_token():
+    text = (WORKFLOWS / "publish-hf.yml").read_text(encoding="utf-8")
+    assert "workflow_dispatch" in text
+    assert "HF_PUBLISH_ENABLED" in text
+    assert "secrets.HF_TOKEN" in text
+    assert "publish_hf" in text
+    assert "--verify" in text or "snapshot_download" in text
+    # токен не должен попадать в аргументы командной строки или вывод
+    assert "print(token" not in text
+    assert "HF_TOKEN=" not in text

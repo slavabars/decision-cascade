@@ -203,9 +203,33 @@ def resolve_untrained_policy() -> str:
     return value
 
 
+def _resolve_checkpoint_dir() -> str:
+    """Каталог голов: локальный ``DECISION_CHECKPOINT_DIR`` или паки с Хабa.
+
+    ``DECISION_PACK_REPO=owner/name[@revision]`` скачивает паки (или берёт их из
+    кэша ``DECISION_PACK_CACHE``) и проверяет манифест. Ошибка загрузки — ошибка
+    старта: тихий откат на случайные головы здесь был бы худшим исходом.
+    """
+    pack_repo = os.environ.get("DECISION_PACK_REPO", "").strip()
+    if not pack_repo:
+        return os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
+    if os.environ.get("DECISION_CHECKPOINT_DIR"):
+        raise RuntimeError(
+            "set either DECISION_PACK_REPO or DECISION_CHECKPOINT_DIR, not both"
+        )
+    from src.packs_hub import resolve
+
+    try:
+        return str(resolve(pack_repo))
+    except Exception as exc:
+        raise RuntimeError(
+            f"DECISION_PACK_REPO={pack_repo!r} cannot be resolved: {exc}"
+        ) from exc
+
+
 def create_service() -> DecisionService:
     """Сервис по окружению: DECISION_MODEL_ID включает реальный state-энкодер."""
-    checkpoint_dir = os.environ.get("DECISION_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
+    checkpoint_dir = _resolve_checkpoint_dir()
     untrained_policy = resolve_untrained_policy()
     choice_head = os.environ.get("DECISION_CHOICE_HEAD", "linear")
     vision_encoder = create_vision_encoder()

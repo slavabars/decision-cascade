@@ -78,17 +78,21 @@ The response is typed decisions with probabilities (real output, unabridged):
 }
 ```
 
-The near-uniform probabilities and `trained: false` are honest: the encoder is `hash` and the heads are untrained. The point of this step is the shape of the response and the fact that everything runs locally and deterministically. Meaningful numbers require a trained pack (~0.5 GB encoder):
+The near-uniform probabilities and `trained: false` are honest: the encoder is `hash` and the heads are untrained. The point of this step is the shape of the response and the fact that everything runs locally and deterministically. Meaningful numbers require a trained pack (the heads are ~66 KB, the encoder is downloaded separately):
 
 ```bash
-gh release download v1.5.0 --pattern '*-weights.tar.gz' \
-  --repo slavabars/decision-cascade
-tar -xzf v1.5.0-weights.tar.gz
+python - <<'PY'
+from huggingface_hub import snapshot_download
+snapshot_download("slavabars/decision-cascade-packs", revision="v1.5.0",
+                  local_dir="hf", allow_patterns=["packs/public-gpt2/*"])
+PY
 
-DECISION_CHECKPOINT_DIR=v1.5.0-weights/public-gpt2 \
+DECISION_CHECKPOINT_DIR=hf/packs/public-gpt2 \
 DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
   python -m uvicorn api.server.main:app --port 8000
 ```
+
+The GitHub Release archive is a fallback: `gh release download v1.5.0 --pattern '*-weights.tar.gz'`. Details — [`docs/en/huggingface.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/huggingface.md).
 
 `public-gpt2` is trained on AG News: 0.880 on the test split. See the table below.
 
@@ -177,6 +181,7 @@ The contract, deployment, troubleshooting, cascade and measurement docs are avai
 | [`docs/en/conformal.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/conformal.md) | conformal selective prediction, `conformal.json` certificate, "do no harm" gate |
 | [`docs/en/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/benchmarks.md) | competitor comparison, cascade policies, calibration, nightly regression |
 | [`docs/en/exploration.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/exploration.md) | feedback bias, exploratory escalation, IPS weights, measured cost |
+| [`docs/en/huggingface.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/huggingface.md) | published weight packs on the Hub, download, publishing and CI |
 | [`docs/en/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/latency.md) | batching, input truncation, dtype budgets (CPU and GPU) |
 | [`docs/en/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/observability.md) | metrics, alerts, request id, log format |
 | [`docs/en/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/deploy.md) | Ubuntu/CentOS install, upgrade, backup, rollback |

@@ -78,7 +78,21 @@ curl -sS -X POST http://127.0.0.1:8000/decisions \
 }
 ```
 
-Вероятности почти равномерные и `trained: false` — это честно: энкодер `hash`, головы не обучены, шаг нужен, чтобы увидеть форму ответа и то, что всё работает локально и детерминированно. Осмысленные числа — с обученным паком (веса из релиза, ~0.5 ГБ модели):
+Вероятности почти равномерные и `trained: false` — это честно: энкодер `hash`, головы не обучены, шаг нужен, чтобы увидеть форму ответа и то, что всё работает локально и детерминированно. Осмысленные числа — с обученным паком (головы ~66 КБ, энкодер скачивается отдельно):
+
+```bash
+python - <<'PY'
+from huggingface_hub import snapshot_download
+snapshot_download("slavabars/decision-cascade-packs", revision="v1.5.0",
+                  local_dir="hf", allow_patterns=["packs/public-gpt2/*"])
+PY
+
+DECISION_CHECKPOINT_DIR=hf/packs/public-gpt2 \
+DECISION_MODEL_ID=openai-community/gpt2 DECISION_FEATURE_DIM=768 \
+  python -m uvicorn api.server.main:app --port 8000
+```
+
+Запасной путь — архив из GitHub Release:
 
 ```bash
 gh release download v1.5.0 --pattern '*-weights.tar.gz' \
@@ -324,6 +338,8 @@ DECISION_MODEL_ID=google/gemma-4-12B \
 | `DECISION_CASCADE_POLICY` | политика эскалации: `""`/`threshold`/`confidence`, `benefit`, `conformal` | `""` (порог) |
 | `DECISION_CONFORMAL_PATH` | файл conformal-сертификата (порог с гарантией доли ошибок) | `<checkpoint>/conformal.json` |
 | `DECISION_FEEDBACK_PATH` | файл журнала обратной связи (JSONL): примеры few-shot и счётчики `q` переживают рестарт | пусто — только память |
+| `DECISION_PACK_REPO` | паки с Hugging Face: `owner/name@revision` (beta); взаимоисключающе с `DECISION_CHECKPOINT_DIR` | — (локальные паки) |
+| `DECISION_PACK_CACHE` | кэш скачанных паков | `~/.cache/decision-cascade/packs` |
 | `DECISION_CASCADE_EXPLORE` | доля исследовательских эскалаций: решения, которые политика оставила бы локально, уходят наружу ради честной оценки `q` (0–1) | `0` |
 | `DECISION_CASCADE_EXPLORE_SEED` | зерно генератора исследовательских эскалаций | — (случайное) |
 | `DECISION_VISION_MODEL_ID` | CLIP/SigLIP для локальных `images` | — (без vision) |
@@ -925,6 +941,8 @@ RLCD-калибровка `noul`-голов на реальных признак
 ```
 
 ### Готовые паки весов (release)
+
+Паки также опубликованы на Hugging Face: [`slavabars/decision-cascade-packs`](https://huggingface.co/slavabars/decision-cascade-packs). Это отдельный репозиторий с головами, манифестом и карточкой (не `transformers`-модель): скачивание и запуск — в [`docs/huggingface.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/huggingface.md). GitHub Release остаётся зеркалом.
 
 Релиз [`v1.5.0`](https://github.com/slavabars/decision-cascade/releases/tag/v1.5.0) содержит архив `v1.5.0-weights.tar.gz` (и `v1.5.0-manifest.json`) с семью обученными паками: `{support, public} × {gpt2, distilgpt2, gpt2-medium}` плюс `routerbench-gpt2`. Все числа — на честном train/val/test (для `public` — настоящий test-сплит AG News):
 

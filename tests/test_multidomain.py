@@ -233,3 +233,29 @@ def test_pack_with_matching_dim_wins_over_alphabetical_order(tmp_path):
     service.warmup()
     assert service.is_trained(questions) is True
     assert service.info()["heads"][0]["source"] == str(right / "heads.pt")
+
+
+def test_flat_pack_in_checkpoint_root(tmp_path):
+    """Пак можно указать корнем: так его отдаёт snapshot_download с Hugging Face."""
+    questions = _support_questions()
+    heads = DecisionHeads(DIM, questions, seed=0)
+    heads.save_checkpoint(tmp_path / "heads.pt")
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "feature_dim": DIM,
+                "questions_signature": questions_signature(questions),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = DecisionService(dim=DIM, checkpoint_dir=tmp_path)
+
+    assert service._pack_dirs() == [tmp_path]
+    assert service._find_checkpoint(questions) == tmp_path / "heads.pt"
+    # heads.pt одновременно корневой *.pt и файл пака — не читаем дважды
+    assert service._checkpoint_paths() == [tmp_path / "heads.pt"]
+    assert service.warmup() == 1
+    assert service.is_trained(questions) is True

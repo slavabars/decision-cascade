@@ -1,0 +1,145 @@
+name: Publish weight packs to Hugging Face
+
+# Публикация паков весов на Hugging Face Hub.
+#
+# Почему вручную, а не по тегу: паки не лежат в git (checkpoints/ в .gitignore),
+# их артефакт — архив GitHub Release. Workflow скачивает этот архив, собирает
+# манифест и staging, а загрузку делает только при явном подтверждении:
+# vars.HF_PUBLISH_ENABLED == 'true' и задан secrets.HF_TOKEN.
+#
+# По умолчанию dry_run=true: проверка и сборка staging без сети на запись.
+on:
+  workflow_dispatch:
+    inputs:
+      packs_release:
+        description: "GitHub Release tag with *-weights.tar.gz"
+        default: "v1.5.0"
+        required: true
+      revision:
+        description: "HF revision tag (empty — publish to main only)"
+        default: "v1.5.0"
+        required: false
+      dry_run:
+        description: "Only build and check the staging directory"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  HF_REPO: slavabars/decision-cascade-packs
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt huggingface_hub
+
+      - name: Download pack archive from GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/packs
+          gh release download "${{ inputs.packs_release }}" \
+            --pattern '*-weights.tar.gz' --dir dist/packs
+          tar -xzf dist/packs/*-weights.tar.gz -C dist/packs
+          ls dist/packs
+
+      - name: Check packs and build staging
+        run: |
+          python -m training.recipe.publish_hf \
+            --packs "dist/packs/${{ inputs.packs_release }}-weights" \
+            --library-version "${{ inputs.packs_release }}" \
+            --repo "$HF_REPO" \
+            --revision "${{ inputs.revision }}" \
+            --check
+          python -m training.recipe.publish_hf \
+            --packs "dist/packs/${{ inputs.packs_release }}-weights" \
+            --library-version "${{ inputs.packs_release }}" \
+            --repo "$HF_REPO" \
+            --revision "${{ inputs.revision }}" \
+            --dry-run --out dist/hf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hf-staging
+          path: dist/hf
+          retention-days: 7
+
+  publish:
+    needs: check
+    if: vars.HF_PUBLISH_ENABLED == 'true' && inputs.dry_run == false
+    runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt huggingface_hub
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: hf-staging
+          path: dist/hf
+
+      - name: Publish
+        if: env.HF_TOKEN != ''
+        run: |
+          python -m training.recipe.publish_hf \
+            --from-stage dist/hf \
+            --repo "$HF_REPO" \
+            --revision "${{ inputs.revision }}" \
+            --publish
+
+      - name: Warn about missing token
+        if: env.HF_TOKEN == ''
+        run: echo "::warning::HF_TOKEN не задан — публикация пропущена"
+
+      - name: Smoke the published pack
+        if: env.HF_TOKEN != ''
+        env:
+          DECISION_MODEL_ID: openai-community/gpt2
+          DECISION_CHECKPOINT_DIR: hf-pack/packs/public-gpt2
+          DECISION_UNTRAINED: refuse
+          DECISION_DEVICE: cpu
+        run: |
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          from api.server.main import create_service
+          from eval.report.run import _specs
+
+          snapshot_download(
+              "${{ env.HF_REPO }}",
+              revision="${{ inputs.revision }}" or None,
+              local_dir="hf-pack",
+              allow_patterns=["packs/public-gpt2/*"],
+          )
+          service = create_service()
+          questions = _specs("public")
+          assert service.is_trained(questions), "pack did not load or signature mismatch"
+          result = service.decide(
+              "Stocks rallied after the earnings report.", questions
+          )
+          print({name: decision.type for name, decision in result.items()})
+          PY
