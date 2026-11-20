@@ -156,7 +156,9 @@ def test_maintainer_docs_are_not_public():
 
 BADGES = (
     "actions/workflows/ci.yml/badge.svg",
-    "img.shields.io/pypi/v/decision-cascade",
+    "img.shields.io/pypi/v/decision-cascade?logo=pypi",
+    "img.shields.io/pypi/dm/decision-cascade",
+    "actions/workflows/nightly.yml/badge.svg",
     "img.shields.io/pypi/pyversions/decision-cascade",
     "img.shields.io/pypi/l/decision-cascade",
     "img.shields.io/badge/Hugging%20Face-decision--cascade--packs-yellow",
