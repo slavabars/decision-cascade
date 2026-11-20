@@ -44,6 +44,15 @@ How to read it:
 
 Measurement limitations: the strata are synthetic, local confidence is assumed calibrated, and the call cost is constant. The simulation answers "what does the estimator do given a known bias structure", not "how good is the external model on your domain". The latter needs a run on your own data.
 
+## Live run
+
+The simulation checks the estimator; the same path was verified on a running service. Two cascades with the same upstream (local heads on the hash encoder, a `choice` question), 400 decisions each:
+
+- `DECISION_CASCADE_EXPLORE=0.05`: 17 escalations out of 400 (4.25%), all exploratory (`explore_calls = 17`; the policy did not fire at `q = 0.05`). After five correct labels through `/v1/feedback`, the `q` estimate rose from 0.05 to `(0.05·50 + 20·5) / (50 + 100) = 0.6833`, the per-question threshold from 0.05 to 0.6833, and the next decision went outside by policy. Observations in the journal carry `propensity = 0.05`.
+- `DECISION_CASCADE_EXPLORE=0`: no escalations and no labels at all — exactly the sample from which a biased `q` cannot be estimated.
+
+The live-run numbers are about plumbing, not quality: the heads are untrained, the labels are synthetic, and the upstream is the same local service. They confirm that exploratory calls reach the journal, the probability is stored, the IPS weight is applied, and feedback moves the threshold.
+
 ## How to enable
 
 ```bash
