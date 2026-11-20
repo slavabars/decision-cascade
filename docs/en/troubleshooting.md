@@ -121,6 +121,8 @@ journalctl -u decision-api@api -n 50 --no-pager | grep -i unavailable
 
 The conformal cascade (`DECISION_CASCADE_POLICY=conformal`) does **not** accept feedback: the certificate is a property of the calibration sample, and retraining the threshold without recomputing the bound would break the guarantee. Check `/info` → `accepts_feedback`. A plain confidence threshold does not accept feedback either.
 
+If feedback was accepted but disappeared after a restart, check `DECISION_FEEDBACK_PATH`: without it examples and counters live only in process memory. `/info → engine.feedback_path` shows the journal path, `feedback_restored` — how many events were restored at startup.
+
 ## 8. The cascade does not start: no `q`, risk model or URL
 
 These are configuration errors at startup (the process does not come up), not HTTP codes:
@@ -135,6 +137,7 @@ These are configuration errors at startup (the process does not come up), not HT
 | `DECISION_CASCADE_RISK_BUDGET requires a fitted risk model at ...` | train `risk.json` (`python -m eval.risk.run`) or point `DECISION_RISK_MODEL_PATH` at it |
 | `DECISION_CASCADE_POLICY=conformal requires a certificate at ...` | fit the certificate (`python -m eval.conformal.run`) or set `DECISION_CONFORMAL_PATH` |
 | `DECISION_CASCADE_POLICY=conformal requires a fitted risk model at ...` | train `risk.json` (`python -m eval.risk.run`) or point `DECISION_RISK_MODEL_PATH` at it |
+| `DECISION_FEEDBACK_PATH=... is not writable` | point the journal at a writable path or unset the variable (feedback then lives in memory only) |
 | `DECISION_UNTRAINED must be one of (...)` | `allow`, `refuse`, `fallback` or `auto` |
 
 ## 9. `/ready` answers `503`

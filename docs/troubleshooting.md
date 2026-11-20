@@ -121,6 +121,8 @@ journalctl -u decision-api@api -n 50 --no-pager | grep -i unavailable
 
 Conformal-каскад (`DECISION_CASCADE_POLICY=conformal`) обратную связь **не принимает**: сертификат — свойство калибровочной выборки, и дообучение порога без пересчёта границы сломало бы гарантию. Проверьте `/info` → `accepts_feedback`. Обычный порог уверенности обратную связь тоже не принимает.
 
+Если фидбэк принят, но пропал после перезапуска, проверьте `DECISION_FEEDBACK_PATH`: без него примеры и счётчики живут только в памяти процесса. `/info → engine.feedback_path` показывает путь журнала, `feedback_restored` — сколько событий поднято при старте.
+
 ## 8. Каскад не стартует: нет `q`, риск-модели или URL
 
 Это ошибки конфигурации на старте (процесс не поднимается), а не HTTP-коды:
@@ -135,6 +137,7 @@ Conformal-каскад (`DECISION_CASCADE_POLICY=conformal`) обратную с
 | `DECISION_CASCADE_RISK_BUDGET requires a fitted risk model at ...` | обучить `risk.json` (`python -m eval.risk.run`) или указать `DECISION_RISK_MODEL_PATH` |
 | `DECISION_CASCADE_POLICY=conformal requires a certificate at ...` | посчитать сертификат (`python -m eval.conformal.run`) или указать `DECISION_CONFORMAL_PATH` |
 | `DECISION_CASCADE_POLICY=conformal requires a fitted risk model at ...` | обучить `risk.json` (`python -m eval.risk.run`) или указать `DECISION_RISK_MODEL_PATH` |
+| `DECISION_FEEDBACK_PATH=... is not writable` | указать доступный путь для журнала или убрать переменную (тогда фидбэк — только в памяти) |
 | `DECISION_UNTRAINED must be one of (...)` | `allow`, `refuse`, `fallback` или `auto` |
 
 ## 9. `/ready` отвечает `503`

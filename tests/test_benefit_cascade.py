@@ -282,3 +282,68 @@ def test_feedback_endpoint_reports_remote_accuracy(monkeypatch):
     assert row["remote_accuracy"] == pytest.approx(cascade.remote_accuracy_for("a"))
     assert again.json()["questions"][0]["examples"] == 1
     assert result.usage["escalated"] == 1
+
+
+# --- Журнал фидбэка: счётчики переживают рестарт ------------------------------
+
+
+def _benefit_cascade(path):
+    primary = _StubBackend("local", {"a": 0.95, "b": 0.40})
+    fallback = _StubBackend("remote", {"a": 0.0, "b": 0.99})
+    return BenefitAwareCascadeBackend(
+        primary, fallback, 0.9, escalation_cost=0.05, feedback_path=path
+    )
+
+
+def test_benefit_feedback_survives_restart(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    first = _benefit_cascade(path)
+    remote_decision = first.decide("s", _questions(["a", "b"])).decisions["b"]
+    first.add_examples("b", [remote_decision], [True])
+    q_before = first.remote_accuracy_for("b")
+
+    second = _benefit_cascade(path)
+
+    assert second.example_counts == {"b": 1}
+    assert second.restored_examples == 1
+    assert second.remote_accuracy_for("b") == pytest.approx(q_before)
+
+
+def test_benefit_feedback_duplicates_not_persisted(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    first = _benefit_cascade(path)
+    remote_decision = first.decide("s", _questions(["b"])).decisions["b"]
+    first.add_examples("b", [remote_decision], [True])
+    # повтор по тому же выданному решению не учитывается и в журнал не идёт
+    first.add_examples("b", [remote_decision], [True])
+
+    assert first.example_counts == {"b": 1}
+    assert _benefit_cascade(path).example_counts == {"b": 1}
+
+
+def test_benefit_feedback_endpoint_persists(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api.server import main
+
+    path = tmp_path / "feedback.jsonl"
+    cascade = _benefit_cascade(path)
+    cascade.decide("s", _questions(["b"]))
+    monkeypatch.setattr(main, "backend", cascade)
+
+    payload = {
+        "examples": [
+            {
+                "question": "b",
+                "decision": {"type": "noul", "noul": 0.99, "confidence": 0.99},
+                "correct": True,
+            }
+        ]
+    }
+    with TestClient(main.app) as tc:
+        response = tc.post("/v1/feedback", json=payload)
+
+    assert response.status_code == 200
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert _benefit_cascade(path).example_counts == {"b": 1}

@@ -6,7 +6,9 @@ SystemOne-сервис. Так экономится основная часть 
 """
 from __future__ import annotations
 
+import logging
 import threading
+from pathlib import Path
 from typing import Any, Self
 
 from src.backends.base import (
@@ -19,10 +21,24 @@ from src.backends.base import (
     requested_modalities,
 )
 from src.errors import UntrainedDecisionError
+from src.feedback_store import (
+    KIND_RISK,
+    FeedbackStore,
+    decision_to_record,
+    group_records,
+    record_to_decision,
+)
 from src.risk import features_matrix, gate_verdict
 from src.sampler.questions import QuestionSpec
 
 DEFAULT_THRESHOLD = 0.6
+
+#: Сколько своих примеров на вопрос копилка держит в памяти. Примеры — обучающий
+#: набор few-shot модели, а не аудит: свежие строки важнее давних, а предел
+#: ограничивает и память, и время переобучения.
+RISK_FEEDBACK_MAX_PER_QUESTION = 1000
+
+logger = logging.getLogger(__name__)
 
 
 def _gate_verdict(
@@ -350,7 +366,10 @@ class RiskAwareCascadeBackend(CascadeBackend):
     выводятся из одного решения (``src.risk.decision_features``), поэтому
     достаточно повторить решение. Копилка — на экземпляре каскада, доступ к ней
     закрыт блокировкой (``example_counts``/``add_examples``/``reference_rows``
-    потокобезопасны).
+    потокобезопасны). Если задан ``feedback_path``, примеры дополнительно
+    пишутся в JSONL-журнал (``src.feedback_store``) и поднимаются при старте:
+    набравший порог вопрос получает переобученную модель сразу, до первого
+    решения.
 
     ``reference`` по умолчанию строится из **накопленных примеров других
     вопросов** — тот же смысл, что у ``others`` в офлайновой кривой few-shot
@@ -371,6 +390,8 @@ class RiskAwareCascadeBackend(CascadeBackend):
         gate_delta: float = 0.0,
         few_shot_n: int | None = None,
         reference: tuple[Any, Any] | None = None,
+        feedback_path: str | Path | None = None,
+        max_examples_per_question: int = RISK_FEEDBACK_MAX_PER_QUESTION,
     ):
         if not 0.0 <= risk_budget <= 1.0:
             raise ValueError(f"risk_budget must be in [0.0, 1.0], got {risk_budget}")
@@ -380,6 +401,11 @@ class RiskAwareCascadeBackend(CascadeBackend):
             )
         if few_shot_n is not None and few_shot_n < 2:
             raise ValueError(f"few_shot_n must be >= 2 or None, got {few_shot_n}")
+        if max_examples_per_question < 1:
+            raise ValueError(
+                "max_examples_per_question must be >= 1, got "
+                f"{max_examples_per_question}"
+            )
         super().__init__(primary, fallback, threshold=0.0)
         self.risk_model = risk_model
         self.risk_budget = risk_budget
@@ -406,6 +432,46 @@ class RiskAwareCascadeBackend(CascadeBackend):
             modalities=self.capabilities.modalities,
             accepts_feedback=self.few_shot_n is not None,
         )
+        # Журнал фидбэка: без него копилка живёт только в памяти и обнуляется
+        # при рестарте. Путь пуст — прежнее поведение (только память).
+        self.max_examples_per_question = int(max_examples_per_question)
+        self.feedback_path = Path(feedback_path) if feedback_path else None
+        self._feedback = (
+            FeedbackStore(self.feedback_path) if self.feedback_path else None
+        )
+        self.restored_examples = 0
+        if self._feedback is not None:
+            self._restore_examples()
+
+    def _restore_examples(self) -> None:
+        """Поднять копилку с диска; где порог уже набран — сразу переобучить.
+
+        Модели восстанавливаются до первого решения, иначе после рестарта сервис
+        отвечал бы по базовой модели, хотя примеров для вопроса уже достаточно.
+        """
+        records = group_records(self._feedback.load(), KIND_RISK)
+        for record in records:
+            try:
+                question = str(record["question"])
+                bucket = self._examples.setdefault(question, [])
+                bucket.append(
+                    (record_to_decision(record["decision"]), bool(record["correct"]))
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                # содержимое записи не логируем: это тело фидбэка
+                logger.warning(
+                    "feedback: пропущен пример risk-каскада (%s)",
+                    type(exc).__name__,
+                )
+        for question, bucket in self._examples.items():
+            if len(bucket) > self.max_examples_per_question:
+                del bucket[: len(bucket) - self.max_examples_per_question]
+        self.restored_examples = sum(len(bucket) for bucket in self._examples.values())
+        if self.few_shot_n is None:
+            return
+        for question, bucket in self._examples.items():
+            if len(bucket) >= self.few_shot_n:
+                self._few_shot_models[question] = self._fit(question, bucket)
 
     @property
     def escalation_reason(self) -> str | None:
@@ -447,21 +513,42 @@ class RiskAwareCascadeBackend(CascadeBackend):
         if len(decisions) != len(correct):
             raise ValueError("decisions and correct must have the same length")
         with self._lock:
+            # Сначала журнал, потом память: если запись на диск не удалась,
+            # запрос фидбэка должен вернуть ошибку, а не «принять» примеры,
+            # которые исчезнут при рестарте.
+            if self._feedback is not None and decisions:
+                self._feedback.append(
+                    [
+                        {
+                            "kind": KIND_RISK,
+                            "question": question,
+                            "decision": decision_to_record(decision),
+                            "correct": 1 if flag else 0,
+                        }
+                        for decision, flag in zip(decisions, correct)
+                    ]
+                )
             bucket = self._examples.setdefault(question, [])
             bucket.extend(zip(decisions, correct))
+            if len(bucket) > self.max_examples_per_question:
+                del bucket[: len(bucket) - self.max_examples_per_question]
             if len(bucket) < self.few_shot_n:
                 return None
-            own_features = features_matrix([decision for decision, _ in bucket])
-            own_labels = [1 if flag else 0 for _, flag in bucket]
-            reference_features, reference_labels = self.reference_rows(question)
-            model = self.risk_model.retrained_with(
-                own_features,
-                own_labels,
-                reference_features=reference_features,
-                reference_labels=reference_labels,
-            )
+            model = self._fit(question, bucket)
             self._few_shot_models[question] = model
             return model
+
+    def _fit(self, question: str, bucket: list[tuple[Any, bool]]) -> Any:
+        """Переобучить few-shot модель вопроса по схеме {``reference`` + свои}."""
+        own_features = features_matrix([decision for decision, _ in bucket])
+        own_labels = [1 if flag else 0 for _, flag in bucket]
+        reference_features, reference_labels = self.reference_rows(question)
+        return self.risk_model.retrained_with(
+            own_features,
+            own_labels,
+            reference_features=reference_features,
+            reference_labels=reference_labels,
+        )
 
     def reference_rows(self, question: str) -> tuple[Any, Any] | tuple[None, None]:
         """Строки «чужих» вопросов под схему {``reference`` + свои}.

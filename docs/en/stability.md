@@ -140,6 +140,7 @@ Enabled by the pair `DECISION_BACKEND=cascade` + `DECISION_CASCADE_RISK_BUDGET`.
 | `DECISION_RISK_MODEL_PATH` | file of the `P(error)` estimator | path | `<DECISION_CHECKPOINT_DIR>/risk.json` |
 | `DECISION_RISK_FEW_SHOT_N` | how many own examples before retraining | `>= 2` enables; `0`/`1` disables | `10` |
 | `DECISION_RISK_GATE_DELTA` | tolerance for the hard gate certificate | `> 0` relaxes, `< 0` tightens | `0.0` |
+| `DECISION_FEEDBACK_PATH` | feedback journal (JSONL): few-shot examples and `q` counters | path; empty — memory only | — (memory) |
 
 An invalid value (budget outside `[0, 1]`, not a number) is a startup error, not silently different behaviour. A missing `risk.json` with the budget enabled is also a startup error with a hint on how to train the model.
 
@@ -152,6 +153,8 @@ An invalid value (budget outside `[0, 1]`, not a number) is a startup error, not
 | `risk_gate_delta` | float | always |
 | `risk_few_shot_n` | int | when few-shot is enabled |
 | `risk_few_shot` | list of question names | when few-shot is enabled |
+| `feedback_path` | string | when `DECISION_FEEDBACK_PATH` is set |
+| `feedback_restored` | int | when `DECISION_FEEDBACK_PATH` is set: how many events were restored from disk |
 
 Keys may be added, but never renamed or removed.
 
@@ -164,6 +167,21 @@ Keys may be added, but never renamed or removed.
 ### `POST /v1/feedback`
 
 `200` with `accepted` and `questions[]`, where each question has `question`, `accepted`, `examples`, `reference`, `retrained`. If few-shot is off — `409 FEEDBACK_UNSUPPORTED`, and the same is visible in `GET /info -> accepts_feedback`.
+
+### Feedback journal (`DECISION_FEEDBACK_PATH`)
+
+By default examples and counters live only in process memory: a restart returns the service to the state captured at deployment. With `DECISION_FEEDBACK_PATH` set, feedback survives a restart.
+
+- Format — JSONL, one line per event; each line carries `v` (schema version, currently `1`) and `kind` (`risk` — a labelled decision, `benefit` — an external model answer outcome).
+- The journal is append-only; on overflow the oldest events are evicted and the file is rewritten atomically (`tmp` + `os.replace`), so a reader never sees half a file.
+- Limits: the journal keeps the last 10,000 events, the risk cascade keeps up to 1,000 examples per question (fresh rows matter more than old ones).
+- Broken lines and lines of a foreign version are skipped with a warning in the log; line contents are not logged, they are feedback bodies.
+- At startup examples are restored, and if a question already has `DECISION_RISK_FEW_SHOT_N` examples, the few-shot model is retrained immediately, so the first decision already uses it.
+- One file per process: concurrent writes from several processes are not supported.
+- The ledger of handed-out decision fingerprints (used to match feedback with escalations) is **not** persisted: it belongs to the current process lifetime; fingerprints start accumulating anew after a restart.
+- An unavailable path is a startup error, not a silent switch to "memory only".
+
+The `feedback_path` and `feedback_restored` keys in `GET /info -> engine` show whether the journal is enabled and how many events were restored at startup.
 
 ### Hard gate
 
@@ -189,6 +207,7 @@ Enabled by `DECISION_BACKEND=cascade` + `DECISION_CASCADE_POLICY=benefit`. The p
 | `DECISION_CASCADE_ESCALATION_COST` | external call cost `C` | `>= 0` | `0.05` |
 | `DECISION_CASCADE_ERROR_COST` | error cost `D` | `>= 0` | `1.0` |
 | `DECISION_CASCADE_FEEDBACK_SHRINKAGE` | prior `q` weight in pseudo-observations `W` | `> 0` | `50` |
+| `DECISION_FEEDBACK_PATH` | feedback journal (JSONL): `q` counters survive a restart (shared variable with the risk cascade) | path; empty — memory only | — (memory) |
 
 An unknown policy, an invalid `q` bound, `q` outside `(0, 1]`, negative costs and `W <= 0` are startup errors, not a silent fallback to the confidence threshold. `DECISION_CASCADE_POLICY=benefit` takes precedence over `DECISION_CASCADE_RISK_BUDGET`: when both are set, benefit runs and no `risk.json` is needed.
 
@@ -205,6 +224,8 @@ An unknown policy, an invalid `q` bound, `q` outside `(0, 1]`, negative costs an
 | `benefit_threshold` | float | always: threshold `p` for a question outside the mapping |
 | `benefit_thresholds` | "question → threshold" mapping | always; empty when `q` is a number |
 | `benefit_feedback` | "question → total observations" mapping | always; empty until feedback arrives |
+| `feedback_path` | string | when `DECISION_FEEDBACK_PATH` is set |
+| `feedback_restored` | int | when `DECISION_FEEDBACK_PATH` is set: how many observations were restored from disk |
 
 Keys may be added, but never renamed or removed.
 
@@ -216,7 +237,7 @@ Keys may be added, but never renamed or removed.
 
 ### `POST /v1/feedback`
 
-Same transport as the risk cascade, different meaning: the model is not retrained (`retrained = false`), `q` for the question is refined instead. Each question in the response has `question`, `accepted`, `examples`, `reference`, `retrained`, `remote_accuracy` — the updated `q`. Only decisions that actually went to the external model count: local head answers do not change `q`, and repeated feedback for the same returned decision is not counted twice. The estimate shifts in a Bayesian way: `q_new = (q_prior * W + correct) / (W + total)`. A backend without feedback support returns `409 FEEDBACK_UNSUPPORTED`, and the same is visible in `GET /info -> accepts_feedback`.
+Same transport as the risk cascade, different meaning: the model is not retrained (`retrained = false`), `q` for the question is refined instead. Each question in the response has `question`, `accepted`, `examples`, `reference`, `retrained`, `remote_accuracy` — the updated `q`. Only decisions that actually went to the external model count: local head answers do not change `q`, and repeated feedback for the same returned decision is not counted twice. The estimate shifts in a Bayesian way: `q_new = (q_prior * W + correct) / (W + total)`. Counters are stored in the `DECISION_FEEDBACK_PATH` journal (see §7) and restored at startup, while the ledger of handed-out decision fingerprints is not: feedback about escalations is effective within the process lifetime. A backend without feedback support returns `409 FEEDBACK_UNSUPPORTED`, and the same is visible in `GET /info -> accepts_feedback`.
 
 ### How `q` is obtained
 

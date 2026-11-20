@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections import deque
 from pathlib import Path
@@ -33,6 +34,7 @@ from typing import Any
 
 from src.backends.base import Capabilities
 from src.backends.cascade import CascadeBackend
+from src.feedback_store import KIND_BENEFIT, FeedbackStore, group_records
 
 DEFAULT_ESCALATION_COST = 0.05
 DEFAULT_ERROR_COST = 1.0
@@ -40,6 +42,8 @@ DEFAULT_ERROR_COST = 1.0
 DEFAULT_FEEDBACK_SHRINKAGE = 50.0
 #: Сколько последних эскалаций на вопрос помнить для сопоставления с фидбэком.
 DEFAULT_LEDGER_SIZE = 4096
+
+logger = logging.getLogger(__name__)
 
 
 def decision_fingerprint(decision: Any) -> tuple[str, Any, float]:
@@ -109,6 +113,9 @@ class BenefitAwareCascadeBackend(CascadeBackend):
 
     Наследует механику эскалации (в том числе батч и неподдерживаемые
     модальности), меняя только правило «эскалировать ли этот вопрос».
+
+    Обратная связь уточняет ``q`` байесовским сдвигом; счётчики наблюдений при
+    заданном ``feedback_path`` переживают рестарт (см. ``src.feedback_store``).
     """
 
     def __init__(
@@ -121,6 +128,7 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         error_cost: float = DEFAULT_ERROR_COST,
         feedback_shrinkage: float = DEFAULT_FEEDBACK_SHRINKAGE,
         ledger_size: int = DEFAULT_LEDGER_SIZE,
+        feedback_path: str | Path | None = None,
     ):
         if escalation_cost < 0.0:
             raise ValueError(
@@ -168,6 +176,38 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         self.capabilities = Capabilities(
             modalities=self.capabilities.modalities, accepts_feedback=True
         )
+        # Журнал фидбэка: счётчики «верно/всего» переживают рестарт, иначе
+        # политика снова опирается на срез, снятый при развёртывании.
+        self.feedback_path = Path(feedback_path) if feedback_path else None
+        self._feedback = (
+            FeedbackStore(self.feedback_path) if self.feedback_path else None
+        )
+        self.restored_examples = 0
+        if self._feedback is not None:
+            self._restore_observations()
+
+    def _restore_observations(self) -> None:
+        """Поднять счётчики ответов внешней модели с диска.
+
+        Журнал отпечатков (``_remote_log``) не сохраняется: он сопоставляет
+        фидбэк с решениями, выданными в текущей жизни процесса. Счётчики — это
+        накопленная статистика, ей теряться при рестарте незачем.
+        """
+        for record in group_records(self._feedback.load(), KIND_BENEFIT):
+            try:
+                question = str(record["question"])
+                correct = bool(record["correct"])
+            except (KeyError, TypeError, ValueError) as exc:
+                # содержимое записи не логируем: это тело фидбэка
+                logger.warning(
+                    "feedback: пропущено наблюдение benefit-каскада (%s)",
+                    type(exc).__name__,
+                )
+                continue
+            stats = self._observed.setdefault(question, [0, 0])
+            stats[0] += 1 if correct else 0
+            stats[1] += 1
+            self.restored_examples += 1
 
     @property
     def escalation_reason(self) -> str | None:
@@ -250,14 +290,35 @@ class BenefitAwareCascadeBackend(CascadeBackend):
             ledger = self._remote_log.get(question)
             if not ledger:
                 return
+            # Сопоставление идёт по копии: журнал меняется только после того,
+            # как события легли на диск. Иначе ошибка записи «съела» бы
+            # отпечатки, и повторный фидбэк уже не с чем было бы связать.
+            remaining = list(ledger)
+            accepted: list[tuple[tuple[str, Any, float], dict[str, Any]]] = []
             for decision, flag in zip(decisions, correct):
                 fingerprint = decision_fingerprint(decision)
-                try:
-                    ledger.remove(fingerprint)
-                except ValueError:
+                if fingerprint not in remaining:
                     continue
-                stats = self._observed.setdefault(question, [0, 0])
-                stats[0] += 1 if flag else 0
+                remaining.remove(fingerprint)
+                accepted.append(
+                    (
+                        fingerprint,
+                        {
+                            "kind": KIND_BENEFIT,
+                            "question": question,
+                            "correct": 1 if flag else 0,
+                        },
+                    )
+                )
+            if not accepted:
+                return
+            if self._feedback is not None:
+                self._feedback.append([record for _, record in accepted])
+            ledger.clear()
+            ledger.extend(remaining)
+            stats = self._observed.setdefault(question, [0, 0])
+            for _, record in accepted:
+                stats[0] += int(record["correct"])
                 stats[1] += 1
 
     def _on_escalated(self, decisions: dict) -> None:

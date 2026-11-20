@@ -321,6 +321,11 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     политика и недопустимая граница ``q`` — ошибка старта, а не молчаливый
     откат на порог уверенности (контракт — ``docs/stability.md`` §8).
 
+    ``DECISION_FEEDBACK_PATH`` включает журнал обратной связи: примеры few-shot
+    и счётчики ``q`` пишутся в JSONL и поднимаются при старте, иначе рестарт
+    откатывает подстройку к срезу, снятому при развёртывании (контракт —
+    ``docs/stability.md`` §7–§8).
+
     ``DECISION_CASCADE_POLICY=conformal`` включает conformal-каскад: порог на
     ``P(ошибка)`` берётся из сертификата ``DECISION_CONFORMAL_PATH`` (по
     умолчанию ``<DECISION_CHECKPOINT_DIR>/conformal.json``), посчитанного на
@@ -347,6 +352,18 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     )
     threshold = float(os.environ.get("DECISION_CASCADE_THRESHOLD", "0.6"))
     policy = os.environ.get("DECISION_CASCADE_POLICY", "").strip().lower()
+    # Журнал обратной связи: без него примеры и счётчики живут только в памяти.
+    # Путь проверяем на старте, чтобы недоступный каталог ломал запуск, а не
+    # первый же POST /v1/feedback.
+    feedback_path = os.environ.get("DECISION_FEEDBACK_PATH") or None
+    if feedback_path:
+        parent = Path(feedback_path).expanduser().parent
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"DECISION_FEEDBACK_PATH={feedback_path!r} is not writable: {exc}"
+            ) from exc
     if policy not in {
         "",
         "threshold",
@@ -393,6 +410,7 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
             feedback_shrinkage=float(
                 os.environ.get("DECISION_CASCADE_FEEDBACK_SHRINKAGE", "50")
             ),
+            feedback_path=feedback_path,
         )
     if policy == "conformal":
         from src.backends.conformal import ConformalCascadeBackend
@@ -409,6 +427,11 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
                 "DECISION_CASCADE_POLICY=conformal requires a certificate at "
                 f"{certificate_path} (set DECISION_CONFORMAL_PATH or fit it via "
                 "python -m eval.conformal.run)"
+            )
+        if feedback_path:
+            logger.warning(
+                "DECISION_FEEDBACK_PATH задан, но conformal-каскад обратную "
+                "связь не принимает: журнал не используется"
             )
         return ConformalCascadeBackend(
             primary,
@@ -447,6 +470,12 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
             gate_delta=gate_delta,
             # значение < 2 (в частности 0) отключает few-shot переобучение
             few_shot_n=few_shot_n if few_shot_n >= 2 else None,
+            feedback_path=feedback_path,
+        )
+    if feedback_path:
+        logger.warning(
+            "DECISION_FEEDBACK_PATH задан, но политика порога уверенности "
+            "обратную связь не принимает: журнал не используется"
         )
     return CascadeBackend(primary, fallback, threshold=threshold)
 
@@ -749,6 +778,13 @@ def _engine_info(backend: Backend) -> dict[str, Any] | None:
         benefit_info = getattr(backend, "benefit_info", None)
         if callable(benefit_info):
             info.update(benefit_info())
+        # Журнал фидбэка: видно, включён ли он и сколько событий поднято с диска
+        feedback_path = getattr(backend, "feedback_path", None)
+        if feedback_path is not None:
+            info["feedback_path"] = str(feedback_path)
+            info["feedback_restored"] = int(
+                getattr(backend, "restored_examples", 0)
+            )
         return info
     return None
 

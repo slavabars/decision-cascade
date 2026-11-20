@@ -618,3 +618,111 @@ def test_feedback_endpoint_feeds_few_shot(monkeypatch):
         assert row["reference"] == 1  # чужие строки — пример вопроса "a"
         assert cascade.few_shot_questions == ["b"]
         assert tc.get("/info").json()["accepts_feedback"] is True
+
+
+# --- Журнал фидбэка: примеры переживают рестарт -------------------------------
+
+
+def _risk_cascade(path, *, few_shot_n=3, max_examples_per_question=1000):
+    return RiskAwareCascadeBackend(
+        _StubBackend("local", {"a": 0.9, "b": 0.55}),
+        _StubBackend("remote", {"a": 0.0, "b": 0.99}),
+        _risk_model(),
+        risk_budget=0.5,
+        few_shot_n=few_shot_n,
+        feedback_path=path,
+        max_examples_per_question=max_examples_per_question,
+    )
+
+
+def test_risk_feedback_survives_restart_and_retrains(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    first = _risk_cascade(path)
+    assert first.add_examples("b", [_noul(0.55), _noul(0.56)], [True, True]) is None
+    first.add_examples("b", [_noul(0.55)], [True])
+    assert first.few_shot_questions == ["b"]
+
+    second = _risk_cascade(path)
+
+    assert second.example_counts == {"b": 3}
+    assert second.restored_examples == 3
+    # модель вопроса поднята сразу: первое же решение идёт по few-shot, а не по базовой
+    assert second.few_shot_questions == ["b"]
+    assert second._model_for("b") is not second.risk_model
+    assert second._model_for("a") is second.risk_model
+
+
+def test_risk_feedback_not_persisted_without_few_shot(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    cascade = _risk_cascade(path, few_shot_n=None)
+    # выключенный few-shot не принимает фидбэк — журнал не должен пухнуть
+    assert cascade.add_examples("b", [_noul(0.55)], [True]) is None
+    assert not path.exists()
+
+    assert _risk_cascade(path, few_shot_n=None).restored_examples == 0
+
+
+def test_risk_feedback_caps_examples_per_question(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    cascade = _risk_cascade(path, max_examples_per_question=2)
+    cascade.add_examples(
+        "b", [_noul(0.5), _noul(0.55), _noul(0.6)], [True, False, True]
+    )
+    assert cascade.example_counts == {"b": 2}
+
+    restored = _risk_cascade(path, max_examples_per_question=2)
+    assert restored.example_counts == {"b": 2}
+    assert restored.restored_examples == 2
+
+
+def test_risk_feedback_survives_broken_file(tmp_path, caplog):
+    path = tmp_path / "feedback.jsonl"
+    path.write_text("{битая строка\n", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        cascade = _risk_cascade(path)
+
+    assert cascade.example_counts == {}
+    assert cascade.restored_examples == 0
+    # журнал продолжает работать: новая запись дописывается к битой строке
+    cascade.add_examples("b", [_noul(0.55)], [True])
+    assert cascade.example_counts == {"b": 1}
+    assert _risk_cascade(path).example_counts == {"b": 1}
+
+
+def test_create_cascade_backend_reads_feedback_path(monkeypatch, tmp_path):
+    from api.server.main import _engine_info, create_cascade_backend
+    from api.server.service import DecisionService
+
+    model_path = tmp_path / "risk.json"
+    _risk_model().save(model_path)
+    feedback_path = tmp_path / "state" / "feedback.jsonl"
+    monkeypatch.setenv("DECISION_CASCADE_FALLBACK_URL", "http://fallback")
+    monkeypatch.setenv("DECISION_CASCADE_RISK_BUDGET", "0.12")
+    monkeypatch.setenv("DECISION_RISK_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("DECISION_FEEDBACK_PATH", str(feedback_path))
+
+    backend = create_cascade_backend(DecisionService(seed=0))
+
+    assert backend.feedback_path == feedback_path
+    assert feedback_path.parent.is_dir()
+    info = _engine_info(backend)
+    assert info["feedback_path"] == str(feedback_path)
+    assert info["feedback_restored"] == 0
+
+
+def test_create_cascade_backend_rejects_unwritable_feedback_path(monkeypatch, tmp_path):
+    from api.server.main import create_cascade_backend
+    from api.server.service import DecisionService
+
+    model_path = tmp_path / "risk.json"
+    _risk_model().save(model_path)
+    blocker = tmp_path / "blocked"
+    blocker.write_text("не каталог", encoding="utf-8")
+    monkeypatch.setenv("DECISION_CASCADE_FALLBACK_URL", "http://fallback")
+    monkeypatch.setenv("DECISION_CASCADE_RISK_BUDGET", "0.12")
+    monkeypatch.setenv("DECISION_RISK_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("DECISION_FEEDBACK_PATH", str(blocker / "feedback.jsonl"))
+
+    with pytest.raises(RuntimeError, match="DECISION_FEEDBACK_PATH"):
+        create_cascade_backend(DecisionService(seed=0))
