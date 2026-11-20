@@ -177,12 +177,12 @@ def test_readme_embeds_logo_with_absolute_url():
     """Логотип должен грузиться на GitHub и на PyPI, а файл — лежать в репозитории."""
     url = (
         "https://raw.githubusercontent.com/slavabars/decision-cascade/"
-        "refs/heads/main/docs/assets/logo.svg"
+        "refs/heads/main/docs/assets/logo-animated.gif"
     )
     for name in ("README.md", "README.en.md"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert url in text, f"в {name} нет абсолютной ссылки на логотип"
-    assert (ROOT / "docs" / "assets" / "logo.svg").is_file()
+    assert (ROOT / "docs" / "assets" / "logo-animated.gif").is_file()
 
 
 def test_english_readme_is_parity():
