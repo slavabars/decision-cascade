@@ -3,6 +3,7 @@
 [![CI](https://github.com/slavabars/decision-cascade/actions/workflows/ci.yml/badge.svg)](https://github.com/slavabars/decision-cascade/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/decision-cascade)](https://pypi.org/project/decision-cascade/)
 [![Python](https://img.shields.io/pypi/pyversions/decision-cascade)](https://pypi.org/project/decision-cascade/)
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-decision--cascade--packs-yellow)](https://huggingface.co/slavabars/decision-cascade-packs)
 [![Coverage gate](https://img.shields.io/badge/coverage_gate-%E2%89%A590%25-brightgreen)](https://github.com/slavabars/decision-cascade/blob/main/pyproject.toml)
 [![License](https://img.shields.io/pypi/l/decision-cascade)](https://github.com/slavabars/decision-cascade/blob/main/LICENSE)
 

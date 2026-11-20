@@ -159,6 +159,7 @@ BADGES = (
     "img.shields.io/pypi/v/decision-cascade",
     "img.shields.io/pypi/pyversions/decision-cascade",
     "img.shields.io/pypi/l/decision-cascade",
+    "img.shields.io/badge/Hugging%20Face-decision--cascade--packs-yellow",
     "coverage_gate",
 )
 
