@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/slavabars/decision-cascade/refs/heads/main/docs/assets/logo-animated.gif" width="128" alt="decision-cascade">
+  <img src="https://raw.githubusercontent.com/slavabars/decision-cascade/main/docs/assets/logo-animated.gif" width="128" alt="decision-cascade">
 </p>
 
 # decision-cascade
