@@ -347,3 +347,113 @@ def test_benefit_feedback_endpoint_persists(tmp_path, monkeypatch):
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert _benefit_cascade(path).example_counts == {"b": 1}
+
+
+# --- Исследовательские эскалации и IPS-оценка q -------------------------------
+
+
+def test_benefit_exploration_off_by_default():
+    cascade = BenefitAwareCascadeBackend(
+        _StubBackend("local", {"a": 0.95}),
+        _StubBackend("remote", {"a": 0.99}),
+        0.9,
+    )
+    assert cascade.explore == 0.0
+    info = cascade.benefit_info()
+    assert info["explore_rate"] == 0.0
+    assert info["explore_calls"] == 0
+
+
+def test_benefit_exploration_escalates_and_weights_feedback(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+
+    class _AlwaysExplore:
+        def random(self):
+            return 0.0
+
+    primary = _StubBackend("local", {"a": 0.95})
+    fallback = _StubBackend("remote", {"a": 0.99})
+    cascade = BenefitAwareCascadeBackend(
+        primary,
+        fallback,
+        0.9,
+        escalation_cost=0.05,
+        explore=0.5,
+        feedback_path=path,
+    )
+    # политика оставила бы «a» локально: 0.95 > 0.9 - 0.025, но жребий всегда «да»
+    cascade._rng = _AlwaysExplore()
+
+    result = cascade.decide("s", _questions(["a"]))
+
+    assert result.usage["escalated"] == 1
+    assert result.usage["reason"] == "benefit"
+    assert cascade.explore_calls == 1
+    decision = result.decisions["a"]
+    cascade.add_examples("a", [decision], [True])
+
+    weight = 2.0  # 1 / explore
+    assert cascade.example_counts == {"a": 1}
+    assert cascade.remote_accuracy_for("a") == pytest.approx(
+        (0.9 * 50 + weight) / (50 + weight)
+    )
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["propensity"] == pytest.approx(0.5)
+
+    # рестарт поднимает и счётчики, и IPS-веса: q не откатывается к априорной
+    again = BenefitAwareCascadeBackend(
+        _StubBackend("local", {"a": 0.95}),
+        _StubBackend("remote", {"a": 0.99}),
+        0.9,
+        escalation_cost=0.05,
+        explore=0.5,
+        feedback_path=path,
+    )
+    assert again.example_counts == {"a": 1}
+    assert again.remote_accuracy_for("a") == pytest.approx(
+        cascade.remote_accuracy_for("a")
+    )
+
+
+def test_benefit_exploration_is_seeded():
+    def run():
+        primary = _StubBackend("local", {"a": 0.95})
+        fallback = _StubBackend("remote", {"a": 0.99})
+        cascade = BenefitAwareCascadeBackend(
+            primary, fallback, 0.9, explore=0.5, explore_seed=42
+        )
+        for _ in range(100):
+            cascade.decide("s", _questions(["a"]))
+        return fallback.calls, cascade.explore_calls
+
+    first = run()
+    second = run()
+
+    assert first == second
+    assert 0 < first[1] < 100
+
+
+def test_benefit_explore_validated():
+    with pytest.raises(ValueError, match="explore"):
+        BenefitAwareCascadeBackend(
+            _StubBackend("local", {}), _StubBackend("remote", {}), 0.9, explore=1.5
+        )
+
+
+def test_create_cascade_backend_reads_explore(monkeypatch):
+    from api.server.main import _engine_info, create_cascade_backend
+    from api.server.service import DecisionService
+
+    monkeypatch.setenv("DECISION_CASCADE_FALLBACK_URL", "http://fallback")
+    monkeypatch.setenv("DECISION_CASCADE_POLICY", "benefit")
+    monkeypatch.setenv("DECISION_CASCADE_REMOTE_ACCURACY", "0.86")
+    monkeypatch.setenv("DECISION_CASCADE_EXPLORE", "0.05")
+    monkeypatch.setenv("DECISION_CASCADE_EXPLORE_SEED", "7")
+    monkeypatch.delenv("DECISION_CASCADE_RISK_BUDGET", raising=False)
+
+    backend = create_cascade_backend(DecisionService(seed=0))
+
+    assert backend.explore == pytest.approx(0.05)
+    info = _engine_info(backend)
+    assert info["explore_rate"] == pytest.approx(0.05)
+    assert info["explore_calls"] == 0

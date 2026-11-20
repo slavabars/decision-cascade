@@ -279,6 +279,14 @@ def create_backend(service: DecisionService | None = None) -> Backend:
     return LocalHeadsBackend(service or create_service())
 
 
+def _optional_int(name: str) -> int | None:
+    """Целое из окружения или ``None``, если переменная не задана/пуста."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    return int(raw)
+
+
 def _load_risk_model(reason: str):
     """Прочитать оценщик ``P(ошибка)``; отсутствие файла — ошибка старта."""
     from src.risk import ErrorRiskModel
@@ -320,6 +328,11 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
     benefit важнее risk-бюджета: если заданы обе, работает benefit. Неизвестная
     политика и недопустимая граница ``q`` — ошибка старта, а не молчаливый
     откат на порог уверенности (контракт — ``docs/stability.md`` §8).
+
+    ``DECISION_CASCADE_EXPLORE`` (0…1, по умолчанию 0) включает исследовательские
+    эскалации: доля решений, которые политика оставила бы локально, всё равно
+    уходит наружу, чтобы оценка ``q`` не смещалась к трудным случаям;
+    ``DECISION_CASCADE_EXPLORE_SEED`` фиксирует генератор для воспроизводимости.
 
     ``DECISION_FEEDBACK_PATH`` включает журнал обратной связи: примеры few-shot
     и счётчики ``q`` пишутся в JSONL и поднимаются при старте, иначе рестарт
@@ -411,6 +424,8 @@ def create_cascade_backend(service: DecisionService | None = None) -> CascadeBac
                 os.environ.get("DECISION_CASCADE_FEEDBACK_SHRINKAGE", "50")
             ),
             feedback_path=feedback_path,
+            explore=float(os.environ.get("DECISION_CASCADE_EXPLORE", "0.0")),
+            explore_seed=_optional_int("DECISION_CASCADE_EXPLORE_SEED"),
         )
     if policy == "conformal":
         from src.backends.conformal import ConformalCascadeBackend

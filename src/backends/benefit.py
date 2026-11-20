@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import random
 import threading
 from collections import deque
 from pathlib import Path
@@ -42,8 +44,43 @@ DEFAULT_ERROR_COST = 1.0
 DEFAULT_FEEDBACK_SHRINKAGE = 50.0
 #: Сколько последних эскалаций на вопрос помнить для сопоставления с фидбэком.
 DEFAULT_LEDGER_SIZE = 4096
+#: Потолок веса исследовательской эскалации в IPS-оценке ``q``: ``1 / propensity``
+#: при малом ``epsilon`` даёт вес 100+ и позволяет одному наблюдению сдвинуть
+#: оценку. Ограничение смещает оценку только в хвосте распределения весов,
+#: зато держит дисперсию под контролем.
+EXPLORE_WEIGHT_CAP = 20.0
 
 logger = logging.getLogger(__name__)
+
+
+def explore_weight(propensity: float) -> float:
+    """Вес наблюдения в IPS-оценке ``q``: ``1 / propensity`` с потолком.
+
+    Эскалация по политике детерминирована (``propensity = 1``), поэтому её вес
+    равен единице — при выключенном исследовании оценка совпадает с прежней
+    формулой. Исследовательская эскалация происходит с вероятностью ``epsilon``,
+    и её вес ``1 / epsilon`` возвращает наблюдению «представительство» всех
+    похожих решений, которые политика оставила локально.
+    """
+    if not math.isfinite(propensity) or propensity <= 0.0:
+        raise ValueError(f"propensity must be in (0, 1], got {propensity}")
+    return min(1.0 / propensity, EXPLORE_WEIGHT_CAP)
+
+
+def shrink_accuracy(
+    prior: float, weight: float, weight_sum: float, weighted_correct: float
+) -> float:
+    """Байесовский сдвиг ``q`` априорной оценкой ``prior`` веса ``weight``.
+
+    Одна формула и для счётчиков, и для IPS-весов: при ``weight_sum = total`` и
+    ``weighted_correct = correct`` это прежнее
+    ``(prior * W + correct) / (W + total)``.
+    """
+    total = weight + weight_sum
+    if total <= 0.0:
+        return prior
+    return (prior * weight + weighted_correct) / total
+
 
 
 def decision_fingerprint(decision: Any) -> tuple[str, Any, float]:
@@ -129,6 +166,8 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         feedback_shrinkage: float = DEFAULT_FEEDBACK_SHRINKAGE,
         ledger_size: int = DEFAULT_LEDGER_SIZE,
         feedback_path: str | Path | None = None,
+        explore: float = 0.0,
+        explore_seed: int | None = None,
     ):
         if escalation_cost < 0.0:
             raise ValueError(
@@ -142,6 +181,8 @@ class BenefitAwareCascadeBackend(CascadeBackend):
             )
         if ledger_size <= 0:
             raise ValueError(f"ledger_size must be > 0, got {ledger_size}")
+        if not 0.0 <= explore <= 1.0:
+            raise ValueError(f"explore must be in [0.0, 1.0], got {explore}")
         if isinstance(remote_accuracy, dict):
             if not remote_accuracy:
                 raise ValueError("remote_accuracy dict must not be empty")
@@ -167,11 +208,22 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         self.error_cost = float(error_cost)
         self.feedback_shrinkage = float(feedback_shrinkage)
         self.ledger_size = int(ledger_size)
+        # Исследовательские эскалации: доля решений, которые политика оставила
+        # бы локально, но мы всё равно отправляем наружу ради честной оценки q.
+        self.explore = float(explore)
+        self._rng = random.Random(explore_seed)
+        self._pending = threading.local()
+        self.explore_calls = 0
         self.name = f"benefit-cascade[{primary.name}->{fallback.name}]"
         # Обратная связь по ответам внешней модели: отпечатки выданных наружу
         # решений (чтобы связать фидбэк с fallback) и счётчики «верно/всего».
-        self._remote_log: dict[str, deque[tuple[str, Any, float]]] = {}
+        self._remote_log: dict[
+            str, deque[tuple[tuple[str, Any, float], float]]
+        ] = {}
         self._observed: dict[str, list[int]] = {}
+        # IPS-суммы: [сумма весов, сумма весов * верно]. Счётчики выше остаются
+        # человекочитаемыми (контракт /info), оценка q идёт по весам.
+        self._weighted: dict[str, list[float]] = {}
         self._lock = threading.RLock()
         self.capabilities = Capabilities(
             modalities=self.capabilities.modalities, accepts_feedback=True
@@ -190,13 +242,15 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         """Поднять счётчики ответов внешней модели с диска.
 
         Журнал отпечатков (``_remote_log``) не сохраняется: он сопоставляет
-        фидбэк с решениями, выданными в текущей жизни процесса. Счётчики — это
-        накопленная статистика, ей теряться при рестарте незачем.
+        фидбэк с решениями, выданными в текущей жизни процесса. Счётчики и
+        IPS-веса — это накопленная статистика, ей теряться при рестарте незачем.
         """
         for record in group_records(self._feedback.load(), KIND_BENEFIT):
             try:
                 question = str(record["question"])
                 correct = bool(record["correct"])
+                propensity = float(record.get("propensity", 1.0))
+                weight = explore_weight(propensity)
             except (KeyError, TypeError, ValueError) as exc:
                 # содержимое записи не логируем: это тело фидбэка
                 logger.warning(
@@ -207,6 +261,9 @@ class BenefitAwareCascadeBackend(CascadeBackend):
             stats = self._observed.setdefault(question, [0, 0])
             stats[0] += 1 if correct else 0
             stats[1] += 1
+            weighted = self._weighted.setdefault(question, [0.0, 0.0])
+            weighted[0] += weight
+            weighted[1] += weight if correct else 0.0
             self.restored_examples += 1
 
     @property
@@ -233,6 +290,7 @@ class BenefitAwareCascadeBackend(CascadeBackend):
             feedback = {
                 name: stats[1] for name, stats in sorted(self._observed.items())
             }
+            explore_calls = self.explore_calls
         return {
             "policy": self.policy,
             "remote_accuracy": (
@@ -247,6 +305,8 @@ class BenefitAwareCascadeBackend(CascadeBackend):
             "benefit_threshold": self.threshold_for(""),
             "benefit_thresholds": thresholds,
             "benefit_feedback": feedback,
+            "explore_rate": self.explore,
+            "explore_calls": explore_calls,
         }
 
     def remote_accuracy_for(self, question: str) -> float:
@@ -256,14 +316,18 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         псевдонаблюдений, поэтому пара случайных ответов политику не меняет, а
         поток фидбэка — меняет. Так политика перестаёт опираться на срез,
         снятый один раз при развёртывании.
+
+        Наблюдения взвешены по вероятности эскалации (IPS): эскалация по
+        политике идёт с вероятностью 1, исследовательская — с вероятностью
+        ``explore``. Без исследования вес каждого наблюдения равен 1, и оценка
+        совпадает с прежней.
         """
         prior = self.remote_accuracy.get(question, self.default_remote_accuracy)
         with self._lock:
-            correct, total = self._observed.get(question, [0, 0])
-        if total == 0:
-            return prior
-        weight = self.feedback_shrinkage
-        return (prior * weight + correct) / (weight + total)
+            weight_sum, weighted_correct = self._weighted.get(question, [0.0, 0.0])
+        return shrink_accuracy(
+            prior, self.feedback_shrinkage, weight_sum, weighted_correct
+        )
 
     @property
     def example_counts(self) -> dict[str, int]:
@@ -294,41 +358,85 @@ class BenefitAwareCascadeBackend(CascadeBackend):
             # как события легли на диск. Иначе ошибка записи «съела» бы
             # отпечатки, и повторный фидбэк уже не с чем было бы связать.
             remaining = list(ledger)
-            accepted: list[tuple[tuple[str, Any, float], dict[str, Any]]] = []
+            accepted: list[tuple[dict[str, Any], float]] = []
             for decision, flag in zip(decisions, correct):
                 fingerprint = decision_fingerprint(decision)
-                if fingerprint not in remaining:
+                index = next(
+                    (
+                        position
+                        for position, (known, _) in enumerate(remaining)
+                        if known == fingerprint
+                    ),
+                    None,
+                )
+                if index is None:
                     continue
-                remaining.remove(fingerprint)
+                _, propensity = remaining.pop(index)
                 accepted.append(
                     (
-                        fingerprint,
                         {
                             "kind": KIND_BENEFIT,
                             "question": question,
                             "correct": 1 if flag else 0,
+                            "propensity": propensity,
                         },
+                        propensity,
                     )
                 )
             if not accepted:
                 return
             if self._feedback is not None:
-                self._feedback.append([record for _, record in accepted])
+                self._feedback.append([record for record, _ in accepted])
             ledger.clear()
             ledger.extend(remaining)
             stats = self._observed.setdefault(question, [0, 0])
-            for _, record in accepted:
-                stats[0] += int(record["correct"])
+            weighted = self._weighted.setdefault(question, [0.0, 0.0])
+            for record, propensity in accepted:
+                correct_flag = int(record["correct"])
+                weight = explore_weight(propensity)
+                stats[0] += correct_flag
                 stats[1] += 1
+                weighted[0] += weight
+                weighted[1] += weight if correct_flag else 0.0
 
     def _on_escalated(self, decisions: dict) -> None:
-        with self._lock:
-            for name, decision in decisions.items():
-                ledger = self._remote_log.get(name)
-                if ledger is None:
-                    ledger = deque(maxlen=self.ledger_size)
-                    self._remote_log[name] = ledger
-                ledger.append(decision_fingerprint(decision))
+        propensities = self._pending_propensities()
+        try:
+            with self._lock:
+                for name, decision in decisions.items():
+                    propensity = float(propensities.pop(name, 1.0))
+                    ledger = self._remote_log.get(name)
+                    if ledger is None:
+                        ledger = deque(maxlen=self.ledger_size)
+                        self._remote_log[name] = ledger
+                    ledger.append((decision_fingerprint(decision), propensity))
+                    if propensity < 1.0:
+                        self.explore_calls += 1
+        finally:
+            propensities.clear()
+
+    def decide(self, *args: Any, **kwargs: Any):
+        """Сбросить вероятности прошлого запроса и выполнить обычное решение."""
+        self._pending_propensities().clear()
+        return super().decide(*args, **kwargs)
+
+    def decide_many(self, *args: Any, **kwargs: Any):
+        """То же для батча: вероятности относятся только к текущему вызову."""
+        self._pending_propensities().clear()
+        return super().decide_many(*args, **kwargs)
+
+    def _pending_propensities(self) -> dict[str, float]:
+        """Вероятности эскалации решений текущего запроса (``threading.local``).
+
+        ``_uncertain_names`` и ``_on_escalated`` вызываются в одном потоке
+        одного запроса, но между ними бэкенд делает внешний вызов; локальный
+        словарь не даёт параллельным запросам перепутать вероятности.
+        """
+        mapping = getattr(self._pending, "propensities", None)
+        if mapping is None:
+            mapping = {}
+            self._pending.propensities = mapping
+        return mapping
 
     def threshold_for(self, question: str) -> float:
         """``p``, ниже которого эскалация выгодна: ``q - C / (1 + D)``."""
@@ -351,6 +459,25 @@ class BenefitAwareCascadeBackend(CascadeBackend):
         return self.expected_gain("", float(decision.confidence)) > 0.0
 
     def _uncertain_names(self, decisions: dict) -> list[str]:
-        return [
-            name for name, decision in decisions.items() if self._escalate(name, decision)
-        ]
+        """Вопросы на эскалацию: политика плюс исследовательская доля.
+
+        Решение, которое политика оставила бы локально, уходит наружу с
+        вероятностью ``explore``. Это нужно не для качества ответа, а для
+        оценки ``q``: фидбэк приходит только по эскалациям, поэтому без
+        исследования мы видим качество внешней модели лишь на трудных случаях.
+        Вероятность эскалации запоминается для IPS-весов в
+        ``_on_escalated``/``add_examples``; при ``explore = 0`` поведение
+        прежнее, и ``q`` считается по одним счётчикам.
+        """
+        propensities = self._pending_propensities()
+        propensities.clear()
+        names: list[str] = []
+        with self._lock:
+            for name, decision in decisions.items():
+                if self._escalate(name, decision):
+                    names.append(name)
+                    propensities[name] = 1.0
+                elif self.explore > 0.0 and self._rng.random() < self.explore:
+                    names.append(name)
+                    propensities[name] = self.explore
+        return names

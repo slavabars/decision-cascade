@@ -176,6 +176,7 @@ The contract, deployment, troubleshooting, cascade and measurement docs are avai
 | [`docs/en/risk-aware-cascade.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/risk-aware-cascade.md) | error-budget cascade, hard gate, `risk.json`, reference numbers |
 | [`docs/en/conformal.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/conformal.md) | conformal selective prediction, `conformal.json` certificate, "do no harm" gate |
 | [`docs/en/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/benchmarks.md) | competitor comparison, cascade policies, calibration, nightly regression |
+| [`docs/en/exploration.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/exploration.md) | feedback bias, exploratory escalation, IPS weights, measured cost |
 | [`docs/en/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/latency.md) | batching, input truncation, dtype budgets (CPU and GPU) |
 | [`docs/en/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/observability.md) | metrics, alerts, request id, log format |
 | [`docs/en/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/deploy.md) | Ubuntu/CentOS install, upgrade, backup, rollback |

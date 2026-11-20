@@ -207,9 +207,13 @@ Enabled by `DECISION_BACKEND=cascade` + `DECISION_CASCADE_POLICY=benefit`. The p
 | `DECISION_CASCADE_ESCALATION_COST` | external call cost `C` | `>= 0` | `0.05` |
 | `DECISION_CASCADE_ERROR_COST` | error cost `D` | `>= 0` | `1.0` |
 | `DECISION_CASCADE_FEEDBACK_SHRINKAGE` | prior `q` weight in pseudo-observations `W` | `> 0` | `50` |
+| `DECISION_CASCADE_EXPLORE` | share of decisions the policy would keep local that still go outside for an honest `q` estimate | `0…1` | `0` (off) |
+| `DECISION_CASCADE_EXPLORE_SEED` | generator seed for exploratory escalations | integer | — (random) |
 | `DECISION_FEEDBACK_PATH` | feedback journal (JSONL): `q` counters survive a restart (shared variable with the risk cascade) | path; empty — memory only | — (memory) |
 
-An unknown policy, an invalid `q` bound, `q` outside `(0, 1]`, negative costs and `W <= 0` are startup errors, not a silent fallback to the confidence threshold. `DECISION_CASCADE_POLICY=benefit` takes precedence over `DECISION_CASCADE_RISK_BUDGET`: when both are set, benefit runs and no `risk.json` is needed.
+An unknown policy, an invalid `q` bound, `q` outside `(0, 1]`, negative costs, `W <= 0` and `explore` outside `[0, 1]` are startup errors, not a silent fallback to the confidence threshold. `DECISION_CASCADE_POLICY=benefit` takes precedence over `DECISION_CASCADE_RISK_BUDGET`: when both are set, benefit runs and no `risk.json` is needed.
+
+**Exploratory escalations.** Feedback arrives for answers that went outside, that is, for hard cases; without exploration `q` is estimated on a biased sample. With `DECISION_CASCADE_EXPLORE > 0` a share of decisions the policy would keep local is still sent outside, and observations are weighted by the escalation probability (IPS): policy escalation weighs 1, exploratory escalation weighs `1 / epsilon` capped at 20. The probability is written to the `DECISION_FEEDBACK_PATH` journal, so IPS sums are restored after a restart. Bias and cost measurements — `exploration.md`.
 
 ### `GET /info -> engine`
 
@@ -224,6 +228,8 @@ An unknown policy, an invalid `q` bound, `q` outside `(0, 1]`, negative costs an
 | `benefit_threshold` | float | always: threshold `p` for a question outside the mapping |
 | `benefit_thresholds` | "question → threshold" mapping | always; empty when `q` is a number |
 | `benefit_feedback` | "question → total observations" mapping | always; empty until feedback arrives |
+| `explore_rate` | float | always: configured share of exploratory escalations |
+| `explore_calls` | int | always: how many exploratory calls this process made |
 | `feedback_path` | string | when `DECISION_FEEDBACK_PATH` is set |
 | `feedback_restored` | int | when `DECISION_FEEDBACK_PATH` is set: how many observations were restored from disk |
 
@@ -237,7 +243,7 @@ Keys may be added, but never renamed or removed.
 
 ### `POST /v1/feedback`
 
-Same transport as the risk cascade, different meaning: the model is not retrained (`retrained = false`), `q` for the question is refined instead. Each question in the response has `question`, `accepted`, `examples`, `reference`, `retrained`, `remote_accuracy` — the updated `q`. Only decisions that actually went to the external model count: local head answers do not change `q`, and repeated feedback for the same returned decision is not counted twice. The estimate shifts in a Bayesian way: `q_new = (q_prior * W + correct) / (W + total)`. Counters are stored in the `DECISION_FEEDBACK_PATH` journal (see §7) and restored at startup, while the ledger of handed-out decision fingerprints is not: feedback about escalations is effective within the process lifetime. A backend without feedback support returns `409 FEEDBACK_UNSUPPORTED`, and the same is visible in `GET /info -> accepts_feedback`.
+Same transport as the risk cascade, different meaning: the model is not retrained (`retrained = false`), `q` for the question is refined instead. Each question in the response has `question`, `accepted`, `examples`, `reference`, `retrained`, `remote_accuracy` — the updated `q`. Only decisions that actually went to the external model count: local head answers do not change `q`, and repeated feedback for the same returned decision is not counted twice. The estimate shifts in a Bayesian way: `q_new = (q_prior * W + correct) / (W + total)`. Counters are stored in the `DECISION_FEEDBACK_PATH` journal (see §7) and restored at startup, while the ledger of handed-out decision fingerprints is not: feedback about escalations is effective within the process lifetime. With exploration, `total` is a sum of weights: a policy escalation weighs 1, an exploratory one weighs `1 / epsilon` capped at 20. A backend without feedback support returns `409 FEEDBACK_UNSUPPORTED`, and the same is visible in `GET /info -> accepts_feedback`.
 
 ### How `q` is obtained
 

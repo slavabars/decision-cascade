@@ -118,6 +118,17 @@ def test_latency_and_russian_docs_linked():
     assert "cointegrated/rubert-tiny2" in russian
 
 
+def test_exploration_doc_describes_measurement_and_switch():
+    text = (ROOT / "docs" / "exploration.md").read_text(encoding="utf-8")
+    assert "eval.feedback.run" in text
+    assert "DECISION_CASCADE_EXPLORE" in text
+    assert "IPS" in text
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/exploration.md" in readme
+    stability = (ROOT / "docs" / "stability.md").read_text(encoding="utf-8")
+    assert "DECISION_CASCADE_EXPLORE" in stability
+
+
 BADGES = (
     "actions/workflows/ci.yml/badge.svg",
     "img.shields.io/pypi/v/decision-cascade",
@@ -268,6 +279,7 @@ ENGLISH_DOCS = (
     "latency",
     "observability",
     "release",
+    "exploration",
 )
 
 
