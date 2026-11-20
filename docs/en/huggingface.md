@@ -41,7 +41,7 @@ DECISION_CHECKPOINT_DIR=<path>/packs/public-gpt2 \
   uvicorn api.server.main:app --port 8000
 ```
 
-`DECISION_CHECKPOINT_DIR` may also point at the whole `packs/` directory; the service picks a pack by question signature and feature dimension. If the directory holds packs with the same signature and the same dimension (`public-gpt2` and `public-distilgpt2`), the first one in sort order wins; point at a specific pack for a specific encoder.
+`DECISION_CHECKPOINT_DIR` may also point at the whole `packs/` directory; the service picks a pack by question signature and feature dimension, and when both match, by the `metadata.json` encoder compared with `DECISION_MODEL_ID` (aliases `gpt2` and `openai-community/gpt2` count as the same model). If the encoder id is unknown (hash), sort order remains, so pointing at a specific pack is safer for a specific model.
 
 A downloaded pack directory works as `DECISION_CHECKPOINT_DIR` as is: the service recognises `metadata.json` + `heads.pt` directly at its root. This is the same format as in the GitHub Release archive, minus the duplicate `<signature>.pt` file.
 

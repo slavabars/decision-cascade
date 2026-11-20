@@ -42,7 +42,9 @@ def _routing_questions():
     }
 
 
-def _write_pack(root, name: str, questions, *, seed: int = 0, dim: int = DIM):
+def _write_pack(
+    root, name: str, questions, *, seed: int = 0, dim: int = DIM, encoder=None
+):
     """Собирает пак ``<root>/<name>/``: heads.pt + metadata.json."""
     pack = root / name
     pack.mkdir(parents=True, exist_ok=True)
@@ -55,6 +57,7 @@ def _write_pack(root, name: str, questions, *, seed: int = 0, dim: int = DIM):
                 "schema_version": "1",
                 "feature_dim": dim,
                 "questions_signature": signature,
+                "encoder": encoder,
                 "questions": {name: {"type": "noul"} for name in questions},
             }
         ),
@@ -259,3 +262,20 @@ def test_flat_pack_in_checkpoint_root(tmp_path):
     assert service._checkpoint_paths() == [tmp_path / "heads.pt"]
     assert service.warmup() == 1
     assert service.is_trained(questions) is True
+
+
+def test_find_checkpoint_prefers_matching_encoder(tmp_path):
+    """Одинаковые подпись и dim, разные энкодеры: берём пак своего энкодера."""
+    questions = _support_questions()
+    _write_pack(tmp_path, "support-distilgpt2", questions, encoder="distilgpt2")
+    gpt2, _ = _write_pack(
+        tmp_path, "support-gpt2", questions, encoder="openai-community/gpt2"
+    )
+
+    service = DecisionService(dim=DIM, checkpoint_dir=tmp_path)
+    service.encoder.model_id = "gpt2"
+
+    assert service._find_checkpoint(questions) == gpt2 / "heads.pt"
+    assert service.warmup() == 1
+    sources = [head["source"] for head in service.info()["heads"]]
+    assert sources == [str(gpt2 / "heads.pt")]

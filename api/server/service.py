@@ -124,6 +124,30 @@ class DecisionService:
     def _heads_key(dim: int, questions: dict[str, QuestionSpec]) -> str:
         return f"{dim}:{questions_signature(questions)}"
 
+    @property
+    def encoder_id(self) -> str | None:
+        """HF-id энкодера, если он известен; у hash-энкодера id нет."""
+        value = getattr(self.encoder, "model_id", None)
+        return str(value) if value else None
+
+    def _encoder_matches(self, pack_encoder: str | None) -> bool:
+        """Совместим ли пак с энкодером сервиса по имени модели.
+
+        Подпись вопросов и размерность не различают ``public-gpt2`` и
+        ``public-distilgpt2``; без этой проверки сервис мог взять головы
+        distilgpt2 для gpt2-энкодера. Сравниваем по последнему сегменту id,
+        чтобы алиасы ``gpt2`` и ``openai-community/gpt2`` считались одним.
+        Если id нет у одной из сторон, ограничение не применяется.
+        """
+        current = self.encoder_id
+        if not current or not pack_encoder:
+            return True
+
+        def normalized(value: str) -> str:
+            return str(value).strip().lower().rstrip("/").rsplit("/", 1)[-1]
+
+        return normalized(current) == normalized(pack_encoder)
+
     def _pack_dirs(self) -> list[Path]:
         """Каталоги паков: ``<checkpoint_dir>/*/metadata.json`` + ``heads.pt``.
 
@@ -173,7 +197,9 @@ class DecisionService:
         ``metadata.json`` объявляет эту подпись, затем ``*/<signature>.pt``.
         Если задан ``dim``, паки с другим ``feature_dim`` пропускаются: один и
         тот же набор вопросов может быть обучен под разные энкодеры, и сервис
-        должен взять совместимый, а не первый по алфавиту.
+        должен взять совместимый, а не первый по алфавиту. При совпадении
+        подписи и размерности предпочитается пак с тем же энкодером, что у
+        сервиса (``public-gpt2`` против ``public-distilgpt2``).
         """
         if self.checkpoint_dir is None:
             return None
@@ -182,6 +208,7 @@ class DecisionService:
         if direct.is_file():
             return direct
         fallback: Path | None = None
+        compatible: list[tuple[Path, str | None]] = []
         for pack in self._pack_dirs():
             metadata = pack / "metadata.json"
             try:
@@ -195,7 +222,12 @@ class DecisionService:
             if dim is not None and pack_dim is not None and int(pack_dim) != dim:
                 fallback = fallback or pack / "heads.pt"
                 continue
-            return pack / "heads.pt"
+            compatible.append((pack, payload.get("encoder")))
+        for pack, encoder in compatible:
+            if self._encoder_matches(encoder):
+                return pack / "heads.pt"
+        if compatible:
+            return compatible[0][0] / "heads.pt"
         if fallback is not None:
             # Совместимого по dim пака нет — вернём хоть какой-то: загрузчик
             # проверит dim по самому чекпоинту и честно предупредит.
@@ -335,6 +367,21 @@ class DecisionService:
         self._warmup_done = True
         loaded = 0
         for path in self._checkpoint_paths():
+            if path.name == "heads.pt":
+                metadata = path.parent / "metadata.json"
+                if metadata.is_file():
+                    try:
+                        payload = json.loads(metadata.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        payload = {}
+                    if not self._encoder_matches(payload.get("encoder")):
+                        logger.info(
+                            "skip checkpoint %s: encoder=%s, service encoder=%s",
+                            path,
+                            payload.get("encoder"),
+                            self.encoder_id,
+                        )
+                        continue
             try:
                 heads = DecisionHeads.load_checkpoint(path, seed=self.seed)
             except Exception as exc:  # noqa: BLE001 - один битый пак не блокирует старт
