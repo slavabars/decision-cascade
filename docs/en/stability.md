@@ -30,7 +30,10 @@ Stability does **not** mean: universality (zero-shot), beating LLMs in open doma
 | Confidence threshold (`DECISION_CASCADE_THRESHOLD`) | stable | the default policy |
 | Risk-aware cascade (`DECISION_CASCADE_RISK_BUDGET`) | stable since 1.1 | §7 contract: variables, `/info`, `usage.reason`, `/v1/feedback`, hard gate |
 | Benefit cascade (`DECISION_CASCADE_POLICY=benefit`) | stable since 1.6 | §8 contract: variables, `/info`, `usage.reason`, `/v1/feedback`, precedence over the risk budget |
-| Conformal cascade (`DECISION_CASCADE_POLICY=conformal`) | stable since 1.7 | §9 contract: `conformal.json` certificate, `/info`, `usage.reason`, hard gate, no feedback |
+| Conformal cascade (`DECISION_CASCADE_POLICY=conformal`) | stable since 1.7 | §9 contract: `conformal.json` certificate, `/info`, `usage.reason`, hard gate, no feedback; threshold selection fixed in 1.8, legacy certificates are rejected |
+| Feedback journal (`DECISION_FEEDBACK_PATH`) | stable since 1.8 | JSONL v1, unknown versions are skipped; §7–§8 contract |
+| Exploratory escalation (`DECISION_CASCADE_EXPLORE`) | beta | IPS estimate of `q`; default 0, behaviour unchanged |
+| Hub packs (`DECISION_PACK_REPO`, `DECISION_PACK_CACHE`) | beta | cache, manifest and sha256 verification; mutually exclusive with `DECISION_CHECKPOINT_DIR` |
 | Option-scoring head | beta | option transfer is measured, not used in the published packs |
 | Encoder fine-tuning (`finetune_encoder`) | beta | measured (+5 pp), weights ship as a release asset |
 | Feedback retraining (`training.feedback`) | beta | "do not harm" gate and drift numbers — `../drift.md` |

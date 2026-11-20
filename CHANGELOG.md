@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-11-20
+
 ### Added
 
 - **Обратная связь переживает рестарт.** `DECISION_FEEDBACK_PATH` включает журнал фидбэка: JSONL, по строке на событие, с версией схемы и типом (`risk` — размеченное решение для few-shot, `benefit` — исход ответа внешней модели). Раньше `POST /v1/feedback` отчитывался «принято», а после перезапуска сервис снова опирался на срез, снятый при развёртывании: копилка few-shot примеров и счётчики `q` жили только в памяти процесса. Теперь при старте примеры поднимаются, и если для вопроса уже набран `DECISION_RISK_FEW_SHOT_N`, few-shot модель переобучается сразу; `q` восстанавливается из накопленных наблюдений. Журнал дописывается, при переполнении старые события вытесняются (10 000 событий; 1 000 примеров на вопрос), файл переписывается атомарно через `tmp` + `os.replace`, битые строки и строки чужой версии пропускаются с предупреждением в лог. Журнал отпечатков выданных решений не сохраняется: фидбэк по эскалациям действует в пределах жизни процесса. Видно в `GET /info → engine`: `feedback_path` и `feedback_restored`. Контракт — `docs/stability.md` §7–§8, тесты — `tests/test_feedback_store.py`.
@@ -424,7 +426,8 @@
 - Деплой: Ubuntu/CentOS + systemd; bootstrap без `sudo`.
 - Первый пак весов `v0.1.0-weights.tar.gz`.
 
-[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/slavabars/decision-cascade/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/slavabars/decision-cascade/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/slavabars/decision-cascade/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/slavabars/decision-cascade/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/slavabars/decision-cascade/compare/v1.4.0...v1.5.0

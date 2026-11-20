@@ -30,7 +30,10 @@
 | Порог уверенности (`DECISION_CASCADE_THRESHOLD`) | стабильно | политика по умолчанию |
 | Risk-aware каскад (`DECISION_CASCADE_RISK_BUDGET`) | стабильно с 1.1 | контракт §7: переменные, `/info`, `usage.reason`, `/v1/feedback`, hard gate |
 | Benefit-каскад (`DECISION_CASCADE_POLICY=benefit`) | стабильно с 1.6 | контракт §8: переменные, `/info`, `usage.reason`, `/v1/feedback`, приоритет над risk-бюджетом |
-| Conformal-каскад (`DECISION_CASCADE_POLICY=conformal`) | стабильно с 1.7 | контракт §9: сертификат `conformal.json`, `/info`, `usage.reason`, hard gate, без обратной связи |
+| Conformal-каскад (`DECISION_CASCADE_POLICY=conformal`) | стабильно с 1.7 | контракт §9: сертификат `conformal.json`, `/info`, `usage.reason`, hard gate, без обратной связи; выбор порога исправлен в 1.8, старые сертификаты отклоняются |
+| Журнал обратной связи (`DECISION_FEEDBACK_PATH`) | стабильно с 1.8 | JSONL v1, неизвестные версии пропускаются; контракт §7–§8 |
+| Исследовательские эскалации (`DECISION_CASCADE_EXPLORE`) | beta | IPS-оценка `q`; по умолчанию 0, поведение не меняется |
+| Паки с Хаба (`DECISION_PACK_REPO`, `DECISION_PACK_CACHE`) | beta | кэш, проверка манифеста и sha256; взаимоисключающе с `DECISION_CHECKPOINT_DIR` |
 | Option-scoring голова | beta | перенос вариантов измерен, в паках не используется |
 | Дообучение энкодера (`finetune_encoder`) | beta | измерено (+5 п.п.), веса публикуются ассетом релиза |
 | Дообучение по обратной связи (`training.feedback`) | beta | гейт «не навреди» и числа по дрейфу — `docs/drift.md` |
