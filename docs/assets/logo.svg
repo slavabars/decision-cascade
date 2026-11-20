@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="decision-cascade">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1F33"/>
+      <stop offset="1" stop-color="#102A43"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="#1E3A5F" stroke-width="2"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M154 256 H258 C318 256 318 160 372 160" stroke="#FBBF24" stroke-width="26" stroke-dasharray="30 30" stroke-linecap="butt"/>
+    <path d="M154 256 H258 C318 256 318 352 372 352" stroke="#2DD4BF" stroke-width="26"/>
+  </g>
+
+  <circle cx="120" cy="256" r="34" fill="#2DD4BF"/>
+  <circle cx="386" cy="160" r="28" fill="#FBBF24"/>
+  <circle cx="386" cy="352" r="24" fill="#2DD4BF"/>
+</svg>

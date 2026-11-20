@@ -1,4 +1,10 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/slavabars/decision-cascade/main/docs/assets/logo.svg" width="112" alt="decision-cascade">
+</p>
+
 # decision-cascade
+
+<p align="center"><b>Local calibrated decisions; the big model only when it pays off.</b></p>
 
 [![CI](https://github.com/slavabars/decision-cascade/actions/workflows/ci.yml/badge.svg)](https://github.com/slavabars/decision-cascade/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/decision-cascade?logo=pypi&logoColor=white)](https://pypi.org/project/decision-cascade/)

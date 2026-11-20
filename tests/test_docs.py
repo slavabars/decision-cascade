@@ -173,6 +173,18 @@ def test_readme_has_badges_and_language_switch():
     assert "README.en.md" in readme
 
 
+def test_readme_embeds_logo_with_absolute_url():
+    """Логотип должен грузиться на GitHub и на PyPI, а файл — лежать в репозитории."""
+    url = (
+        "https://raw.githubusercontent.com/slavabars/decision-cascade/main/"
+        "docs/assets/logo.svg"
+    )
+    for name in ("README.md", "README.en.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert url in text, f"в {name} нет абсолютной ссылки на логотип"
+    assert (ROOT / "docs" / "assets" / "logo.svg").is_file()
+
+
 def test_english_readme_is_parity():
     en = (ROOT / "README.en.md").read_text(encoding="utf-8")
     assert "README.md" in en, "английский README должен ссылаться на русский"
