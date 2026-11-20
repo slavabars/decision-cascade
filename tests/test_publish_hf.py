@@ -100,6 +100,17 @@ def test_card_describes_packs_metrics_and_not_transformers(tmp_path):
     assert "not a `transformers` model" in card
     assert 'pip install decision-cascade' in card
     assert 'revision="v1.8.0"' in card
+    for tag in (
+        "model-routing",
+        "llm-routing",
+        "model-cascade",
+        "local-first",
+        "cost-efficient-inference",
+        "uncertainty-estimation",
+        "conformal-prediction",
+        "systemone",
+    ):
+        assert f"- {tag}" in card
     assert "| `public-gpt2` | `openai-community/gpt2` | 8 |" in card
     assert "0.750" in card
     assert "fancyzhx/ag_news" in card
@@ -187,3 +198,17 @@ def test_from_stage_validates_hashes_and_requires_token(tmp_path, monkeypatch, c
     (stage / "packs" / "public-gpt2" / "heads.pt").write_bytes(b"tampered")
     assert publish_hf.main(args) == 2
     assert "sha256" in capsys.readouterr().err
+
+
+def test_cli_update_card_requires_token(tmp_path, monkeypatch, capsys):
+    packs = tmp_path / "packs"
+    _pack(packs, "public-gpt2")
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setattr(publish_hf, "resolve_token", lambda: None)
+
+    code = publish_hf.main(
+        ["--update-card", "--packs", str(packs), "--repo", "owner/repo"]
+    )
+
+    assert code == 2
+    assert "authenticated" in capsys.readouterr().err

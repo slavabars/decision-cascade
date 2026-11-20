@@ -182,6 +182,14 @@ def render_card(
         "- selective-prediction",
         "- risk-aware",
         "- decision-making",
+        "- model-routing",
+        "- llm-routing",
+        "- model-cascade",
+        "- local-first",
+        "- cost-efficient-inference",
+        "- uncertainty-estimation",
+        "- conformal-prediction",
+        "- systemone",
     ]
     if datasets:
         lines.append("datasets:")
@@ -488,6 +496,30 @@ def publish(
     print(f"published {repo}" + (f"@{revision}" if revision else ""))
 
 
+def update_card(
+    manifest: dict[str, Any],
+    *,
+    repo: str,
+    revision: str | None,
+    token: str,
+    target_revision: str = "main",
+) -> None:
+    """Обновить только ``README.md`` на ``main``, не трогая паки и теги."""
+    from huggingface_hub import HfApi
+
+    card = render_card(manifest, repo=repo, revision=revision)
+    api = HfApi(token=token)
+    api.upload_file(
+        path_or_fileobj=card.encode("utf-8"),
+        path_in_repo="README.md",
+        repo_id=repo,
+        repo_type="model",
+        revision=target_revision,
+        commit_message="card: discovery tags for routing, local-first and SystemOne",
+    )
+    print(f"card updated: {repo}@{target_revision}")
+
+
 def _load_stage(stage: Path) -> dict[str, Any]:
     """Прочитать staging и проверить, что файлы совпадают с манифестом."""
     manifest = json.loads((stage / "manifest.json").read_text(encoding="utf-8"))
@@ -550,6 +582,11 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="собрать staging без загрузки"
     )
     parser.add_argument("--publish", action="store_true", help="загрузить на Hub")
+    parser.add_argument(
+        "--update-card",
+        action="store_true",
+        help="обновить только README.md на main",
+    )
     parser.add_argument("--verify", action="store_true", help="сверить с Hub")
     parser.add_argument(
         "--from-stage",
@@ -570,7 +607,13 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    actions = [args.check, args.dry_run, args.publish, args.verify]
+    actions = [
+        args.check,
+        args.dry_run,
+        args.publish,
+        args.verify,
+        args.update_card,
+    ]
     if sum(bool(action) for action in actions) > 1:
         raise SystemExit("choose one of --check, --dry-run, --publish, --verify")
     if not any(actions):
@@ -614,6 +657,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"warning: {warning}")
 
     if args.check:
+        return 0
+    if args.update_card:
+        token = resolve_token()
+        if not token:
+            print(
+                "error: not authenticated: set HF_TOKEN or run `huggingface-cli login`",
+                file=sys.stderr,
+            )
+            return 2
+        update_card(
+            manifest,
+            repo=args.repo,
+            revision=args.revision,
+            token=token,
+        )
         return 0
     staging = stage(
         args.packs,
