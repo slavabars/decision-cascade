@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Сравнение conformal-методов.** `python -m eval.conformal.compare` обучает головы и риск-модель один раз и строит сертификаты тремя валидными схемами: fixed-sequence (продукт), Бонферрони по фиксированной сетке и split-half. На публичном наборе при `limit 32000` fixed-sequence даёт покрытие 0.650 при `alpha=0.05`, Бонферрони и split-half — 0; при `alpha=0.1` — 0.825, 0.797 и 0. Тесты — `tests/test_conformal_methods.py`, методика — `docs/conformal.md`.
+
 ## [1.8.0] — 2026-11-20
 
 ### Added

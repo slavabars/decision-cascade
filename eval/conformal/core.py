@@ -12,7 +12,11 @@ from typing import Any
 
 import numpy as np
 
+from eval.benchmark.core import encode_examples
+from eval.datasets.text_dataset import split_examples
+from eval.risk.core import decisions_for_examples, flatten
 from src.conformal import selective_certificate
+from training.recipe.risk import fit_error_risk_model
 
 
 def risk_at_coverage(
@@ -42,6 +46,108 @@ def risk_at_coverage(
             np.concatenate([[0.0], coverages]),
             np.concatenate([[0.0], risks]),
         )
+    )
+
+
+def split_calibration(
+    examples: list[dict[str, Any]], *, seed: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Детерминированно делит val на «модель риска» и «калибровку сертификата»."""
+    if len(examples) < 4:
+        raise ValueError(
+            f"need at least 4 validation examples, got {len(examples)}"
+        )
+    parts = split_examples(examples, val_fraction=0.5, test_fraction=0.0, seed=seed)
+    return parts["train"], parts["val"]
+
+
+def flatten_with_groups(
+    specs, decisions, examples: list[dict[str, Any]]
+) -> tuple[list[Any], np.ndarray, list[str]]:
+    """Плоские решения, корректность и метки вопросов в том же порядке."""
+    flat, correct = flatten(specs, decisions, examples)
+    groups = [name for name in specs for _ in range(len(examples))]
+    return flat, correct, groups
+
+
+def prepare_evaluation(
+    specs,
+    heads,
+    encoder,
+    val: list[dict[str, Any]],
+    test: list[dict[str, Any]],
+    *,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Обучить риск-модель и вернуть scores калибровки и теста.
+
+    Общая точка для CLI сертификата и сравнения методов: обучение голов и
+    риск-модели происходит один раз, а дальше разные методы выбирают порог на
+    одних и тех же массивах.
+    """
+    model_examples, calibration = split_calibration(val, seed=seed)
+    model_features = encode_examples(specs, model_examples, encoder)
+    model_decisions = decisions_for_examples(heads, model_features, len(model_examples))
+    model_flat, model_correct = flatten(specs, model_decisions, model_examples)
+    model = fit_error_risk_model(model_flat, model_correct, seed=seed)
+
+    calibration_features = encode_examples(specs, calibration, encoder)
+    calibration_decisions = decisions_for_examples(
+        heads, calibration_features, len(calibration)
+    )
+    calibration_flat, calibration_correct, calibration_groups = flatten_with_groups(
+        specs, calibration_decisions, calibration
+    )
+    calibration_scores = np.asarray(
+        [model.predict_error(decision) for decision in calibration_flat], dtype=float
+    )
+
+    test_features = encode_examples(specs, test, encoder)
+    test_decisions = decisions_for_examples(heads, test_features, len(test))
+    test_flat, test_correct, test_groups = flatten_with_groups(
+        specs, test_decisions, test
+    )
+    test_scores = np.asarray(
+        [model.predict_error(decision) for decision in test_flat], dtype=float
+    )
+    confidence_scores = np.asarray(
+        [decision.confidence for decision in test_flat], dtype=float
+    )
+    return {
+        "model": model,
+        "calibration_scores": calibration_scores,
+        "calibration_correct": np.asarray(calibration_correct, dtype=float),
+        "calibration_groups": np.asarray(calibration_groups, dtype=object),
+        "test_scores": test_scores,
+        "test_correct": np.asarray(test_correct, dtype=float),
+        "test_groups": np.asarray(test_groups, dtype=object),
+        "confidence_scores": confidence_scores,
+        "local_accuracy": float(np.mean(test_correct)),
+        "n_val_model": len(model_examples),
+        "n_calibration": len(calibration),
+        "n_calibration_decisions": int(calibration_scores.size),
+        "n_test": len(test),
+        "n_test_decisions": int(test_scores.size),
+    }
+
+
+def certificate_from_scores(
+    scores: Any,
+    correct: Any,
+    groups: Any | None,
+    *,
+    alpha: float,
+    delta: float,
+    min_coverage: float,
+) -> dict[str, Any]:
+    """Сертификат по готовым scores (без пересчёта решений)."""
+    return selective_certificate(
+        scores,
+        correct,
+        groups=groups,
+        alpha=alpha,
+        delta=delta,
+        min_coverage=min_coverage,
     )
 
 

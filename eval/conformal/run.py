@@ -16,36 +16,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
-from eval.benchmark.core import encode_examples, train_benchmark
-from eval.conformal.core import evaluate_certificate, fit_certificate
-from eval.datasets.text_dataset import split_examples
+from eval.benchmark.core import train_benchmark
+from eval.conformal.core import (
+    certificate_from_scores,
+    evaluate_certificate,
+    prepare_evaluation,
+)
 from eval.report.run import _encoder, _load_splits, _specs
-from eval.risk.core import decisions_for_examples, flatten
 from src.conformal import save_certificate
-from training.recipe.risk import fit_error_risk_model
-
-
-def _split_calibration(
-    examples: list[dict[str, Any]], *, seed: int
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Детерминированно делит val на «модель риска» и «калибровку сертификата»."""
-    if len(examples) < 4:
-        raise ValueError(
-            f"need at least 4 validation examples, got {len(examples)}"
-        )
-    parts = split_examples(examples, val_fraction=0.5, test_fraction=0.0, seed=seed)
-    return parts["train"], parts["val"]
-
-
-def _flatten_with_groups(
-    specs, decisions, examples: list[dict[str, Any]]
-) -> tuple[list[Any], np.ndarray, list[str]]:
-    """Плоские решения, корректность и метки вопросов в том же порядке."""
-    flat, correct = flatten(specs, decisions, examples)
-    groups = [name for name in specs for _ in range(len(examples))]
-    return flat, correct, groups
 
 
 def evaluate(
@@ -61,58 +39,33 @@ def evaluate(
     seed: int = 0,
 ) -> dict[str, Any]:
     """Обучает риск-модель на половине val и строит сертификат на другой."""
-    model_examples, calibration = _split_calibration(val, seed=seed)
-    model_features = encode_examples(specs, model_examples, encoder)
-    model_decisions = decisions_for_examples(heads, model_features, len(model_examples))
-    model_flat, model_correct = flatten(specs, model_decisions, model_examples)
-    model = fit_error_risk_model(model_flat, model_correct, seed=seed)
-
-    calibration_features = encode_examples(specs, calibration, encoder)
-    calibration_decisions = decisions_for_examples(
-        heads, calibration_features, len(calibration)
-    )
-    calibration_flat, calibration_correct, calibration_groups = _flatten_with_groups(
-        specs, calibration_decisions, calibration
-    )
-    certificate = fit_certificate(
-        model,
-        calibration_flat,
-        calibration_correct,
-        groups=calibration_groups,
+    data = prepare_evaluation(specs, heads, encoder, val, test, seed=seed)
+    certificate = certificate_from_scores(
+        data["calibration_scores"],
+        data["calibration_correct"],
+        data["calibration_groups"],
         alpha=alpha,
         delta=delta,
         min_coverage=min_coverage,
     )
-
-    test_features = encode_examples(specs, test, encoder)
-    test_decisions = decisions_for_examples(heads, test_features, len(test))
-    test_flat, test_correct, test_groups = _flatten_with_groups(
-        specs, test_decisions, test
-    )
-    test_scores = np.asarray(
-        [model.predict_error(decision) for decision in test_flat], dtype=float
-    )
-    confidence_scores = np.asarray(
-        [decision.confidence for decision in test_flat], dtype=float
-    )
     gate = evaluate_certificate(
         certificate,
-        test_scores,
-        test_correct,
-        confidence_scores,
-        groups=test_groups,
+        data["test_scores"],
+        data["test_correct"],
+        data["confidence_scores"],
+        groups=data["test_groups"],
     )
     certificate["gate"] = gate
 
     return {
-        "model": model,
+        "model": data["model"],
         "certificate": certificate,
         "gate": gate,
-        "local_accuracy": float(test_correct.mean()),
+        "local_accuracy": data["local_accuracy"],
         "n_train": None,
-        "n_val_model": len(model_examples),
-        "n_calibration": len(calibration),
-        "n_test": len(test),
+        "n_val_model": data["n_val_model"],
+        "n_calibration": data["n_calibration"],
+        "n_test": data["n_test"],
     }
 
 
