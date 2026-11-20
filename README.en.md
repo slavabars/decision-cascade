@@ -181,7 +181,8 @@ The contract, deployment, troubleshooting, cascade and measurement docs are avai
 | [`docs/en/conformal.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/conformal.md) | conformal selective prediction, `conformal.json` certificate, "do no harm" gate |
 | [`docs/en/benchmarks.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/benchmarks.md) | competitor comparison, cascade policies, calibration, nightly regression |
 | [`docs/en/exploration.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/exploration.md) | feedback bias, exploratory escalation, IPS weights, measured cost |
-| [`docs/en/huggingface.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/huggingface.md) | published weight packs on the Hub, download, publishing and CI |
+| [`docs/en/huggingface.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/huggingface.md) | published weight packs on the Hub, download, running and limitations |
+| [`docs/en/huggingface-publishing.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/huggingface-publishing.md) | publishing packs, manifest, CI gates (maintainer) |
 | [`docs/en/latency.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/latency.md) | batching, input truncation, dtype budgets (CPU and GPU) |
 | [`docs/en/observability.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/observability.md) | metrics, alerts, request id, log format |
 | [`docs/en/deploy.md`](https://github.com/slavabars/decision-cascade/blob/main/docs/en/deploy.md) | Ubuntu/CentOS install, upgrade, backup, rollback |
