@@ -300,6 +300,6 @@ The conformal cascade does **not** accept feedback: the certificate is a propert
 
 ### `conformal.json`
 
-Fields `schema_version = "1"`, `method = "split_conformal_clopper_pearson"`, `score = "p_error"`, `alpha`, `delta`, `n`, `min_coverage`, `threshold`, `accepted`, `coverage`, `empirical_risk`, `upper_bound`, `groups` (per-question calibration statistics) and `gate` (test verdict). The certificate is fitted by `python -m eval.conformal.run`; production only reads the finished file and does no statistics on the inference path. With zero coverage the certificate honestly refuses: `threshold = -1.0`, no decision is accepted locally.
+Fields `schema_version = "1"`, `method = "split_conformal_fixed_sequence_clopper_pearson"`, `score = "p_error"`, `alpha`, `delta`, `n`, `min_coverage`, `selection` (fixed-sequence: `grid_points`, `min_group_n`), `threshold`, `accepted`, `coverage`, `empirical_risk`, `upper_bound`, `groups` (per-question calibration statistics) and `gate` (test verdict). The certificate is fitted by `python -m eval.conformal.run`; production only reads the finished file and does no statistics on the inference path. With zero coverage the certificate honestly refuses: `threshold = -1.0`, no decision is accepted locally.
 
 The contract is pinned by `tests/test_conformal_contract.py`, which also checks that the documentation and the code have not drifted apart.

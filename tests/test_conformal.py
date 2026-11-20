@@ -7,9 +7,11 @@ import numpy as np
 import pytest
 
 from src.conformal import (
+    LEGACY_METHOD,
     METHOD,
     clopper_pearson_upper,
     load_certificate,
+    min_certifiable_n,
     save_certificate,
     selective_certificate,
     validate_certificate,
@@ -159,4 +161,54 @@ def test_certificate_rejects_bad_groups():
     broken = dict(certificate)
     broken["groups"] = ["a", "b"]
     with pytest.raises(TypeError):
+        validate_certificate(broken)
+
+
+def test_fixed_sequence_stops_before_lucky_late_threshold():
+    """Поздний порог не выбирается после провала более консервативного."""
+    n = 1000
+    scores = np.linspace(0.001, 0.999, n)
+    correct = np.ones(n)
+    correct[199:209] = 0.0  # ошибки в (0.2, 0.21), дальше только верные
+
+    certificate = selective_certificate(
+        scores, correct, alpha=0.05, delta=0.1, min_coverage=0.0
+    )
+
+    assert certificate["method"] == METHOD
+    # старый перебор выбрал бы порог ~0.6, где граница снова укладывается
+    assert certificate["coverage"] < 0.3
+    assert certificate["threshold"] < 0.3
+
+
+def test_selection_error_rate_stays_within_delta():
+    """Нулевая гипотеза: истинный риск 5.01% > alpha, сертификат не должен врать."""
+    rng = np.random.default_rng(7)
+    trials, n = 400, 500
+    errors = 0
+    for _ in range(trials):
+        scores = rng.uniform(0.0, 1.0, n)
+        correct = (rng.uniform(0.0, 1.0, n) > 0.0501).astype(float)
+        certificate = selective_certificate(
+            scores, correct, alpha=0.05, delta=0.1, min_coverage=0.3
+        )
+        if certificate["coverage"] > 0:
+            errors += 1
+    # номинальная вероятность ложной сертификации — 10%; старый алгоритм давал ~25%
+    assert errors / trials < 0.12
+
+
+def test_min_certifiable_n_matches_clopper_pearson():
+    n = min_certifiable_n(0.05, 0.1)
+    assert clopper_pearson_upper(0, n, 0.1) <= 0.05
+    assert clopper_pearson_upper(0, n - 1, 0.1) > 0.05
+
+
+def test_legacy_certificate_is_rejected():
+    scores, correct = _dataset()
+    certificate = selective_certificate(scores, correct, alpha=0.1, delta=0.05)
+    broken = dict(certificate)
+    broken["method"] = LEGACY_METHOD
+
+    with pytest.raises(ValueError, match="refit|uncorrected|method"):
         validate_certificate(broken)

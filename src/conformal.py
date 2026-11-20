@@ -9,10 +9,18 @@
 истинная доля ошибок среди принятых не выше ``alpha`` — без предположений о
 модели, только обмениваемость калибровочной и новых выборок.
 
-Порог берётся максимально широкий (максимальное покрытие), при котором
-граница ещё укладывается в ``alpha``. Если выборки не хватает, сертификат
-честно отдаёт покрытие 0: лучше не принять ничего, чем пообещать больше, чем
-данные позволяют.
+Порог нельзя выбирать как «самый широкий из тех, где граница уложилась»: при
+переборе многих порогов на одной выборке хотя бы один пройдёт случайно, и
+номинальный ``delta`` перестаёт быть вероятностью ошибки. Поэтому выбор порога
+— **fixed-sequence testing** (Angelopoulos et al., «Learn then Test», 2021) по
+заранее заданной сетке: кандидаты упорядочены по возрастанию порога, и на
+первом же провале последовательность останавливается. Сетка фиксирована, чтобы
+набор гипотез не зависел от данных; шаг последовательности контролирует
+вероятность ложной сертификации на уровне ``delta``, а деление ``delta`` между
+вопросами (Бонферрони) сохраняет по-вопросную гарантию.
+
+Если выборки не хватает, сертификат честно отдаёт покрытие 0: лучше не
+принять ничего, чем пообещать больше, чем данные позволяют.
 
 Сертификат — файл ``conformal.json``: порог, покрытие, эмпирический риск,
 верхняя граница и вердикт гейта «не навреди» на отложенном тесте. Прод читает
@@ -22,6 +30,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +45,28 @@ DEFAULT_DELTA = 0.1
 #: Минимальное покрытие, ниже которого сертификат считается бесполезным.
 DEFAULT_MIN_COVERAGE = 0.3
 SCHEMA_VERSION = "1"
-METHOD = "split_conformal_clopper_pearson"
+#: Метод с поправкой на выбор порога: fixed-sequence по фиксированной сетке.
+METHOD = "split_conformal_fixed_sequence_clopper_pearson"
+#: Прежний метод выбирал максимум по всем прошедшим порогам на одной выборке —
+#: без поправки на multiplicity. Такие сертификаты больше не принимаются.
+LEGACY_METHOD = "split_conformal_clopper_pearson"
+#: Число точек в фиксированной сетке порогов. Сетка не зависит от данных:
+#: иначе сам набор гипотез подглядывал бы в выборку.
+SELECTION_GRID_POINTS = 101
+
+
+def min_certifiable_n(alpha: float, delta: float) -> int:
+    """Минимальное ``n``, при котором нулевая ошибка ещё даёт границу ≤ ``alpha``.
+
+    Из ``1 - delta ** (1 / n) <= alpha`` следует ``n >= ln(delta) / ln(1 - alpha)``.
+    Кандидаты с меньшим числом принятых решений не тестируются: они не могут
+    пройти ни при каком исходе, и включать их в последовательность бессмысленно.
+    """
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    if not 0.0 < delta < 1.0:
+        raise ValueError(f"delta must be in (0, 1), got {delta}")
+    return max(1, math.ceil(math.log(delta) / math.log(1.0 - alpha)))
 
 
 def clopper_pearson_upper(errors: int, total: int, delta: float) -> float:
@@ -81,14 +111,18 @@ def selective_certificate(
     alpha: float = DEFAULT_ALPHA,
     delta: float = DEFAULT_DELTA,
     min_coverage: float = DEFAULT_MIN_COVERAGE,
+    grid_points: int = SELECTION_GRID_POINTS,
 ) -> dict[str, Any]:
     """Порог на ``P(ошибка)`` с гарантией доли ошибок среди принятых.
 
     ``scores`` — оценка ``P(ошибка)`` (больше — хуже), ``correct`` — факт
     корректности (1/0). Решение принимается локально, если
-    ``score <= threshold``. Порог — максимальное покрытие, при котором верхняя
-    граница Клоппера–Пирсона не превышает ``alpha``. Возвращает сертификат,
-    готовый к записи в ``conformal.json`` (см. ``save_certificate``).
+    ``score <= threshold``. Порог выбирается fixed-sequence тестом по
+    фиксированной сетке ``grid_points``: кандидаты идут от узкого порога к
+    широкому, и первый же провал границы останавливает перебор. Так
+    вероятность ложной сертификации контролируется на уровне ``delta``, а не
+    растёт с числом перебранных порогов. Возвращает сертификат, готовый к
+    записи в ``conformal.json`` (см. ``save_certificate``).
 
     ``groups`` — необязательные метки вопросов. Если заданы, гарантия даётся
     **по каждому вопросу одновременно**: уровень ``delta`` делится между
@@ -103,6 +137,8 @@ def selective_certificate(
         raise ValueError(f"delta must be in (0, 1), got {delta}")
     if not 0.0 <= min_coverage <= 1.0:
         raise ValueError(f"min_coverage must be in [0, 1], got {min_coverage}")
+    if grid_points < 2:
+        raise ValueError(f"grid_points must be >= 2, got {grid_points}")
     scores, correct = _as_scores(scores, correct)
     n = scores.size
     if groups is None:
@@ -135,16 +171,18 @@ def selective_certificate(
     cumulative_errors = np.cumsum(one_hot * errors.astype(np.int64), axis=1)
     group_sizes = {name: int(mask.sum()) for name, mask in group_masks.items()}
 
+    # Кандидаты — фиксированная сетка, а не наблюдаемые score: набор гипотез
+    # не должен зависеть от выборки, иначе fixed-sequence теряет гарантию.
+    # Старт с запасом: кандидат тестируется, только когда нулевая ошибка даёт
+    # границу не просто ≤ alpha, а ≤ alpha/2. Иначе один случайный провал на
+    # первых же строках останавливает последовательность, и мощность падает.
+    min_group_n = min_certifiable_n(alpha / 2.0, per_delta)
     best: dict[str, Any] | None = None
-    for index in range(n):
-        # рассматриваем только конец группы одинаковых score: порог не может
-        # принять часть решений с тем же P(ошибка) и отвергнуть другую
-        if index + 1 < n and sorted_scores[index] == sorted_scores[index + 1]:
+    for threshold in np.linspace(0.0, 1.0, grid_points):
+        accepted = int(np.searchsorted(sorted_scores, threshold, side="right"))
+        if accepted == 0 or accepted / n < min_coverage:
             continue
-        accepted = index + 1
-        coverage = accepted / n
-        if coverage < min_coverage:
-            continue
+        index = accepted - 1
         group_stats = _group_stats_at(
             cumulative_accepted[:, index],
             cumulative_errors[:, index],
@@ -152,19 +190,28 @@ def selective_certificate(
             group_sizes,
             per_delta,
         )
-        if all(
+        if any(
+            stats["accepted"] < min_group_n for stats in group_stats.values()
+        ):
+            # Слишком мало принятых для честной границы: это не провал
+            # последовательности, а кандидат вне области тестирования.
+            continue
+        if not all(
             stats["upper_bound"] <= alpha for stats in group_stats.values()
         ):
-            best = {
-                "threshold": float(sorted_scores[index]),
-                "accepted": accepted,
-                "coverage": float(coverage),
-                "empirical_risk": float(errors[:accepted].mean()),
-                "upper_bound": max(
-                    stats["upper_bound"] for stats in group_stats.values()
-                ),
-                "groups": group_stats,
-            }
+            # Первый провал останавливает перебор: поздние «удачные» пороги
+            # после провала выбирать нельзя — это и есть multiplicity.
+            break
+        best = {
+            "threshold": float(threshold),
+            "accepted": accepted,
+            "coverage": float(accepted / n),
+            "empirical_risk": float(errors[:accepted].mean()),
+            "upper_bound": max(
+                stats["upper_bound"] for stats in group_stats.values()
+            ),
+            "groups": group_stats,
+        }
 
     if best is None:
         best = {
@@ -193,6 +240,11 @@ def selective_certificate(
         "delta": float(delta),
         "n": int(n),
         "min_coverage": float(min_coverage),
+        "selection": {
+            "kind": "fixed_sequence",
+            "grid_points": int(grid_points),
+            "min_group_n": int(min_group_n),
+        },
         "gate": None,
         **best,
     }
@@ -240,10 +292,16 @@ def validate_certificate(certificate: dict[str, Any]) -> dict[str, Any]:
             "conformal certificate schema_version must be "
             f"{SCHEMA_VERSION!r}, got {certificate.get('schema_version')!r}"
         )
-    if certificate.get("method") != METHOD:
+    method = certificate.get("method")
+    if method == LEGACY_METHOD:
         raise ValueError(
-            f"conformal certificate method must be {METHOD!r}, "
-            f"got {certificate.get('method')!r}"
+            "conformal certificate was produced without threshold-selection "
+            "correction (legacy method); refit it with "
+            "python -m eval.conformal.run"
+        )
+    if method != METHOD:
+        raise ValueError(
+            f"conformal certificate method must be {METHOD!r}, got {method!r}"
         )
     for key in ("alpha", "delta"):
         value = float(certificate.get(key))

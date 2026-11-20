@@ -83,3 +83,12 @@ If the verdict is negative, the conformal threshold is not applied: escalation f
 - **Zero coverage is a valid answer.** If the data is insufficient, the certificate refuses. That is better than a threshold that looks usable but guarantees nothing.
 
 The contract for variables, `/info` and `usage` is pinned in [`stability.md`](stability.md) §9 and checked by `tests/test_conformal_contract.py`.
+
+
+## Why not simply take the maximum over thresholds
+
+The old version scanned every observed threshold on one calibration split and picked the widest one whose Clopper–Pearson bound fit `alpha`. Each individual bound is valid, but taking the maximum over them is post-selection inference: at least one threshold passes by chance, and the false-certification probability grows with the number of candidates.
+
+Synthetic check: `alpha=0.05`, `delta=0.1`, `min_coverage=0.3`, 1000 examples, true risk 5.01% (so the promise is false by construction), 1000 trials. The old algorithm certified **26.6%** of the time against the nominal 10%; fixed-sequence over the same grid — **8.2%**. `tests/test_conformal.py::test_selection_error_rate_stays_within_delta` keeps the upper bound at 12% so the regression cannot return silently.
+
+The flip side of honesty is power: strict `alpha=0.05` on the public dataset is no longer certified at all. This is not a defect but a correct answer: with 2,400 calibration decisions, three questions and `delta` split across them, there is not enough data to promise 5% at a reasonable coverage. Soft `alpha=0.1` passes with coverage 0.913.

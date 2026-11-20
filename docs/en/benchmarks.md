@@ -2,7 +2,7 @@
 
 **English** · [Русский](../benchmarks.md)
 
-A summary of all project measurements as of November 14, 2026 (v1.7.0; the baseline numbers have not changed since 0.11.0, conformal was added in 1.7). The figures come from real runs on a single 16 GB GPU; methodology, commands and caveats are in [`competitor-benchmark.md`](../competitor-benchmark.md), [`routerbench.md`](../routerbench.md), [`risk-aware-cascade.md`](risk-aware-cascade.md) and [`conformal.md`](conformal.md). Raw JSON and `q` files are attached to the releases (`*-benchmarks.tar.gz`); everything is reproduced with one command, `eval/competitors/reproduce_real.sh`.
+A summary of all project measurements as of November 20, 2026 (1.8.0; the baseline numbers have not changed since 0.11.0, conformal was added in 1.7, and its threshold selection was fixed in 1.8). The figures come from real runs on a single 16 GB GPU; methodology, commands and caveats are in [`competitor-benchmark.md`](../competitor-benchmark.md), [`routerbench.md`](../routerbench.md), [`risk-aware-cascade.md`](risk-aware-cascade.md) and [`conformal.md`](conformal.md). Raw JSON and `q` files are attached to the releases (`*-benchmarks.tar.gz`); everything is reproduced with one command, `eval/competitors/reproduce_real.sh`.
 
 The participants are real releases, not mocks:
 
@@ -49,14 +49,14 @@ The benefit policy escalates a question only if the external model is more accur
 
 ## 4. Conformal: a guarantee on the error share
 
-Split conformal on a held-out calibration split plus the exact Clopper–Pearson upper bound; the guarantee is per question (Bonferroni). Public dataset, gpt2, `limit 16000` (2,400 calibration decisions, test 4,000):
+Split conformal on a held-out calibration split plus the exact Clopper–Pearson upper bound; the guarantee is per question (Bonferroni). The threshold is chosen by fixed-sequence testing over a fixed grid (Learn then Test): taking the maximum over all passing thresholds is invalid, because multiplicity eats `delta`. Public dataset, gpt2, `limit 16000` (2,400 calibration decisions, test 4,000):
 
 | Mode | `alpha` | coverage (calibration) | risk | upper bound | coverage (test) | risk (test) | confidence@coverage | Gate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| soft | 0.10 | 0.915 | 0.0711 | 0.0999 | 0.918 | 0.0785 | 0.0796 | accepted |
-| strict | 0.05 | 0.547 | 0.0175 | 0.0482 | 0.534 | 0.0226 | 0.0413 | accepted |
+| soft | 0.10 | 0.913 | 0.0698 | 0.0986 | 0.916 | 0.0782 | 0.0790 | accepted |
+| strict | 0.05 | 0 | — | — | 0 | — | — | rejected, fallback to confidence |
 
-On RouterBench (`limit 8000`, `alpha=0.05`, `min_coverage=0.3`) the certificate honestly reports zero coverage: local accuracy of 0.553 does not allow promising a 5% error share, the gate is rejected, and the cascade falls back to the confidence threshold (`usage.reason = "conformal_gate"`). Details and limitations are in [`conformal.md`](conformal.md).
+The previous strict numbers (0.547 / 0.0175) were produced without a threshold-selection correction and are withdrawn. On RouterBench (`limit 8000`, `alpha=0.05`, `min_coverage=0.3`) the certificate honestly reports zero coverage: local accuracy of 0.553 does not allow promising a 5% error share, the gate is rejected, and the cascade falls back to the confidence threshold (`usage.reason = "conformal_gate"`). Details and limitations are in [`conformal.md`](conformal.md).
 
 ## 5. Probability calibration
 
